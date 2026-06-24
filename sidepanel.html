@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Alicia AI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Alicia AI</h1>
+      <p class="subtitle">Job Assistant</p>
+    </header>
+
+    <section id="job-section" class="section">
+      <div class="section-header">
+        <h2>Current Job</h2>
+        <button id="detect-btn" class="btn-small">Detect Job</button>
+      </div>
+      <div id="job-info" class="card">
+        <p class="placeholder">Navigate to a LinkedIn job posting to get started.</p>
+      </div>
+    </section>
+
+    <section id="tools-section" class="section">
+      <h2>Tools</h2>
+      <div class="tools-grid">
+        <button id="analyze-btn" class="tool-btn" disabled>Analyze Job</button>
+        <button id="tailor-btn" class="tool-btn" disabled>Tailor Resume</button>
+        <button id="cover-btn" class="tool-btn" disabled>Cover Letter</button>
+      </div>
+      <div class="upload-area">
+        <label for="resume-upload" class="upload-label">Upload Resume (.txt)</label>
+        <input type="file" id="resume-upload" accept=".txt" hidden>
+        <span id="resume-status" class="resume-status"></span>
+      </div>
+    </section>
+
+    <section id="analysis-section" class="section hidden">
+      <div class="section-header">
+        <h2 id="analysis-title">Analysis</h2>
+        <button id="close-analysis" class="btn-small">Close</button>
+      </div>
+      <div id="analysis-content" class="card analysis-card"></div>
+    </section>
+
+    <section id="tailoring-section" class="section hidden">
+      <div class="section-header">
+        <h2>Interactive Resume Tailoring</h2>
+        <button id="close-tailoring" class="btn-small">Close</button>
+      </div>
+      <div id="tailoring-conversation" class="card tailoring-card"></div>
+      <div id="tailoring-input-area" class="tailoring-input-area">
+        <div id="tailoring-options" class="tailoring-options"></div>
+        <div class="tailoring-text-input">
+          <input type="text" id="tailoring-input" placeholder="Type your answer..." />
+          <button id="tailoring-send" class="btn-small">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="chat-section" class="section">
+      <h2>Chat with Alicia</h2>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-area">
+        <input type="text" id="chat-input" placeholder="Ask Alicia anything..." />
+        <button id="chat-send" class="btn-small">Send</button>
+      </div>
+    </section>
+  </div>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
