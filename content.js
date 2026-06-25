@@ -50,54 +50,86 @@ function getJobTitle() {
   var title = trySelectors([
     '.job-details-jobs-unified-top-card__job-title h1 a',
     '.job-details-jobs-unified-top-card__job-title h1',
+    '.job-details-jobs-unified-top-card__job-title h2',
     '.job-details-jobs-unified-top-card__job-title a',
     '.job-details-jobs-unified-top-card__job-title',
     '.jobs-unified-top-card__job-title a',
     '.jobs-unified-top-card__job-title h1',
+    '.jobs-unified-top-card__job-title h2',
     '.jobs-unified-top-card__job-title',
     'h1.t-24.t-bold',
     'h1.t-24',
+    'h2.t-24.t-bold',
+    'h2.t-24',
     'h1.topcard__title',
+    'h2.topcard__title',
     'h2.top-card-layout__title',
     '.t-24.t-bold.inline'
   ], 3, 200);
   if (title) { console.log('[Alicia] Title found via selector:', title); return title; }
 
   try {
-    var detailPanels = document.querySelectorAll('.scaffold-layout__detail, .jobs-search__job-details, [class*="job-details"]');
-    for (var p = 0; p < detailPanels.length; p++) {
-      var h1 = detailPanels[p].querySelector('h1');
-      if (h1) {
-        var t = getText(h1);
-        if (t.length > 2 && t.length < 200) { console.log('[Alicia] Title found in detail panel h1:', t); return t; }
-      }
-    }
-  } catch (e) {}
-
-  try {
-    var h1s = document.querySelectorAll('h1');
-    for (var i = 0; i < h1s.length; i++) {
-      var t2 = getText(h1s[i]);
-      if (t2.length > 3 && t2.length < 200 && t2.indexOf('LinkedIn') === -1 && t2.indexOf('Sign') === -1 && t2.indexOf('Jobs') === -1) {
-        var parent = h1s[i].closest('.jobs-search__left-rail, .scaffold-layout__list');
-        if (!parent) {
-          console.log('[Alicia] Title found via h1 fallback:', t2);
-          return t2;
+    var companyLink = document.querySelector('a[href*="/company/"]');
+    if (companyLink) {
+      var card = companyLink.closest('[class*="top-card"], [class*="topcard"], [class*="job-details"], section, article');
+      if (card) {
+        var headings = card.querySelectorAll('h1, h2, h3');
+        for (var h = 0; h < headings.length; h++) {
+          var ht = getText(headings[h]);
+          if (ht.length > 2 && ht.length < 200 && ht !== getText(companyLink)) {
+            console.log('[Alicia] Title found near company link:', ht);
+            return ht;
+          }
+        }
+        var links = card.querySelectorAll('a');
+        for (var l = 0; l < links.length; l++) {
+          if (links[l] === companyLink) continue;
+          if (links[l].href && links[l].href.includes('/company/')) continue;
+          var lt = getText(links[l]);
+          if (lt.length > 3 && lt.length < 200 && lt !== getText(companyLink)) {
+            console.log('[Alicia] Title found via link near company:', lt);
+            return lt;
+          }
         }
       }
-    }
-  } catch (e) {}
 
-  try {
-    var h1All = document.querySelectorAll('h1');
-    for (var j = 0; j < h1All.length; j++) {
-      var t3 = getText(h1All[j]);
-      if (t3.length > 3 && t3.length < 200 && t3.indexOf('LinkedIn') === -1 && t3.indexOf('Sign') === -1) {
-        console.log('[Alicia] Title found via last-resort h1:', t3);
-        return t3;
+      var parent = companyLink.parentElement;
+      for (var up = 0; up < 5 && parent; up++) {
+        var headingsUp = parent.querySelectorAll('h1, h2, h3');
+        for (var h2 = 0; h2 < headingsUp.length; h2++) {
+          var ht2 = getText(headingsUp[h2]);
+          if (ht2.length > 2 && ht2.length < 200 && ht2 !== getText(companyLink)) {
+            console.log('[Alicia] Title found walking up from company:', ht2);
+            return ht2;
+          }
+        }
+        parent = parent.parentElement;
       }
     }
-  } catch (e) {}
+  } catch (e) { console.log('[Alicia] Company-anchor title search error:', e); }
+
+  var headingTags = ['h1', 'h2', 'h3'];
+  for (var ti = 0; ti < headingTags.length; ti++) {
+    try {
+      var els = document.querySelectorAll(headingTags[ti]);
+      for (var i = 0; i < els.length; i++) {
+        var t = getText(els[i]);
+        if (t.length > 3 && t.length < 200) {
+          if (t.indexOf('LinkedIn') !== -1) continue;
+          if (t.indexOf('Sign') !== -1) continue;
+          if (t === 'Jobs' || t === 'Messaging' || t === 'Notifications') continue;
+          if (t.indexOf('Jobs based on') !== -1) continue;
+          if (t.indexOf('people also viewed') !== -1) continue;
+          if (t === 'About the job') continue;
+          var inSidebar = els[i].closest('.jobs-search__left-rail, .scaffold-layout__list');
+          if (!inSidebar) {
+            console.log('[Alicia] Title found via ' + headingTags[ti] + ' scan:', t);
+            return t;
+          }
+        }
+      }
+    } catch (e) {}
+  }
 
   console.log('[Alicia] Title NOT found');
   return null;
@@ -116,23 +148,22 @@ function getCompany() {
   if (company) { console.log('[Alicia] Company found via selector:', company); return company; }
 
   try {
-    var detailPanels = document.querySelectorAll('.scaffold-layout__detail, .jobs-search__job-details, [class*="job-details"]');
-    for (var p = 0; p < detailPanels.length; p++) {
-      var links = detailPanels[p].querySelectorAll('a[href*="/company/"]');
-      for (var i = 0; i < links.length; i++) {
-        var t = getText(links[i]);
-        if (t.length > 1 && t.length < 100) { console.log('[Alicia] Company found in detail panel:', t); return t; }
+    var links = document.querySelectorAll('a[href*="/company/"]');
+    for (var j = 0; j < links.length; j++) {
+      var t = getText(links[j]);
+      if (t.length > 1 && t.length < 100) {
+        var inSidebar = links[j].closest('.jobs-search__left-rail, .scaffold-layout__list');
+        if (!inSidebar) {
+          console.log('[Alicia] Company found via link fallback:', t);
+          return t;
+        }
       }
     }
-  } catch (e) {}
-
-  try {
-    var allLinks = document.querySelectorAll('a[href*="/company/"]');
-    for (var j = 0; j < allLinks.length; j++) {
-      var t2 = getText(allLinks[j]);
+    for (var k = 0; k < links.length; k++) {
+      var t2 = getText(links[k]);
       if (t2.length > 1 && t2.length < 100) {
-        var parent = allLinks[j].closest('.jobs-search__left-rail, .scaffold-layout__list');
-        if (!parent) { console.log('[Alicia] Company found via link fallback:', t2); return t2; }
+        console.log('[Alicia] Company found via any link:', t2);
+        return t2;
       }
     }
   } catch (e) {}
@@ -149,7 +180,27 @@ function getLocation() {
     '.topcard__flavor--bullet',
     'span.top-card-layout__bullet'
   ], 1, 100);
-  if (loc) { console.log('[Alicia] Location found:', loc); return loc; }
+  if (loc) { console.log('[Alicia] Location found via selector:', loc); return loc; }
+
+  try {
+    var companyLink = document.querySelector('a[href*="/company/"]');
+    if (companyLink) {
+      var container = companyLink.parentElement;
+      for (var up = 0; up < 4 && container; up++) {
+        var spans = container.querySelectorAll('span, li');
+        for (var s = 0; s < spans.length; s++) {
+          var st = getText(spans[s]);
+          if (st.length > 2 && st.length < 80) {
+            if (/\b(Remote|Hybrid|On-site|United States|Houston|Texas|TX|CA|NY|India|Canada)\b/i.test(st)) {
+              console.log('[Alicia] Location found near company:', st);
+              return st;
+            }
+          }
+        }
+        container = container.parentElement;
+      }
+    }
+  } catch (e) {}
 
   console.log('[Alicia] Location NOT found');
   return null;
@@ -172,19 +223,56 @@ function getDescription() {
   if (desc) { console.log('[Alicia] Description found via selector, length:', desc.length); return desc; }
 
   try {
-    var headers = document.querySelectorAll('h2, h3');
-    for (var j = 0; j < headers.length; j++) {
-      var headerText = getText(headers[j]);
-      if (headerText === 'About the job' || headerText === 'Job description' || headerText === 'Description') {
-        var section = headers[j].closest('section');
-        if (section) {
-          var t2 = getText(section);
-          if (t2.length > 50) { console.log('[Alicia] Description found via header, length:', t2.length); return t2; }
+    var allEls = document.querySelectorAll('h2, h3, span, div');
+    for (var j = 0; j < allEls.length; j++) {
+      var elText = getText(allEls[j]);
+      if (elText === 'About the job' || elText === 'Job description' || elText === 'Description') {
+        var next = allEls[j].nextElementSibling;
+        while (next) {
+          var nt = getText(next);
+          if (nt.length > 50) {
+            console.log('[Alicia] Description found after header, length:', nt.length);
+            return nt;
+          }
+          next = next.nextElementSibling;
         }
-        var parent = headers[j].parentElement;
+        var section = allEls[j].closest('section, article, div[class]');
+        if (section) {
+          var st = getText(section);
+          if (st.length > 80) {
+            var cleaned = st.replace(elText, '').trim();
+            if (cleaned.length > 50) {
+              console.log('[Alicia] Description found in section, length:', cleaned.length);
+              return cleaned;
+            }
+          }
+        }
+        var parent = allEls[j].parentElement;
         if (parent) {
-          var t3 = getText(parent);
-          if (t3.length > 50) { console.log('[Alicia] Description found via header parent, length:', t3.length); return t3; }
+          var pt = getText(parent);
+          if (pt.length > 80) {
+            var cleaned2 = pt.replace(elText, '').trim();
+            if (cleaned2.length > 50) {
+              console.log('[Alicia] Description found in parent, length:', cleaned2.length);
+              return cleaned2;
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { console.log('[Alicia] Description header search error:', e); }
+
+  try {
+    var divs = document.querySelectorAll('div, section, article');
+    for (var k = 0; k < divs.length; k++) {
+      var dt = getText(divs[k]);
+      if (dt.length > 200 && dt.length < 10000) {
+        if (dt.indexOf('experience') !== -1 || dt.indexOf('requirements') !== -1 || dt.indexOf('qualifications') !== -1 || dt.indexOf('responsibilities') !== -1) {
+          var inSidebar = divs[k].closest('.jobs-search__left-rail, .scaffold-layout__list');
+          if (!inSidebar) {
+            console.log('[Alicia] Description found via keyword scan, length:', dt.length);
+            return dt;
+          }
         }
       }
     }
