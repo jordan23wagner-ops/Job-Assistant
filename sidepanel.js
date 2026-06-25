@@ -98,7 +98,7 @@ function isResponseGarbage(text) {
   return (letters / text.length) < 0.2;
 }
 
-async function rawGroqCall(messages, temperature, key) {
+async function rawGroqCall(messages, temperature, key, maxTokens) {
   var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -106,7 +106,7 @@ async function rawGroqCall(messages, temperature, key) {
       model: 'llama-3.3-70b-versatile',
       messages: messages,
       temperature: temperature,
-      max_tokens: 2048
+      max_tokens: maxTokens || 2048
     })
   });
 
@@ -123,16 +123,16 @@ async function rawGroqCall(messages, temperature, key) {
   return sanitizeText(data.choices[0].message.content);
 }
 
-async function callGroq(messages, temperature) {
+async function callGroq(messages, temperature, maxTokens) {
   if (temperature === undefined) temperature = 0.7;
   var key = groqApiKey || await getApiKey();
   if (!key) throw new Error('No API key provided. Click any AI feature to set your Groq API key.');
 
-  var content = await rawGroqCall(messages, temperature, key);
+  var content = await rawGroqCall(messages, temperature, key, maxTokens);
 
   if (isResponseGarbage(content)) {
     console.log('[Alicia] Garbage response detected, retrying:', content);
-    var retry = await rawGroqCall(messages, 0.3, key);
+    var retry = await rawGroqCall(messages, 0.3, key, maxTokens);
     if (!isResponseGarbage(retry)) return retry;
     throw new Error('The AI returned an invalid response. Please try again.');
   }
@@ -410,45 +410,6 @@ coverBtn.addEventListener('click', async function() {
   }
 });
 
-var TAILORING_STEPS = [
-  {
-    id: 'relevance',
-    getPrompt: function(job, resume) {
-      return {
-        system: 'You are Alicia, an expert resume tailoring assistant. Analyze the job and resume, then ask which experiences are MOST relevant. List 3-5 specific items from their resume as numbered options, noting why each could be relevant. End with: "Which are most relevant? (pick all, or tell me about other experience)"',
-        user: 'Job: ' + job.title + ' at ' + job.company + '\n\nDescription: ' + job.description + '\n\nResume:\n' + resume
-      };
-    }
-  },
-  {
-    id: 'skills_gap',
-    getPrompt: function(job, resume, prev) {
-      return {
-        system: 'You are Alicia, an expert resume tailoring assistant. Identify 2-3 skills from the job posting not clearly shown in the resume. Ask if they have unlisted experience. Present as numbered questions. Be encouraging.',
-        user: 'Job: ' + job.title + ' at ' + job.company + '\n\nDescription: ' + job.description + '\n\nResume: ' + resume + '\n\nThey said: ' + prev.relevance
-      };
-    }
-  },
-  {
-    id: 'achievements',
-    getPrompt: function(job, resume, prev) {
-      return {
-        system: 'You are Alicia, an expert resume tailoring assistant. Ask about quantifiable achievements. For each experience, suggest metrics ("How many users?", "What % improvement?"). Ask 2-3 questions.',
-        user: 'Job: ' + job.title + '\n\nRelevant: ' + prev.relevance + '\nSkills: ' + prev.skills_gap + '\n\nResume: ' + resume
-      };
-    }
-  },
-  {
-    id: 'generate',
-    getPrompt: function(job, resume, prev) {
-      return {
-        system: 'You are Alicia. Generate specific resume tailoring suggestions:\n1. Summary - a tailored professional summary\n2. Experience Bullets - rewritten bullet points for this job\n3. Skills - prioritized skills list\n4. Keywords - ATS-friendly terms to include\n\nProvide actual text the candidate can use, not generic advice.',
-        user: 'Job: ' + job.title + ' at ' + job.company + '\n\nDescription: ' + job.description + '\n\nResume: ' + resume + '\n\nRelevant: ' + prev.relevance + '\nSkills: ' + prev.skills_gap + '\nMetrics: ' + prev.achievements
-      };
-    }
-  }
-];
-
 function addTailoringMessage(text, role) {
   var div = document.createElement('div');
   div.className = 'tailoring-msg ' + role;
@@ -472,45 +433,140 @@ function addTailoringQuickOptions(options) {
   });
 }
 
+var RESUME_GEN_SYSTEM = 'You are Alicia, an expert resume writer. Write a complete, tailored resume for the candidate targeting the specified role.\n\nRules:\n- Keep all information truthful — reword, reorder, and emphasize but never fabricate\n- Write a targeted professional summary (2-3 sentences)\n- Prioritize and reorder experience bullets to highlight what matters for THIS role\n- Weave in ATS-friendly keywords from the job description naturally\n- Keep the same jobs, titles, dates, and education — do not invent new ones\n- Use strong action verbs and quantified achievements\n- Include ALL roles from the original resume (full detail for recent/relevant, condensed for older ones)\n\nFormat the resume in markdown using these exact patterns:\n# [Candidate Name]\n[Contact info on one line, separated by |]\n\n## Summary\n[2-3 sentence tailored summary]\n\n## Technical Skills\n- **[Category]:** [comma-separated skills]\n- **[Category]:** [comma-separated skills]\n\n## Experience\n### [Job Title] | [Company]\n*[Date range]*\n- [achievement bullet]\n- [achievement bullet]\n\n## Education\n**[School]**\n[Degree/program] | [Dates]';
+
 async function startTailoring() {
   tailoringSection.classList.remove('hidden');
   tailoringConversation.innerHTML = '';
   clearTailoringOptions();
   tailoringInput.value = '';
-  tailoringState = { step: 0, answers: {} };
-  addTailoringMessage('Let\'s tailor your resume! I\'ll ask questions to highlight the right experience.', 'ai');
-  await runTailoringStep();
+  tailoringState = { mode: null, deepDiveAnswers: [], tailoredResume: null, generating: false };
+  addTailoringMessage('How would you like to tailor your resume for **' + escapeHtml(currentJob.title) + '** at **' + escapeHtml(currentJob.company) + '**?', 'ai');
+  addTailoringMessage('**Quick Tailor** — I\'ll reshape your current resume to target this role. Fast, one step.\n\n**Deep Dive** — I\'ll ask about skills and experience from the job description that aren\'t obvious in your resume, then build a stronger tailored version.', 'ai');
+  addTailoringQuickOptions(['Quick Tailor', 'Deep Dive']);
 }
 
-async function runTailoringStep() {
-  var step = TAILORING_STEPS[tailoringState.step];
-  if (!step) return;
+function removeLoadingMessage(keyword) {
+  var msgs = tailoringConversation.querySelectorAll('.tailoring-msg.ai');
+  for (var i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].textContent.indexOf(keyword) >= 0) { msgs[i].remove(); break; }
+  }
+}
 
-  addTailoringMessage('Thinking...', 'ai');
+async function runQuickTailor() {
+  addTailoringMessage('Tailoring your resume...', 'ai');
 
   try {
-    var prompts = step.getPrompt(currentJob, resumeText, tailoringState.answers);
     var msgs = [
-      { role: 'system', content: prompts.system },
-      { role: 'user', content: prompts.user }
+      { role: 'system', content: RESUME_GEN_SYSTEM },
+      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCurrent Resume:\n' + resumeText }
     ];
-    var result = await callGroq(msgs);
-
-    var lastMsg = tailoringConversation.lastElementChild;
-    if (lastMsg && lastMsg.textContent === 'Thinking...') lastMsg.remove();
-
-    if (step.id === 'generate') {
-      addTailoringMessage(result, 'final');
-      addTailoringQuickOptions(['Start over', 'Adjust suggestions']);
-    } else {
-      addTailoringMessage(result, 'ai');
-      addTailoringQuickOptions(['All of them', 'Skip this step']);
-    }
+    var result = await callGroq(msgs, 0.4, 4096);
+    removeLoadingMessage('Tailoring');
+    tailoringState.tailoredResume = result;
+    addTailoringMessage(result, 'final');
+    addTailoringQuickOptions(['Download Resume', 'Start over']);
   } catch (err) {
-    var lastMsg2 = tailoringConversation.lastElementChild;
-    if (lastMsg2 && lastMsg2.textContent === 'Thinking...') lastMsg2.remove();
+    removeLoadingMessage('Tailoring');
     addTailoringMessage('Error: ' + err.message, 'ai');
+    addTailoringQuickOptions(['Try again', 'Start over']);
   }
+}
+
+async function runDeepDive() {
+  addTailoringMessage('Analyzing the job requirements against your resume...', 'ai');
+
+  try {
+    var msgs = [
+      { role: 'system', content: 'You are Alicia, an expert resume tailoring coach. Compare the job description to the candidate\'s resume carefully. Identify 3-5 specific skills, qualifications, or experiences that the job asks for but are NOT clearly demonstrated in the resume.\n\nFor each gap, ask a specific, friendly question to find out if the candidate has relevant unlisted experience. Number each question.\n\nExamples of good questions:\n- "The role mentions stakeholder management at the executive level. Have you presented to or worked directly with C-suite leaders in any of your roles?"\n- "They want experience with agile methodology. Have you run sprints, standups, or used agile frameworks beyond what\'s listed?"\n\nEnd with: "Answer as many as you can — the more detail, the stronger your tailored resume will be!"' },
+      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCandidate Resume:\n' + resumeText }
+    ];
+    var result = await callGroq(msgs, 0.5);
+    removeLoadingMessage('Analyzing');
+    addTailoringMessage(result, 'ai');
+    addTailoringQuickOptions(['None of these apply', 'Skip — use what I have']);
+  } catch (err) {
+    removeLoadingMessage('Analyzing');
+    addTailoringMessage('Error: ' + err.message, 'ai');
+    addTailoringQuickOptions(['Start over']);
+  }
+}
+
+async function generateTailoredResume() {
+  tailoringState.generating = true;
+  addTailoringMessage('Building your tailored resume...', 'ai');
+
+  try {
+    var extraContext = '';
+    if (tailoringState.deepDiveAnswers.length > 0) {
+      extraContext = '\n\nAdditional experience shared by the candidate (incorporate naturally where relevant):\n' + tailoringState.deepDiveAnswers.join('\n\n');
+    }
+
+    var msgs = [
+      { role: 'system', content: RESUME_GEN_SYSTEM },
+      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCurrent Resume:\n' + resumeText + extraContext }
+    ];
+    var result = await callGroq(msgs, 0.4, 4096);
+    removeLoadingMessage('Building');
+    tailoringState.tailoredResume = result;
+    addTailoringMessage(result, 'final');
+    addTailoringQuickOptions(['Download Resume', 'Start over']);
+  } catch (err) {
+    removeLoadingMessage('Building');
+    addTailoringMessage('Error: ' + err.message, 'ai');
+    addTailoringQuickOptions(['Try again', 'Start over']);
+  }
+}
+
+function formatResumeContent(text) {
+  if (!text) return '';
+  text = sanitizeText(text);
+  var lines = text.split('\n');
+  var html = '';
+  var inList = false;
+
+  for (var i = 0; i < lines.length; i++) {
+    var raw = lines[i];
+
+    if (/^#\s+(.+)/.test(raw) && !/^##/.test(raw)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<h1>' + escapeHtml(raw.replace(/^#\s+/, '')) + '</h1>';
+    } else if (/^###\s+(.+)/.test(raw)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      var h3 = escapeHtml(raw.replace(/^###\s+/, ''));
+      h3 = h3.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      html += '<h3>' + h3 + '</h3>';
+    } else if (/^##\s+(.+)/.test(raw)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<h2>' + escapeHtml(raw.replace(/^##\s+/, '')) + '</h2>';
+    } else if (/^\*([^*]+)\*$/.test(raw)) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<p class="date">' + escapeHtml(raw.replace(/^\*|\*$/g, '')) + '</p>';
+    } else if (/^[*\-]\s+(.+)/.test(raw)) {
+      if (!inList) { html += '<ul>'; inList = true; }
+      var item = escapeHtml(raw.replace(/^[*\-]\s+/, ''));
+      item = item.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      html += '<li>' + item + '</li>';
+    } else if (raw.trim() === '') {
+      if (inList) { html += '</ul>'; inList = false; }
+    } else {
+      if (inList) { html += '</ul>'; inList = false; }
+      var p = escapeHtml(raw);
+      p = p.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      html += '<p>' + p + '</p>';
+    }
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
+
+function downloadTailoredResume() {
+  if (!tailoringState || !tailoringState.tailoredResume) return;
+  var html = formatResumeContent(tailoringState.tailoredResume);
+  chrome.storage.local.set({ tailoredResumeHtml: html }, function() {
+    chrome.tabs.create({ url: chrome.runtime.getURL('resume-preview.html') });
+  });
+  addTailoringMessage('Your tailored resume is open in a new tab. Click **Save as PDF** or press **Ctrl+P** to download it.', 'ai');
 }
 
 async function handleTailoringResponse(response) {
@@ -518,18 +574,38 @@ async function handleTailoringResponse(response) {
   clearTailoringOptions();
 
   if (response === 'Start over') { await startTailoring(); return; }
-  if (response === 'Adjust suggestions') {
-    tailoringState.step = 2;
-    addTailoringMessage('What would you like to adjust?', 'ai');
+
+  if (response === 'Download Resume') {
+    downloadTailoredResume();
     return;
   }
 
-  var step = TAILORING_STEPS[tailoringState.step];
-  if (step) tailoringState.answers[step.id] = response;
-  tailoringState.step++;
+  if (response === 'Try again') {
+    if (tailoringState.mode === 'quick') { await runQuickTailor(); }
+    else { await generateTailoredResume(); }
+    return;
+  }
 
-  if (tailoringState.step <= TAILORING_STEPS.length - 1) {
-    await runTailoringStep();
+  if (!tailoringState.mode) {
+    if (response === 'Quick Tailor' || response.toLowerCase().indexOf('quick') >= 0) {
+      tailoringState.mode = 'quick';
+      await runQuickTailor();
+    } else {
+      tailoringState.mode = 'deep';
+      await runDeepDive();
+    }
+    return;
+  }
+
+  if (tailoringState.mode === 'deep' && !tailoringState.generating) {
+    if (response === 'None of these apply' || response === 'Skip — use what I have' || response === 'Done — Generate Resume') {
+      await generateTailoredResume();
+      return;
+    }
+
+    tailoringState.deepDiveAnswers.push(response);
+    addTailoringQuickOptions(['Done — Generate Resume', 'Start over']);
+    return;
   }
 }
 
