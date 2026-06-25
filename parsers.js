@@ -115,15 +115,75 @@ async function extractDocxText(arrayBuffer) {
 
 // ---------- PDF ----------
 
-function _pdfContentToText(cs) {
+function _parseCMap(cmapText) {
+  var map = {};
+  var re;
+  // beginbfchar: <srcCode> <dstUnicode>
+  re = /beginbfchar\s*([\s\S]*?)endbfchar/g;
+  var block;
+  while ((block = re.exec(cmapText)) !== null) {
+    var pairs = block[1].match(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g);
+    if (!pairs) continue;
+    for (var p = 0; p < pairs.length; p++) {
+      var m = pairs[p].match(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/);
+      if (m) {
+        var src = parseInt(m[1], 16);
+        var dst = '';
+        var dh = m[2];
+        for (var d = 0; d < dh.length; d += 4) {
+          dst += String.fromCharCode(parseInt(dh.substr(d, 4), 16));
+        }
+        map[src] = dst;
+      }
+    }
+  }
+  // beginbfrange: <start> <end> <dstStart>
+  re = /beginbfrange\s*([\s\S]*?)endbfrange/g;
+  while ((block = re.exec(cmapText)) !== null) {
+    var ranges = block[1].match(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/g);
+    if (!ranges) continue;
+    for (var r = 0; r < ranges.length; r++) {
+      var rm = ranges[r].match(/<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>\s*<([0-9a-fA-F]+)>/);
+      if (rm) {
+        var rStart = parseInt(rm[1], 16);
+        var rEnd = parseInt(rm[2], 16);
+        var rDst = parseInt(rm[3], 16);
+        for (var rv = rStart; rv <= rEnd; rv++) {
+          map[rv] = String.fromCharCode(rDst + (rv - rStart));
+        }
+      }
+    }
+  }
+  return map;
+}
+
+function _pdfContentToText(cs, fontMaps) {
   var out = '';
   var pending = [];
   var inArray = 0;
   var i = 0;
   var n = cs.length;
+  var currentFont = null;
+  var lastNum1 = undefined;
+  var lastNum2 = undefined;
 
   function flush() {
     if (pending.length) { out += pending.join(''); pending = []; }
+  }
+
+  function decodeHex(hex, bytesPerChar) {
+    var result = '';
+    for (var h = 0; h < hex.length; h += bytesPerChar * 2) {
+      var code = parseInt(hex.substr(h, bytesPerChar * 2), 16);
+      if (currentFont && fontMaps[currentFont] && fontMaps[currentFont][code] !== undefined) {
+        result += fontMaps[currentFont][code];
+      } else if (bytesPerChar === 1) {
+        result += String.fromCharCode(code);
+      } else if (code >= 32 && code < 0xFFFE) {
+        result += String.fromCharCode(code);
+      }
+    }
+    return result;
   }
 
   while (i < n) {
@@ -159,25 +219,45 @@ function _pdfContentToText(cs) {
       var j = cs.indexOf('>', i + 1);
       if (j < 0) { i++; continue; }
       var hex = cs.substring(i + 1, j).replace(/[^0-9a-fA-F]/g, '');
-      if (hex.length % 2) hex += '0';
-      var hs = '';
-      for (var h = 0; h < hex.length; h += 2) hs += String.fromCharCode(parseInt(hex.substr(h, 2), 16));
-      pending.push(hs);
+      if (hex.length === 0) { i = j + 1; continue; }
+      var bytesPerChar = (hex.length >= 4 && hex.length % 4 === 0) ? 2 : 1;
+      pending.push(decodeHex(hex, bytesPerChar));
       i = j + 1;
     } else if (ch === '[') { inArray++; i++; }
     else if (ch === ']') { if (inArray > 0) inArray--; i++; }
-    else if (ch === '-' || (ch >= '0' && ch <= '9')) {
+    else if (ch === '/') {
+      var nameStart = i + 1;
+      while (nameStart < n && cs[nameStart] !== ' ' && cs[nameStart] !== '\n' && cs[nameStart] !== '\r' && cs[nameStart] !== '\t' && cs[nameStart] !== '/') nameStart++;
+      var fontName = cs.substring(i + 1, nameStart);
+      i = nameStart;
+    } else if (ch === '-' || (ch >= '0' && ch <= '9') || ch === '.') {
       var start = i;
       if (ch === '-') i++;
       while (i < n && ((cs[i] >= '0' && cs[i] <= '9') || cs[i] === '.')) i++;
+      var numVal = parseFloat(cs.substring(start, i));
       if (inArray) {
-        var num = parseFloat(cs.substring(start, i));
-        if (num <= -100) pending.push(' ');
+        if (numVal <= -100) pending.push(' ');
       }
+      lastNum2 = lastNum1;
+      lastNum1 = numVal;
     } else if (ch === 'T') {
       var op2 = cs.substr(i, 2);
       if (op2 === 'Tj' || op2 === 'TJ') { flush(); i += 2; }
-      else if (op2 === 'Td' || op2 === 'TD' || op2 === 'T*') { flush(); out += '\n'; i += 2; }
+      else if (op2 === 'Td' || op2 === 'TD') {
+        flush();
+        if (lastNum2 !== undefined && Math.abs(lastNum1) > 0.5) out += '\n';
+        i += 2;
+      }
+      else if (op2 === 'T*') { flush(); out += '\n'; i += 2; }
+      else if (op2 === 'Tf') {
+        if (fontName) currentFont = fontName;
+        i += 2;
+      }
+      else if (op2 === 'Tm') {
+        flush();
+        out += '\n';
+        i += 2;
+      }
       else i++;
     } else if (ch === "'" || ch === '"') { flush(); out += '\n'; i++; }
     else { i++; }
@@ -186,9 +266,88 @@ function _pdfContentToText(cs) {
   return out;
 }
 
+async function _decompressStream(bytes, s, objPos) {
+  var streamIdx = s.indexOf('stream', objPos);
+  if (streamIdx < 0) return null;
+  var endObj = s.indexOf('endobj', objPos);
+  if (endObj >= 0 && endObj < streamIdx) return null;
+
+  var dictStart = s.lastIndexOf('<<', streamIdx);
+  var dict = dictStart >= 0 ? s.substring(dictStart, streamIdx) : '';
+
+  var ds = streamIdx + 6;
+  if (s[ds] === '\r') ds++;
+  if (s[ds] === '\n') ds++;
+  var ei = s.indexOf('endstream', ds);
+  if (ei < 0) return null;
+
+  var streamBytes = bytes.subarray(ds, ei);
+  var content = null;
+  if (dict.indexOf('FlateDecode') >= 0) {
+    try { content = await _inflateZlib(streamBytes); } catch (e) { content = null; }
+  } else if (dict.indexOf('/Filter') < 0) {
+    content = streamBytes;
+  }
+  return content ? _latin1Decode(content) : null;
+}
+
 async function extractPdfText(arrayBuffer) {
   var bytes = new Uint8Array(arrayBuffer);
   var s = _latin1Decode(bytes);
+
+  // Build an index of object positions: objNum -> position in file
+  var objIndex = {};
+  var objRe = /(\d+)\s+0\s+obj/g;
+  var om;
+  while ((om = objRe.exec(s)) !== null) {
+    objIndex[om[1]] = om.index;
+  }
+
+  // Find font resource mappings: /FontName objNum 0 R
+  var fontToObj = {};
+  var fontResRe = /\/Font\s*<<([\s\S]*?)>>/g;
+  var resourceMatch;
+  while ((resourceMatch = fontResRe.exec(s)) !== null) {
+    var fontDict = resourceMatch[1];
+    var fre = /\/(\w+)\s+(\d+)\s+0\s+R/g;
+    var fmatch;
+    while ((fmatch = fre.exec(fontDict)) !== null) {
+      fontToObj[fmatch[1]] = fmatch[2];
+    }
+  }
+
+  // For each font object, find its ToUnicode reference
+  var objToToUnicode = {};
+  for (var fn in fontToObj) {
+    var fObjNum = fontToObj[fn];
+    if (!objIndex[fObjNum]) continue;
+    var fObjPos = objIndex[fObjNum];
+    var fObjEnd = s.indexOf('endobj', fObjPos);
+    if (fObjEnd < 0) fObjEnd = fObjPos + 2000;
+    var fObjText = s.substring(fObjPos, fObjEnd);
+    var tuRef = fObjText.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+    if (tuRef) objToToUnicode[fn] = tuRef[1];
+  }
+
+  // Decompress each ToUnicode stream and parse its CMap
+  var fontMaps = {};
+  var cmapCache = {};
+  for (var fn2 in objToToUnicode) {
+    var tuObjNum = objToToUnicode[fn2];
+    if (cmapCache[tuObjNum]) {
+      fontMaps[fn2] = cmapCache[tuObjNum];
+      continue;
+    }
+    if (!objIndex[tuObjNum]) continue;
+    var cmapText = await _decompressStream(bytes, s, objIndex[tuObjNum]);
+    if (cmapText && (cmapText.indexOf('beginbfchar') >= 0 || cmapText.indexOf('beginbfrange') >= 0)) {
+      var cmap = _parseCMap(cmapText);
+      cmapCache[tuObjNum] = cmap;
+      fontMaps[fn2] = cmap;
+    }
+  }
+
+  // Extract text from all content streams
   var collected = '';
   var pos = 0;
 
@@ -219,7 +378,7 @@ async function extractPdfText(arrayBuffer) {
 
     var cs = _latin1Decode(content);
     if (cs.indexOf('Tj') >= 0 || cs.indexOf('TJ') >= 0) {
-      collected += _pdfContentToText(cs) + '\n';
+      collected += _pdfContentToText(cs, fontMaps) + '\n';
     }
   }
 
