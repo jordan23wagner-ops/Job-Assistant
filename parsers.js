@@ -14,15 +14,20 @@ function _latin1Decode(bytes) {
 async function _inflate(uint8, format) {
   var ds = new DecompressionStream(format);
   var writer = ds.writable.getWriter();
-  writer.write(uint8);
-  writer.close();
+  writer.write(uint8).catch(function() {});
+  writer.close().catch(function() {});
   var chunks = [];
   var reader = ds.readable.getReader();
-  while (true) {
-    var r = await reader.read();
-    if (r.done) break;
-    chunks.push(r.value);
+  try {
+    while (true) {
+      var r = await reader.read();
+      if (r.done) break;
+      chunks.push(r.value);
+    }
+  } catch (e) {
+    // Keep whatever was decompressed before the error
   }
+  if (chunks.length === 0) throw new Error('No data decompressed');
   var total = 0;
   for (var ci = 0; ci < chunks.length; ci++) total += chunks[ci].length;
   var result = new Uint8Array(total);
