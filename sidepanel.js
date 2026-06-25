@@ -9,8 +9,28 @@ let chatStore = { job: [], general: [] };
 let pendingImage = null; // { dataUrl, name } attached for the next general-mode message
 let chatSessions = []; // archived conversations: {id, title, mode, ts, pinned, records}
 
-const MAX_UNPINNED_SESSIONS = 10;
 const THEME_NAMES = ['midnight', 'yellow', 'slate', 'light'];
+
+// ----- Free-tier metering -----
+// Free users get the full toolset; only chat is metered per day. Premium lifts all caps.
+const FREE_LIMITS = { jobChat: 15, generalChat: 10, image: 3 };
+const FREE_HISTORY_CAP = 5;
+const PREMIUM_HISTORY_CAP = 25;
+let isPremium = false;
+let usage = { date: '', jobChat: 0, generalChat: 0, image: 0 };
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+function ensureUsageFresh() {
+  if (usage.date !== todayStr()) {
+    usage = { date: todayStr(), jobChat: 0, generalChat: 0, image: 0 };
+    persistUsage();
+  }
+}
+
+function persistUsage() { chrome.storage.local.set({ usage: usage }); }
+
+function historyCap() { return isPremium ? PREMIUM_HISTORY_CAP : FREE_HISTORY_CAP; }
 
 // TEST MODE: Set this to true to clear stored API key and test onboarding on load
 const TEST_FIRST_RUN = false;
@@ -781,20 +801,32 @@ function renderChat() {
   chatStore[chatMode].forEach(function(r) { addChatMessage(r.text, r.role); });
 }
 
+function updateChatHint() {
+  var base = chatMode === 'general'
+    ? 'General assistant — ask anything, attach a photo, or paste a link to discuss.'
+    : 'Ask about this job, your resume, or your search.';
+  if (!isPremium) {
+    ensureUsageFresh();
+    var bucket = chatMode === 'job' ? 'jobChat' : 'generalChat';
+    var left = Math.max(0, FREE_LIMITS[bucket] - usage[bucket]);
+    base += '  ·  ' + left + ' message' + (left === 1 ? '' : 's') + ' left today';
+  }
+  chatModeHint.textContent = base;
+}
+
 function setChatMode(mode) {
   chatMode = mode;
   modeJobBtn.classList.toggle('active', mode === 'job');
   modeGeneralBtn.classList.toggle('active', mode === 'general');
   if (mode === 'general') {
-    chatModeHint.textContent = 'General assistant — ask anything, attach a photo, or paste a link to discuss.';
     chatAttachBtn.classList.remove('hidden');
     chatInput.placeholder = 'Ask anything, or paste a link...';
   } else {
-    chatModeHint.textContent = 'Ask about this job, your resume, or your search.';
     chatAttachBtn.classList.add('hidden');
     chatInput.placeholder = 'Ask Alicia anything...';
     clearPendingImage();
   }
+  updateChatHint();
   renderChat();
 }
 
@@ -950,13 +982,29 @@ function buildGeneralSystemMessage() {
     + 'When the user shares a link and its page content is provided to you, base your answer on that content; if the page could not be loaded, say so plainly and answer from general knowledge.';
 }
 
+function showUpgradeNotice(bucket) {
+  var label = bucket === 'jobChat' ? 'Job Coach messages'
+    : bucket === 'image' ? 'image analyses' : 'General chat messages';
+  var cap = FREE_LIMITS[bucket];
+  showChatNotice('You\'ve used all ' + cap + ' free ' + label + ' for today. They reset tomorrow — or go Premium for unlimited chat. (All other tools stay free.)');
+}
+
 async function sendChat() {
   var text = chatInput.value.trim();
   if (!text && !pendingImage) return;
-  chatInput.value = '';
 
-  var store = chatStore[chatMode];
   var imageForTurn = (chatMode === 'general') ? pendingImage : null;
+  var meterBucket = chatMode === 'job' ? 'jobChat' : 'generalChat';
+
+  // Free-tier metering: full toolset stays free; chat is capped per day.
+  if (!isPremium) {
+    ensureUsageFresh();
+    if (usage[meterBucket] >= FREE_LIMITS[meterBucket]) { showUpgradeNotice(meterBucket); return; }
+    if (imageForTurn && usage.image >= FREE_LIMITS.image) { showUpgradeNotice('image'); return; }
+  }
+
+  chatInput.value = '';
+  var store = chatStore[chatMode];
 
   var userDisplay = text;
   if (imageForTurn) userDisplay = (text ? text + '\n' : '') + '🖼️ [image attached]';
@@ -1009,6 +1057,13 @@ async function sendChat() {
     store.push({ role: 'ai', text: result, api: { role: 'assistant', content: result } });
     if (store.length > 16) store.splice(0, store.length - 16);
     persistLive();
+    if (!isPremium) {
+      ensureUsageFresh();
+      usage[meterBucket]++;
+      if (imageForTurn) usage.image++;
+      persistUsage();
+      updateChatHint();
+    }
   } catch (err) {
     chatMessages.lastElementChild.remove();
     addChatMessage('Error: ' + err.message, 'ai');
@@ -1101,6 +1156,7 @@ function archiveCurrent() {
   });
 
   // Enforce cap on UNPINNED sessions; collect evicted titles for the notice.
+  var cap = historyCap();
   var unpinnedCount = 0;
   var evicted = [];
   var kept = [];
@@ -1108,7 +1164,7 @@ function archiveCurrent() {
     var s = chatSessions[i];
     if (s.pinned) { kept.push(s); continue; }
     unpinnedCount++;
-    if (unpinnedCount <= MAX_UNPINNED_SESSIONS) { kept.push(s); }
+    if (unpinnedCount <= cap) { kept.push(s); }
     else { evicted.push(s.title); }
   }
   chatSessions = kept;
@@ -1116,8 +1172,9 @@ function archiveCurrent() {
 
   if (evicted.length) {
     showChatNotice('Removed older chat' + (evicted.length > 1 ? 's' : '') + ' "' +
-      evicted.join('", "') + '" to keep your last ' + MAX_UNPINNED_SESSIONS +
-      '. Tap ★ on a chat to keep it permanently.');
+      evicted.join('", "') + '" to keep your last ' + cap +
+      '. Tap ★ on a chat to keep it permanently' +
+      (isPremium ? '.' : ', or go Premium to save more.'));
   }
 }
 
@@ -1588,12 +1645,25 @@ ivPracticeStart.addEventListener('click', ivStartPractice);
 ivPracticeSend.addEventListener('click', ivSendPractice);
 ivPracticeInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') ivSendPractice(); });
 
-// Restore theme, saved sessions, tracked jobs, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs'], function (data) {
+// Console helper to unlock Premium on a specific install (e.g. yours/your wife's).
+// Open the side panel's DevTools and run: aliciaPremium.enable()
+window.aliciaPremium = {
+  enable: function () { isPremium = true; chrome.storage.local.set({ isPremium: true }); updateChatHint(); return 'Premium enabled — unlimited chat.'; },
+  disable: function () { isPremium = false; chrome.storage.local.set({ isPremium: false }); updateChatHint(); return 'Premium disabled — back to free limits.'; },
+  status: function () { return isPremium ? 'Premium' : 'Free (' + JSON.stringify(usage) + ')'; }
+};
+
+// Restore theme, saved sessions, tracked jobs, usage, and the live conversation on startup.
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
   if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
+  isPremium = data.isPremium === true;
+  usage = (data.usage && data.usage.date === todayStr())
+    ? data.usage
+    : { date: todayStr(), jobChat: 0, generalChat: 0, image: 0 };
   renderTrackerStats();
+  updateChatHint();
   if (data.liveChat && data.liveChat.job && data.liveChat.general) {
     chatStore = data.liveChat;
     renderChat();
