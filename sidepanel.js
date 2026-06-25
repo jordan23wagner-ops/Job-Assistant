@@ -256,6 +256,28 @@ function setResumeStatus(text, color) {
   resumeStatus.style.color = color;
 }
 
+function showGoogleDocsTip() {
+  var existing = document.getElementById('gdocs-tip');
+  if (existing) existing.remove();
+
+  var tip = document.createElement('div');
+  tip.id = 'gdocs-tip';
+  tip.style.cssText = 'font-size:11px; color:#ffaa00; margin-top:6px; line-height:1.4; padding:8px; background:rgba(255,170,0,0.08); border-radius:6px; border:1px solid rgba(255,170,0,0.2);';
+  tip.innerHTML = '<strong>Can\'t read your PDF?</strong> Resume builders like Canva convert text into images/shapes that no tool can read.'
+    + '<br>Quick fix: Open your PDF in <a id="gdocs-link" href="#" style="color:#7c83ff; text-decoration:underline;">Google Docs</a>'
+    + ' (Upload > Open with Google Docs), then download as .docx or .pdf. This makes the text readable.'
+    + '<br>Or just click <strong>"or paste resume text"</strong> below and paste directly.';
+  if (resumeStatus.parentNode) resumeStatus.parentNode.appendChild(tip);
+
+  var gdocsLink = document.getElementById('gdocs-link');
+  if (gdocsLink) {
+    gdocsLink.addEventListener('click', function(e) {
+      e.preventDefault();
+      chrome.tabs.create({ url: 'https://docs.google.com' });
+    });
+  }
+}
+
 async function extractResumeText(file) {
   var name = (file.name || '').toLowerCase();
   if (name.endsWith('.pdf')) {
@@ -281,7 +303,9 @@ resumeUpload.addEventListener('change', async function(e) {
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
     if (!text || text.length < 40) {
-      throw new Error('Could not extract meaningful text from this file. Try pasting your resume text instead.');
+      setResumeStatus('Could not extract text from this file.', '#ff5555');
+      showGoogleDocsTip();
+      return;
     }
 
     const isLowQuality = isLowQualityResumeText(text);
@@ -290,12 +314,8 @@ resumeUpload.addEventListener('change', async function(e) {
     await chrome.storage.local.set({ resumeText: resumeText });
 
     if (isLowQuality) {
-      setResumeStatus('Loaded (partial text — may be scanned or image-based)', '#ffaa00');
-      const note = document.createElement('div');
-      note.style.cssText = 'font-size:11px; color:#ffaa00; margin-top:4px; line-height:1.3';
-      note.textContent = 'Tip: For best results, click "or paste resume text" below and paste your resume content directly.';
-      if (resumeStatus.parentNode) resumeStatus.parentNode.appendChild(note);
-      setTimeout(function() { if (note.parentNode) note.parentNode.removeChild(note); }, 9000);
+      setResumeStatus('Loaded (partial text — quality may be limited)', '#ffaa00');
+      showGoogleDocsTip();
     } else {
       setResumeStatus('Loaded: ' + file.name, '#4caf50');
     }
@@ -303,6 +323,9 @@ resumeUpload.addEventListener('change', async function(e) {
     updateToolButtons();
   } catch (err) {
     setResumeStatus(err.message || 'Could not read file', '#ff5555');
+    if (file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.docx')) {
+      showGoogleDocsTip();
+    }
   }
 });
 
