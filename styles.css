@@ -199,6 +199,143 @@ header h1 {
 .hidden {
   display: none;
 }
+.onboarding {
+  position: fixed;
+  inset: 0;
+  background: #1a1a2e;
+  z-index: 2000;
+  overflow-y: auto;
+  padding: 24px 18px 32px;
+}
+.onboarding.hidden {
+  display: none;
+}
+.onboarding-inner {
+  max-width: 420px;
+  margin: 0 auto;
+}
+.onboarding-logo {
+  font-size: 22px;
+  color: #7c83ff;
+  font-weight: 700;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.onboarding-title {
+  font-size: 18px;
+  color: #fff;
+  text-align: center;
+  margin-bottom: 6px;
+}
+.onboarding-sub {
+  font-size: 13px;
+  color: #aaa;
+  text-align: center;
+  margin-bottom: 22px;
+  line-height: 1.5;
+}
+.ob-step {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.ob-num {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #7c83ff;
+  color: #fff;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+.ob-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ob-text strong {
+  color: #fff;
+  font-size: 14px;
+}
+.ob-text span {
+  color: #aaa;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ob-text b {
+  color: #c9ccff;
+  font-weight: 600;
+}
+.ob-link-btn {
+  align-self: flex-start;
+  margin-top: 8px;
+  background: #7c83ff;
+  color: #fff;
+  border: none;
+  padding: 9px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ob-link-btn:hover {
+  background: #6a70e0;
+}
+.ob-input {
+  margin-top: 8px;
+  width: 100%;
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  color: #e0e0e0;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  font-family: 'Courier New', monospace;
+}
+.ob-input:focus {
+  border-color: #7c83ff;
+}
+.ob-error {
+  color: #ff6b6b;
+  font-size: 12px;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.ob-error.hidden {
+  display: none;
+}
+.ob-save-btn {
+  margin-top: 10px;
+  width: 100%;
+  background: #4caf50;
+  color: #fff;
+  border: none;
+  padding: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+}
+.ob-save-btn:hover {
+  background: #43a047;
+}
+.ob-save-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.ob-footer {
+  font-size: 11px;
+  color: #777;
+  text-align: center;
+  margin-top: 18px;
+  line-height: 1.5;
+}
 .analysis-card {
   max-height: 400px;
   overflow-y: auto;

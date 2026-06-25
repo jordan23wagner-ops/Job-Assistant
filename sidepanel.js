@@ -28,6 +28,91 @@ const pasteToggle = document.getElementById('paste-toggle');
 const pasteBox = document.getElementById('paste-box');
 const resumePaste = document.getElementById('resume-paste');
 const resumePasteSave = document.getElementById('resume-paste-save');
+const onboarding = document.getElementById('onboarding');
+const openGroqBtn = document.getElementById('open-groq-btn');
+const obKeyInput = document.getElementById('ob-key-input');
+const obSaveBtn = document.getElementById('ob-save-btn');
+const obError = document.getElementById('ob-error');
+
+function showOnboarding(errorMsg) {
+  if (!onboarding) return;
+  onboarding.classList.remove('hidden');
+  if (errorMsg) {
+    obError.textContent = errorMsg;
+    obError.classList.remove('hidden');
+  } else {
+    obError.classList.add('hidden');
+  }
+  if (obKeyInput) obKeyInput.focus();
+}
+
+function hideOnboarding() {
+  if (onboarding) onboarding.classList.add('hidden');
+}
+
+function validateGroqKey(key) {
+  if (!key) return { ok: false, msg: 'Please paste your API key in the box above.' };
+  if (/\s/.test(key)) return { ok: false, msg: 'The key should not contain spaces or line breaks. Copy just the key itself.' };
+  if (key.indexOf('gsk_') !== 0) return { ok: false, msg: 'Groq keys start with "gsk_". Double-check you copied the whole key from the Groq page.' };
+  if (key.length < 40) return { ok: false, msg: 'That key looks too short. Copy the entire key — it is about 56 characters long.' };
+  return { ok: true };
+}
+
+async function verifyGroqKey(key) {
+  var resp = await fetch('https://api.groq.com/openai/v1/models', {
+    headers: { 'Authorization': 'Bearer ' + key }
+  });
+  return resp.ok;
+}
+
+if (openGroqBtn) {
+  openGroqBtn.addEventListener('click', function() {
+    chrome.tabs.create({ url: 'https://console.groq.com/keys' });
+  });
+}
+
+async function handleSaveKey() {
+  var key = obKeyInput.value.trim();
+  var v = validateGroqKey(key);
+  if (!v.ok) {
+    obError.textContent = v.msg;
+    obError.classList.remove('hidden');
+    return;
+  }
+  obError.classList.add('hidden');
+  obSaveBtn.disabled = true;
+  obSaveBtn.textContent = 'Checking your key...';
+
+  var verified = null;
+  try {
+    verified = await verifyGroqKey(key);
+  } catch (e) {
+    verified = null; // network/CORS hiccup — don't block her, store it anyway
+  }
+
+  if (verified === false) {
+    obError.textContent = 'That key did not work. Make sure you copied the whole key and that your Groq account is active, then try again.';
+    obError.classList.remove('hidden');
+    obSaveBtn.disabled = false;
+    obSaveBtn.textContent = 'Save & Get Started';
+    return;
+  }
+
+  groqApiKey = key;
+  await chrome.storage.local.set({ groqApiKey: key });
+  obSaveBtn.disabled = false;
+  obSaveBtn.textContent = 'Save & Get Started';
+  hideOnboarding();
+}
+
+if (obSaveBtn) {
+  obSaveBtn.addEventListener('click', handleSaveKey);
+}
+if (obKeyInput) {
+  obKeyInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') handleSaveKey();
+  });
+}
 
 async function getApiKey() {
   var stored = await chrome.storage.local.get('groqApiKey');
@@ -35,12 +120,7 @@ async function getApiKey() {
     groqApiKey = stored.groqApiKey;
     return groqApiKey;
   }
-  var key = prompt('Enter your Groq API key (get one at console.groq.com):');
-  if (key) {
-    groqApiKey = key.trim();
-    await chrome.storage.local.set({ groqApiKey: groqApiKey });
-    return groqApiKey;
-  }
+  showOnboarding();
   return null;
 }
 
@@ -114,7 +194,8 @@ async function rawGroqCall(messages, temperature, key, maxTokens) {
     if (resp.status === 401) {
       groqApiKey = null;
       await chrome.storage.local.remove('groqApiKey');
-      throw new Error('Invalid API key. Click any AI feature to re-enter your key.');
+      showOnboarding('Your saved API key stopped working. Please paste a new one to continue.');
+      throw new Error('Invalid API key. Please re-enter your Groq API key in the welcome screen.');
     }
     throw new Error('Groq API error: ' + resp.status);
   }
@@ -126,7 +207,7 @@ async function rawGroqCall(messages, temperature, key, maxTokens) {
 async function callGroq(messages, temperature, maxTokens) {
   if (temperature === undefined) temperature = 0.7;
   var key = groqApiKey || await getApiKey();
-  if (!key) throw new Error('No API key provided. Click any AI feature to set your Groq API key.');
+  if (!key) throw new Error('Please add your free Groq API key in the welcome screen to use this feature.');
 
   var content = await rawGroqCall(messages, temperature, key, maxTokens);
 
@@ -363,6 +444,8 @@ chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
   }
   if (data.groqApiKey) {
     groqApiKey = data.groqApiKey;
+  } else {
+    showOnboarding();
   }
 });
 
