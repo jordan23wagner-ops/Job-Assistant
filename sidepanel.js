@@ -73,10 +73,12 @@ function isLowQualityResumeText(text) {
 
   for (let i = 0; i < sample.length; i++) {
     const c = sample.charCodeAt(i);
+    // Count letters first — must not sit behind the printable `continue` checks
+    // below, or ASCII letters (32–126) are never counted and density is always 0.
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) letters++;
     if (c === 9 || c === 10 || c === 13) { printable++; continue; }
     if (c >= 32 && c <= 126) { printable++; continue; }
     if (c >= 160 && c <= 255) { printable++; continue; }
-    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) letters++;
   }
 
   const printableRatio = printable / sample.length;
