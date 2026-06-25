@@ -181,6 +181,9 @@ header h1 {
   gap: 8px;
   margin-bottom: 10px;
 }
+.tool-btn-wide {
+  grid-column: 1 / -1;
+}
 .tool-btn {
   background: var(--surface);
   color: var(--accent);
@@ -773,4 +776,214 @@ header h1 {
 }
 .history-del:hover {
   color: #ff6b6b;
+}
+
+/* ---------- Job Application Tracker ---------- */
+.save-job-btn {
+  margin-top: 8px;
+  width: 100%;
+}
+.save-job-btn.saved {
+  background: #4caf50;
+}
+.tracker-stats {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.tracker-stat {
+  flex: 1;
+  min-width: 52px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 4px;
+  text-align: center;
+}
+.tracker-stat .num {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-strong);
+  display: block;
+  line-height: 1.1;
+}
+.tracker-stat .lbl {
+  font-size: 9.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.tracker-body {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.tracker-body.hidden {
+  display: none;
+}
+.tracker-row {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 4px;
+}
+.tracker-row:last-child {
+  border-bottom: none;
+}
+.tracker-row-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.tracker-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.tracker-row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tracker-row-company {
+  font-size: 11.5px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tracker-row-date {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+.tracker-del {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.tracker-del:hover {
+  color: #ff6b6b;
+}
+.tracker-stages {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.tracker-stage {
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tracker-stage:hover {
+  border-color: var(--accent);
+}
+.tracker-stage.active {
+  color: #fff;
+  font-weight: 600;
+  border-color: transparent;
+}
+.tracker-stage.active.s-saved { background: #6b7280; }
+.tracker-stage.active.s-applied { background: #3b82f6; }
+.tracker-stage.active.s-interview { background: #a855f7; }
+.tracker-stage.active.s-offer { background: #22c55e; }
+.tracker-stage.active.s-rejected { background: #ef4444; }
+.tracker-notes {
+  width: 100%;
+  margin-top: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 30px;
+  outline: none;
+}
+.tracker-notes:focus {
+  border-color: var(--accent);
+}
+
+/* ---------- Interview Prep ---------- */
+.interview-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.interview-tab {
+  flex: 1;
+  min-width: 64px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.2s;
+}
+.interview-tab.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  border-color: transparent;
+}
+.interview-tab:not(.active):hover {
+  border-color: var(--accent);
+}
+.interview-pane.hidden {
+  display: none;
+}
+.iv-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+.iv-content {
+  margin-top: 10px;
+}
+.iv-content:empty {
+  display: none;
+}
+.iv-input,
+.iv-textarea {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-family: inherit;
+  margin-bottom: 8px;
+  outline: none;
+}
+.iv-input:focus,
+.iv-textarea:focus {
+  border-color: var(--accent);
+}
+.iv-textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+.iv-practice-controls {
+  margin-top: 8px;
 }

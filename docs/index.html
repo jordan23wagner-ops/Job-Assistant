@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alicia AI — Your Personal Job Search Assistant</title>
+<meta name="description" content="Alicia AI is a free Chrome extension that analyzes LinkedIn jobs, tailors your resume, writes cover letters, tracks applications, and preps you for interviews.">
+<style>
+  :root {
+    --bg: #14162b;
+    --bg-2: #1a1d3a;
+    --surface: #1e2240;
+    --border: #2c3160;
+    --accent: #7c83ff;
+    --accent-2: #9a9aff;
+    --gold: #f5c518;
+    --text: #d6d9ee;
+    --text-strong: #ffffff;
+    --text-dim: #8b90b8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent-2); text-decoration: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    padding: 14px 28px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 16px;
+    transition: transform 0.15s, background 0.2s;
+    border: none;
+    cursor: pointer;
+  }
+  .btn:hover { background: #6a70e0; transform: translateY(-2px); }
+  .btn-ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .btn-ghost:hover { background: var(--surface); }
+
+  /* Nav */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(20, 22, 43, 0.85);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 18px; color: var(--text-strong); }
+  .logo-mark {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--gold));
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; color: #14162b; font-size: 18px;
+  }
+  .nav-links { display: flex; gap: 28px; align-items: center; }
+  .nav-links a { color: var(--text-dim); font-size: 15px; }
+  .nav-links a:hover { color: var(--text); }
+  @media (max-width: 720px) { .nav-links a:not(.btn) { display: none; } }
+
+  /* Hero */
+  .hero { padding: 90px 0 70px; text-align: center; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ''; position: absolute; top: -200px; left: 50%; transform: translateX(-50%);
+    width: 700px; height: 700px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(124,131,255,0.18), transparent 60%);
+    z-index: 0;
+  }
+  .hero .wrap { position: relative; z-index: 1; }
+  .badge {
+    display: inline-block; background: var(--surface); border: 1px solid var(--border);
+    color: var(--accent-2); padding: 6px 14px; border-radius: 20px; font-size: 13px; margin-bottom: 24px;
+  }
+  .hero h1 { font-size: 52px; line-height: 1.1; color: var(--text-strong); margin-bottom: 20px; letter-spacing: -1px; }
+  .hero h1 .grad { background: linear-gradient(120deg, var(--accent-2), var(--gold)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .hero p.sub { font-size: 20px; color: var(--text-dim); max-width: 640px; margin: 0 auto 36px; }
+  .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .hero-note { margin-top: 18px; font-size: 13px; color: var(--text-dim); }
+  @media (max-width: 600px) { .hero h1 { font-size: 36px; } .hero p.sub { font-size: 17px; } }
+
+  /* Sections */
+  section { padding: 70px 0; }
+  .section-title { text-align: center; margin-bottom: 50px; }
+  .section-title h2 { font-size: 34px; color: var(--text-strong); margin-bottom: 12px; letter-spacing: -0.5px; }
+  .section-title p { color: var(--text-dim); font-size: 17px; max-width: 560px; margin: 0 auto; }
+
+  /* Features grid */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  @media (max-width: 860px) { .features { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
+  .feature {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px;
+    transition: transform 0.15s, border-color 0.2s;
+  }
+  .feature:hover { transform: translateY(-4px); border-color: var(--accent); }
+  .feature .ico { font-size: 28px; margin-bottom: 14px; }
+  .feature h3 { color: var(--text-strong); font-size: 18px; margin-bottom: 8px; }
+  .feature p { color: var(--text-dim); font-size: 14.5px; }
+
+  /* How it works */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  @media (max-width: 720px) { .steps { grid-template-columns: 1fr; } }
+  .step { text-align: center; padding: 10px; }
+  .step .num {
+    width: 48px; height: 48px; margin: 0 auto 16px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--gold));
+    color: #14162b; font-weight: 900; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h3 { color: var(--text-strong); font-size: 18px; margin-bottom: 8px; }
+  .step p { color: var(--text-dim); font-size: 14.5px; }
+
+  .alt { background: var(--bg-2); }
+
+  /* Pricing */
+  .pricing { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 760px; margin: 0 auto; }
+  @media (max-width: 640px) { .pricing { grid-template-columns: 1fr; } }
+  .plan {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; position: relative;
+  }
+  .plan.featured { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .plan .tag {
+    position: absolute; top: -12px; right: 24px; background: var(--accent); color: #fff;
+    font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 12px;
+  }
+  .plan h3 { font-size: 20px; color: var(--text-strong); margin-bottom: 6px; }
+  .plan .price { font-size: 40px; font-weight: 800; color: var(--text-strong); margin-bottom: 4px; }
+  .plan .price span { font-size: 15px; font-weight: 400; color: var(--text-dim); }
+  .plan .price-note { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; }
+  .plan ul { list-style: none; margin-bottom: 24px; }
+  .plan li { padding: 7px 0; font-size: 14.5px; display: flex; gap: 10px; align-items: flex-start; }
+  .plan li::before { content: '✓'; color: var(--gold); font-weight: 800; }
+  .plan li.muted { color: var(--text-dim); }
+  .plan li.muted::before { content: '—'; color: var(--text-dim); }
+
+  /* CTA band */
+  .cta-band { text-align: center; }
+  .cta-band h2 { font-size: 32px; color: var(--text-strong); margin-bottom: 14px; }
+  .cta-band p { color: var(--text-dim); font-size: 17px; margin-bottom: 28px; }
+
+  footer { border-top: 1px solid var(--border); padding: 30px 0; color: var(--text-dim); font-size: 13.5px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="logo"><span class="logo-mark">A</span> Alicia AI</div>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#get" class="btn" style="padding:9px 18px;font-size:14px;">Add to Chrome</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">✦ Free · Powered by your own Groq API key</span>
+    <h1>Land your next job with<br><span class="grad">Alicia by your side</span></h1>
+    <p class="sub">Alicia AI lives in your browser and turns the messy job hunt into a calm, guided process — analyze postings, tailor your resume, write cover letters, track every application, and rehearse the interview.</p>
+    <div class="hero-cta">
+      <a href="#get" class="btn">Add to Chrome — Free</a>
+      <a href="#features" class="btn btn-ghost">See what it does</a>
+    </div>
+    <p class="hero-note">No subscription. No credit card. Your data stays on your computer.</p>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-title">
+      <h2>Everything you need in one side panel</h2>
+      <p>Open Alicia on any LinkedIn job and the whole workflow is right there.</p>
+    </div>
+    <div class="features">
+      <div class="feature"><div class="ico">🔍</div><h3>Job Analysis</h3><p>Instantly break down any posting into key requirements, nice-to-haves, culture signals, and red flags.</p></div>
+      <div class="feature"><div class="ico">📄</div><h3>Resume Tailoring</h3><p>Quick Tailor or Deep Dive — Alicia reshapes your resume to match the role, keeping every fact truthful.</p></div>
+      <div class="feature"><div class="ico">✉️</div><h3>Cover Letters</h3><p>A personalized, professional cover letter in seconds, grounded in the job and your background.</p></div>
+      <div class="feature"><div class="ico">📊</div><h3>Application Tracker</h3><p>Save jobs and move them through Saved → Applied → Interview → Offer. Notes and stats included.</p></div>
+      <div class="feature"><div class="ico">🎤</div><h3>Interview Prep</h3><p>Tailored question lists, company research, a STAR answer builder, and a live mock-interview coach.</p></div>
+      <div class="feature"><div class="ico">💬</div><h3>Always-on Chat</h3><p>A job coach that knows your resume — plus a general assistant for everyday questions, images, and links.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="alt">
+  <div class="wrap">
+    <div class="section-title">
+      <h2>Up and running in 2 minutes</h2>
+      <p>No coding, no accounts to manage beyond one free key.</p>
+    </div>
+    <div class="steps">
+      <div class="step"><div class="num">1</div><h3>Add to Chrome</h3><p>Install the extension from the Chrome Web Store with one click.</p></div>
+      <div class="step"><div class="num">2</div><h3>Paste a free key</h3><p>Alicia walks you through getting a free Groq API key — about 2 minutes, no card needed.</p></div>
+      <div class="step"><div class="num">3</div><h3>Open a job</h3><p>Head to any LinkedIn posting, open the side panel, and let Alicia do the heavy lifting.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div class="section-title">
+      <h2>Simple pricing</h2>
+      <p>Start free forever. Premium adds power tools for serious job hunts.</p>
+    </div>
+    <div class="pricing">
+      <div class="plan">
+        <h3>Free</h3>
+        <div class="price">$0</div>
+        <div class="price-note">Forever. Bring your own free Groq key.</div>
+        <ul>
+          <li>Job analysis &amp; red-flag detection</li>
+          <li>Resume tailoring (Quick &amp; Deep Dive)</li>
+          <li>Cover letter generation</li>
+          <li>Application tracker</li>
+          <li>Interview prep &amp; mock interviews</li>
+          <li>Job coach + general chat</li>
+          <li>All data stored locally</li>
+        </ul>
+        <a href="#get" class="btn btn-ghost" style="width:100%;text-align:center;">Get started</a>
+      </div>
+      <div class="plan featured">
+        <span class="tag">Coming soon</span>
+        <h3>Premium</h3>
+        <div class="price">$6<span>/mo</span></div>
+        <div class="price-note">For active job seekers.</div>
+        <ul>
+          <li>Everything in Free</li>
+          <li>Cloud sync across devices</li>
+          <li>Application analytics &amp; reminders</li>
+          <li>Multi-job comparison</li>
+          <li>Salary research &amp; negotiation prep</li>
+          <li class="muted">Priority support</li>
+        </ul>
+        <a href="#get" class="btn" style="width:100%;text-align:center;">Join the waitlist</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="get" class="alt cta-band">
+  <div class="wrap">
+    <h2>Give Alicia a try today</h2>
+    <p>Free to install. Your wife, your friend, or you — anyone can be up and running in minutes.</p>
+    <!-- Replace # with your Chrome Web Store URL once the listing is live -->
+    <a href="#" class="btn" id="cws-link">Add to Chrome — Free</a>
+    <p class="hero-note">Works on Chrome and Chromium browsers (Edge, Brave).</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>© <span id="year"></span> Alicia AI — Job Assistant</div>
+    <div><a href="https://github.com/jordan23wagner-ops/job-assistant">GitHub</a> · <a href="https://github.com/jordan23wagner-ops/job-assistant/blob/main/PRIVACY.md">Privacy</a></div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+</body>
+</html>

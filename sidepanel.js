@@ -58,6 +58,26 @@ const chatClearBtn = document.getElementById('chat-clear-btn');
 const chatNotice = document.getElementById('chat-notice');
 const chatHistoryPanel = document.getElementById('chat-history-panel');
 const themeDots = Array.prototype.slice.call(document.querySelectorAll('.theme-dot'));
+const saveJobBtn = document.getElementById('save-job-btn');
+const trackerToggle = document.getElementById('tracker-toggle');
+const trackerStats = document.getElementById('tracker-stats');
+const trackerBody = document.getElementById('tracker-body');
+const trackerList = document.getElementById('tracker-list');
+const trackerEmpty = document.getElementById('tracker-empty');
+const interviewBtn = document.getElementById('interview-btn');
+const interviewSection = document.getElementById('interview-section');
+const closeInterview = document.getElementById('close-interview');
+
+let trackedJobs = []; // {id, title, company, location, url, description, status, notes, savedAt}
+let practiceState = null; // mock-interview conversation state
+
+const TRACKER_STAGES = [
+  { key: 'saved', label: 'Saved' },
+  { key: 'applied', label: 'Applied' },
+  { key: 'interview', label: 'Interview' },
+  { key: 'offer', label: 'Offer' },
+  { key: 'rejected', label: 'Rejected' }
+];
 
 function showOnboarding(errorMsg) {
   if (!onboarding) return;
@@ -340,6 +360,11 @@ function updateToolButtons() {
   analyzeBtn.disabled = !currentJob;
   tailorBtn.disabled = !currentJob || !resumeText;
   coverBtn.disabled = !currentJob;
+  interviewBtn.disabled = !currentJob;
+  if (saveJobBtn) {
+    saveJobBtn.classList.toggle('hidden', !currentJob);
+    refreshSaveJobBtn();
+  }
 }
 
 chrome.runtime.onMessage.addListener(function(message) {
@@ -1206,10 +1231,369 @@ function deleteSession(id) {
 chatClearBtn.addEventListener('click', clearChat);
 chatHistoryBtn.addEventListener('click', toggleHistoryPanel);
 
-// Restore theme, saved sessions, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat'], function (data) {
+// ========== Job Application Tracker ==========
+
+function persistTrackedJobs() {
+  chrome.storage.local.set({ trackedJobs: trackedJobs });
+}
+
+function findTrackedByUrl(url) {
+  if (!url) return null;
+  for (var i = 0; i < trackedJobs.length; i++) {
+    if (trackedJobs[i].url === url) return trackedJobs[i];
+  }
+  return null;
+}
+
+function refreshSaveJobBtn() {
+  if (!saveJobBtn || !currentJob) return;
+  var existing = findTrackedByUrl(currentJob.url);
+  if (existing) {
+    saveJobBtn.textContent = '✓ Saved to Tracker';
+    saveJobBtn.classList.add('saved');
+    saveJobBtn.disabled = true;
+  } else {
+    saveJobBtn.innerHTML = '&#43; Save to Tracker';
+    saveJobBtn.classList.remove('saved');
+    saveJobBtn.disabled = false;
+  }
+}
+
+function saveCurrentJob() {
+  if (!currentJob) return;
+  if (findTrackedByUrl(currentJob.url)) return;
+  trackedJobs.unshift({
+    id: 'tj_' + Date.now(),
+    title: currentJob.title || 'Untitled role',
+    company: currentJob.company || '',
+    location: currentJob.location || '',
+    url: currentJob.url || '',
+    description: (currentJob.description || '').slice(0, 4000),
+    status: 'saved',
+    notes: '',
+    savedAt: Date.now()
+  });
+  persistTrackedJobs();
+  refreshSaveJobBtn();
+  renderTracker();
+  if (trackerBody.classList.contains('hidden')) toggleTracker(true);
+}
+
+function formatTrackerDate(ts) {
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function renderTrackerStats() {
+  var counts = { saved: 0, applied: 0, interview: 0, offer: 0, rejected: 0 };
+  trackedJobs.forEach(function (j) { if (counts[j.status] !== undefined) counts[j.status]++; });
+  trackerStats.innerHTML = '';
+  TRACKER_STAGES.forEach(function (stage) {
+    var box = document.createElement('div');
+    box.className = 'tracker-stat';
+    var num = document.createElement('span');
+    num.className = 'num';
+    num.textContent = counts[stage.key];
+    var lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.textContent = stage.label;
+    box.appendChild(num);
+    box.appendChild(lbl);
+    trackerStats.appendChild(box);
+  });
+}
+
+function setJobStatus(id, status) {
+  for (var i = 0; i < trackedJobs.length; i++) {
+    if (trackedJobs[i].id === id) { trackedJobs[i].status = status; break; }
+  }
+  persistTrackedJobs();
+  renderTracker();
+}
+
+function setJobNotes(id, notes) {
+  for (var i = 0; i < trackedJobs.length; i++) {
+    if (trackedJobs[i].id === id) { trackedJobs[i].notes = notes; break; }
+  }
+  persistTrackedJobs();
+}
+
+function deleteTrackedJob(id) {
+  trackedJobs = trackedJobs.filter(function (j) { return j.id !== id; });
+  persistTrackedJobs();
+  refreshSaveJobBtn();
+  renderTracker();
+}
+
+function renderTracker() {
+  renderTrackerStats();
+  trackerList.innerHTML = '';
+  if (trackedJobs.length === 0) {
+    trackerEmpty.classList.remove('hidden');
+    return;
+  }
+  trackerEmpty.classList.add('hidden');
+
+  trackedJobs.forEach(function (job) {
+    var row = document.createElement('div');
+    row.className = 'tracker-row';
+
+    var top = document.createElement('div');
+    top.className = 'tracker-row-top';
+    var main = document.createElement('div');
+    main.className = 'tracker-row-main';
+
+    var title = document.createElement('div');
+    title.className = 'tracker-row-title';
+    title.textContent = job.title;
+    if (job.url) {
+      title.style.cursor = 'pointer';
+      title.title = 'Open job posting';
+      title.addEventListener('click', function () { chrome.tabs.create({ url: job.url }); });
+    }
+    main.appendChild(title);
+
+    if (job.company) {
+      var comp = document.createElement('div');
+      comp.className = 'tracker-row-company';
+      comp.textContent = job.company + (job.location ? ' · ' + job.location : '');
+      main.appendChild(comp);
+    }
+    var date = document.createElement('div');
+    date.className = 'tracker-row-date';
+    date.textContent = 'Saved ' + formatTrackerDate(job.savedAt);
+    main.appendChild(date);
+
+    var del = document.createElement('button');
+    del.className = 'tracker-del';
+    del.textContent = '🗑';
+    del.title = 'Remove from tracker';
+    del.addEventListener('click', function () { deleteTrackedJob(job.id); });
+
+    top.appendChild(main);
+    top.appendChild(del);
+    row.appendChild(top);
+
+    var stages = document.createElement('div');
+    stages.className = 'tracker-stages';
+    TRACKER_STAGES.forEach(function (stage) {
+      var btn = document.createElement('button');
+      btn.className = 'tracker-stage s-' + stage.key + (job.status === stage.key ? ' active' : '');
+      btn.textContent = stage.label;
+      btn.addEventListener('click', function () { setJobStatus(job.id, stage.key); });
+      stages.appendChild(btn);
+    });
+    row.appendChild(stages);
+
+    var notes = document.createElement('textarea');
+    notes.className = 'tracker-notes';
+    notes.placeholder = 'Notes (contacts, follow-up dates, salary...)';
+    notes.value = job.notes || '';
+    notes.addEventListener('change', function () { setJobNotes(job.id, notes.value); });
+    notes.addEventListener('blur', function () { setJobNotes(job.id, notes.value); });
+    row.appendChild(notes);
+
+    trackerList.appendChild(row);
+  });
+}
+
+function toggleTracker(forceOpen) {
+  var open = forceOpen === true || trackerBody.classList.contains('hidden');
+  trackerBody.classList.toggle('hidden', !open);
+  trackerToggle.innerHTML = open ? '&#128202; Hide' : '&#128202; Show';
+  if (open) renderTracker();
+}
+
+if (saveJobBtn) saveJobBtn.addEventListener('click', saveCurrentJob);
+if (trackerToggle) trackerToggle.addEventListener('click', function () { toggleTracker(); });
+
+// ========== Interview Prep ==========
+
+const interviewTabs = Array.prototype.slice.call(document.querySelectorAll('.interview-tab'));
+const ivGenQuestions = document.getElementById('iv-gen-questions');
+const ivQuestionsContent = document.getElementById('iv-questions-content');
+const ivGenCompany = document.getElementById('iv-gen-company');
+const ivCompanyContent = document.getElementById('iv-company-content');
+const ivStarQuestion = document.getElementById('iv-star-question');
+const ivStarNotes = document.getElementById('iv-star-notes');
+const ivGenStar = document.getElementById('iv-gen-star');
+const ivStarContent = document.getElementById('iv-star-content');
+const ivPracticeConversation = document.getElementById('iv-practice-conversation');
+const ivPracticeStart = document.getElementById('iv-practice-start');
+const ivPracticeInputArea = document.getElementById('iv-practice-input-area');
+const ivPracticeInput = document.getElementById('iv-practice-input');
+const ivPracticeSend = document.getElementById('iv-practice-send');
+
+function jobContextBlock() {
+  if (!currentJob) return '';
+  var block = 'Job Title: ' + currentJob.title + '\nCompany: ' + (currentJob.company || 'N/A') +
+    '\nLocation: ' + (currentJob.location || 'N/A');
+  if (currentJob.description) block += '\n\nJob Description:\n' + currentJob.description.slice(0, 3000);
+  return block;
+}
+
+function switchInterviewTab(tab) {
+  interviewTabs.forEach(function (t) { t.classList.toggle('active', t.getAttribute('data-tab') === tab); });
+  ['questions', 'company', 'star', 'practice'].forEach(function (name) {
+    document.getElementById('iv-tab-' + name).classList.toggle('hidden', name !== tab);
+  });
+}
+
+interviewTabs.forEach(function (t) {
+  t.addEventListener('click', function () { switchInterviewTab(t.getAttribute('data-tab')); });
+});
+
+interviewBtn.addEventListener('click', function () {
+  if (!currentJob) return;
+  interviewSection.classList.remove('hidden');
+  switchInterviewTab('questions');
+  interviewSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+closeInterview.addEventListener('click', function () {
+  interviewSection.classList.add('hidden');
+});
+
+async function ivGenerate(button, target, systemMsg, userMsg, temp, maxTokens) {
+  button.disabled = true;
+  var originalLabel = button.textContent;
+  button.textContent = 'Working...';
+  target.innerHTML = '<p class="loading">Thinking...</p>';
+  try {
+    var result = await callGroq([
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: userMsg }
+    ], temp || 0.6, maxTokens || 2048);
+    target.innerHTML = formatAnalysis(result);
+  } catch (err) {
+    target.innerHTML = '<p style="color:#ff5555">' + escapeHtml(err.message) + '</p>';
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+ivGenQuestions.addEventListener('click', function () {
+  if (!currentJob) return;
+  var sys = 'You are Alicia, an expert interview coach. Generate a focused set of likely interview questions for this specific role. Organize with ## headers into: Behavioral, Role-Specific / Technical, and Questions to Ask Them. Under each, list 4-6 questions as bullets. If a resume is provided, tailor a couple of questions to probe the candidate\'s background and likely gaps. Keep it practical and specific to this job — no generic filler.';
+  var user = jobContextBlock();
+  if (resumeText) user += '\n\nCandidate Resume:\n' + resumeText.slice(0, 2500);
+  ivGenerate(ivGenQuestions, ivQuestionsContent, sys, user, 0.6, 2048);
+});
+
+ivGenCompany.addEventListener('click', async function () {
+  if (!currentJob) return;
+  ivGenCompany.disabled = true;
+  ivGenCompany.textContent = 'Researching...';
+  ivCompanyContent.innerHTML = '<p class="loading">Researching ' + escapeHtml(currentJob.company || 'the company') + '...</p>';
+
+  var webContext = '';
+  if (currentJob.company) {
+    try {
+      var pageText = await fetchPageText('https://www.google.com/search?q=' +
+        encodeURIComponent(currentJob.company + ' company about news'));
+      if (pageText) webContext = '\n\n[Web search results — use cautiously, may be noisy]:\n' + pageText.slice(0, 3500);
+    } catch (e) { /* fall back to model knowledge */ }
+  }
+
+  var sys = 'You are Alicia, an interview prep researcher. Produce a concise company research brief to help a candidate prepare. Use ## headers: What They Do, Culture & Values, Recent News / Signals, Likely Interview Focus, and Smart Questions to Ask. Base it on the job description, any provided web content, and general knowledge. Be honest about uncertainty — if you are not sure about a fact, say so rather than inventing it.';
+  var user = jobContextBlock() + webContext;
+  try {
+    var result = await callGroq([
+      { role: 'system', content: sys },
+      { role: 'user', content: user }
+    ], 0.6, 2048);
+    ivCompanyContent.innerHTML = formatAnalysis(result);
+  } catch (err) {
+    ivCompanyContent.innerHTML = '<p style="color:#ff5555">' + escapeHtml(err.message) + '</p>';
+  } finally {
+    ivGenCompany.disabled = false;
+    ivGenCompany.textContent = 'Research Company';
+  }
+});
+
+ivGenStar.addEventListener('click', function () {
+  var q = ivStarQuestion.value.trim();
+  var notes = ivStarNotes.value.trim();
+  if (!notes) {
+    ivStarContent.innerHTML = '<p style="color:#ff9955">Add a few rough notes about your story first.</p>';
+    return;
+  }
+  var sys = 'You are Alicia, an interview coach specializing in the STAR method. Take the candidate\'s rough notes and shape them into a polished, confident answer. Output with ## headers for Situation, Task, Action, and Result — each 1-3 tight sentences. Then add a ## Delivery Tip with one short note on how to say it well. Keep it truthful to their notes; do not invent achievements. If their notes are missing a clear result, gently prompt them to quantify it.';
+  var user = 'Behavioral question: ' + (q || '(not specified — infer a likely one)') + '\n\nCandidate rough notes:\n' + notes;
+  if (currentJob) user += '\n\nTarget role context:\n' + jobContextBlock();
+  ivGenerate(ivGenStar, ivStarContent, sys, user, 0.6, 1500);
+});
+
+// ----- Mock interview practice -----
+
+function ivAddPracticeMsg(text, role) {
+  var div = document.createElement('div');
+  div.className = 'tailoring-msg ' + (role === 'ai' ? 'ai' : 'user');
+  div.innerHTML = role === 'ai' ? formatAnalysis(text) : escapeHtml(text);
+  ivPracticeConversation.appendChild(div);
+  ivPracticeConversation.scrollTop = ivPracticeConversation.scrollHeight;
+}
+
+function ivPracticeSystem() {
+  var sys = 'You are Alicia, conducting a realistic but supportive mock interview for the role below. ' +
+    'Behavior:\n- Ask ONE question at a time and wait for the answer.\n' +
+    '- After each candidate answer, give brief, specific feedback (1-2 sentences: what worked + one concrete improvement), then ask the next question.\n' +
+    '- Mix behavioral and role-specific questions relevant to this job.\n' +
+    '- Keep your turns short. Do not dump multiple questions at once.\n' +
+    '- After about 5 questions, wrap up with a short overall assessment and top 2 things to work on.\n' +
+    'Start by introducing yourself in one line and asking the first question.\n\n' + jobContextBlock();
+  if (resumeText) sys += '\n\nCandidate Resume (for tailoring questions):\n' + resumeText.slice(0, 2000);
+  return sys;
+}
+
+async function ivStartPractice() {
+  practiceState = { messages: [{ role: 'system', content: ivPracticeSystem() }] };
+  ivPracticeConversation.innerHTML = '';
+  ivPracticeStart.textContent = 'Restart';
+  ivPracticeInputArea.classList.remove('hidden');
+  ivAddPracticeMsg('Setting up your mock interview...', 'ai');
+  try {
+    var first = await callGroq(practiceState.messages, 0.7, 800);
+    ivPracticeConversation.lastElementChild.remove();
+    ivAddPracticeMsg(first, 'ai');
+    practiceState.messages.push({ role: 'assistant', content: first });
+    ivPracticeInput.focus();
+  } catch (err) {
+    ivPracticeConversation.lastElementChild.remove();
+    ivAddPracticeMsg('Error: ' + err.message, 'ai');
+  }
+}
+
+async function ivSendPractice() {
+  if (!practiceState) return;
+  var answer = ivPracticeInput.value.trim();
+  if (!answer) return;
+  ivPracticeInput.value = '';
+  ivAddPracticeMsg(answer, 'user');
+  practiceState.messages.push({ role: 'user', content: answer });
+  ivAddPracticeMsg('Thinking...', 'ai');
+  try {
+    var reply = await callGroq(practiceState.messages, 0.7, 800);
+    ivPracticeConversation.lastElementChild.remove();
+    ivAddPracticeMsg(reply, 'ai');
+    practiceState.messages.push({ role: 'assistant', content: reply });
+  } catch (err) {
+    ivPracticeConversation.lastElementChild.remove();
+    ivAddPracticeMsg('Error: ' + err.message, 'ai');
+    practiceState.messages.pop();
+  }
+}
+
+ivPracticeStart.addEventListener('click', ivStartPractice);
+ivPracticeSend.addEventListener('click', ivSendPractice);
+ivPracticeInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') ivSendPractice(); });
+
+// Restore theme, saved sessions, tracked jobs, and the live conversation on startup.
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
+  if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
+  renderTrackerStats();
   if (data.liveChat && data.liveChat.job && data.liveChat.general) {
     chatStore = data.liveChat;
     renderChat();

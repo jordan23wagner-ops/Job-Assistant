@@ -48,7 +48,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v0.6.1</p>
+      <p class="subtitle">Job Assistant v0.7.0</p>
       <div id="theme-picker" class="theme-picker">
         <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
         <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
@@ -65,6 +65,19 @@
       <div id="job-info" class="card">
         <p class="placeholder">Navigate to a LinkedIn job posting to get started.</p>
       </div>
+      <button id="save-job-btn" class="btn-small save-job-btn hidden">&#43; Save to Tracker</button>
+    </section>
+
+    <section id="tracker-section" class="section">
+      <div class="section-header">
+        <h2>My Applications</h2>
+        <button id="tracker-toggle" class="btn-icon" title="Show/hide tracker">&#128202; Show</button>
+      </div>
+      <div id="tracker-stats" class="tracker-stats"></div>
+      <div id="tracker-body" class="tracker-body hidden">
+        <div id="tracker-list" class="tracker-list"></div>
+        <p id="tracker-empty" class="placeholder">No saved jobs yet. Detect a LinkedIn job and tap "Save to Tracker".</p>
+      </div>
     </section>
 
     <section id="tools-section" class="section">
@@ -73,6 +86,7 @@
         <button id="analyze-btn" class="tool-btn" disabled>Analyze Job</button>
         <button id="tailor-btn" class="tool-btn" disabled>Tailor Resume</button>
         <button id="cover-btn" class="tool-btn" disabled>Cover Letter</button>
+        <button id="interview-btn" class="tool-btn tool-btn-wide" disabled>Interview Prep</button>
       </div>
       <div class="upload-area">
         <label for="resume-upload" class="upload-label">Upload Resume (.pdf, .docx, .txt)</label>
@@ -107,6 +121,51 @@
         <div class="tailoring-text-input">
           <input type="text" id="tailoring-input" placeholder="Type your answer..." />
           <button id="tailoring-send" class="btn-small">Send</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="interview-section" class="section hidden">
+      <div class="section-header">
+        <h2>Interview Prep</h2>
+        <button id="close-interview" class="btn-small">Close</button>
+      </div>
+      <div class="interview-tabs">
+        <button class="interview-tab active" data-tab="questions">Questions</button>
+        <button class="interview-tab" data-tab="company">Company</button>
+        <button class="interview-tab" data-tab="star">STAR Builder</button>
+        <button class="interview-tab" data-tab="practice">Practice</button>
+      </div>
+
+      <div id="iv-tab-questions" class="interview-pane">
+        <p class="iv-hint">Likely interview questions tailored to this role and your resume.</p>
+        <button id="iv-gen-questions" class="btn-small">Generate Questions</button>
+        <div id="iv-questions-content" class="card analysis-card iv-content"></div>
+      </div>
+
+      <div id="iv-tab-company" class="interview-pane hidden">
+        <p class="iv-hint">A research brief on the company to help you ask sharp questions and show you've done your homework.</p>
+        <button id="iv-gen-company" class="btn-small">Research Company</button>
+        <div id="iv-company-content" class="card analysis-card iv-content"></div>
+      </div>
+
+      <div id="iv-tab-star" class="interview-pane hidden">
+        <p class="iv-hint">Turn a rough story into a polished STAR answer (Situation, Task, Action, Result).</p>
+        <input type="text" id="iv-star-question" class="iv-input" placeholder="The behavioral question (e.g. Tell me about a conflict you resolved)" />
+        <textarea id="iv-star-notes" class="iv-textarea" placeholder="Your rough notes: what happened, what you did, how it turned out..."></textarea>
+        <button id="iv-gen-star" class="btn-small">Build STAR Answer</button>
+        <div id="iv-star-content" class="card analysis-card iv-content"></div>
+      </div>
+
+      <div id="iv-tab-practice" class="interview-pane hidden">
+        <p class="iv-hint">Mock interview: Alicia asks, you answer, she gives feedback and asks the next one.</p>
+        <div id="iv-practice-conversation" class="card tailoring-card"></div>
+        <div class="iv-practice-controls">
+          <button id="iv-practice-start" class="btn-small">Start Mock Interview</button>
+        </div>
+        <div id="iv-practice-input-area" class="tailoring-text-input hidden">
+          <input type="text" id="iv-practice-input" placeholder="Type your answer..." />
+          <button id="iv-practice-send" class="btn-small">Send</button>
         </div>
       </div>
     </section>
