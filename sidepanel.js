@@ -204,6 +204,21 @@ function sanitizeText(text) {
   return clean;
 }
 
+// Qwen (and other reasoning models) emit their chain-of-thought wrapped in
+// <think>...</think> before the real answer. Strip it so the user only sees the result.
+function stripThinking(text) {
+  if (!text) return text;
+  // Remove complete <think>...</think> blocks.
+  var cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  // If a closing tag remains (opening tag was missing/mid-stream), drop everything up to it.
+  if (/<\/think>/i.test(cleaned)) {
+    cleaned = cleaned.replace(/[\s\S]*<\/think>/i, '');
+  }
+  // Strip any stray opening/closing tags.
+  cleaned = cleaned.replace(/<\/?think>/gi, '');
+  return cleaned.trim();
+}
+
 function isLowQualityResumeText(text) {
   if (!text || text.length < 50) return true;
 
@@ -266,7 +281,7 @@ async function rawGroqCall(messages, temperature, key, maxTokens) {
   }
 
   var data = await resp.json();
-  return sanitizeText(data.choices[0].message.content);
+  return stripThinking(sanitizeText(data.choices[0].message.content));
 }
 
 async function callGroq(messages, temperature, maxTokens) {
