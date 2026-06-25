@@ -24,6 +24,10 @@ const closeTailoring = document.getElementById('close-tailoring');
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
+const pasteToggle = document.getElementById('paste-toggle');
+const pasteBox = document.getElementById('paste-box');
+const resumePaste = document.getElementById('resume-paste');
+const resumePasteSave = document.getElementById('resume-paste-save');
 
 async function getApiKey() {
   var stored = await chrome.storage.local.get('groqApiKey');
@@ -55,8 +59,6 @@ function sanitizeText(text) {
   return clean;
 }
 
-// Improved quality check for resume text extraction.
-// More tolerant of real resumes while still catching true garbage/binary output.
 function isLowQualityResumeText(text) {
   if (!text || text.length < 50) return true;
 
@@ -81,11 +83,9 @@ function isLowQualityResumeText(text) {
   const hasEnoughWords = words >= 15;
   const letterDensity = letters / Math.max(1, sample.length);
 
-  // Only reject clearly unusable extractions
   return (printableRatio < 0.75 && !hasEnoughWords) || letterDensity < 0.08;
 }
 
-// Loose check for clearly-corrupt AI output so we can retry once.
 function isResponseGarbage(text) {
   if (!text || text.length < 5) return false;
   var letters = 0;
@@ -128,7 +128,6 @@ async function callGroq(messages, temperature) {
 
   var content = await rawGroqCall(messages, temperature, key);
 
-  // If the model returns clear garbage, retry once at a lower temperature.
   if (isResponseGarbage(content)) {
     console.log('[Alicia] Garbage response detected, retrying:', content);
     var retry = await rawGroqCall(messages, 0.3, key);
@@ -271,7 +270,6 @@ async function extractResumeText(file) {
   return await file.text();
 }
 
-// Improved resume upload handler with better support for real-world PDFs (including hybrid/scanned)
 resumeUpload.addEventListener('change', async function(e) {
   var file = e.target.files[0];
   if (!file) return;
@@ -283,7 +281,7 @@ resumeUpload.addEventListener('change', async function(e) {
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
     if (!text || text.length < 40) {
-      throw new Error('Could not extract meaningful text from this file.');
+      throw new Error('Could not extract meaningful text from this file. Try pasting your resume text instead.');
     }
 
     const isLowQuality = isLowQualityResumeText(text);
@@ -293,12 +291,11 @@ resumeUpload.addEventListener('change', async function(e) {
 
     if (isLowQuality) {
       setResumeStatus('Loaded (partial text — may be scanned or image-based)', '#ffaa00');
-      // Show helpful note
       const note = document.createElement('div');
       note.style.cssText = 'font-size:11px; color:#ffaa00; margin-top:4px; line-height:1.3';
-      note.textContent = 'Tip: For best AI results on scanned PDFs, upload a text-based PDF/DOCX or paste clean text manually.';
+      note.textContent = 'Tip: For best results, click "or paste resume text" below and paste your resume content directly.';
       if (resumeStatus.parentNode) resumeStatus.parentNode.appendChild(note);
-      setTimeout(() => { if (note.parentNode) note.parentNode.removeChild(note); }, 9000);
+      setTimeout(function() { if (note.parentNode) note.parentNode.removeChild(note); }, 9000);
     } else {
       setResumeStatus('Loaded: ' + file.name, '#4caf50');
     }
@@ -309,13 +306,30 @@ resumeUpload.addEventListener('change', async function(e) {
   }
 });
 
+pasteToggle.addEventListener('click', function() {
+  pasteBox.classList.toggle('hidden');
+  if (!pasteBox.classList.contains('hidden')) resumePaste.focus();
+});
+
+resumePasteSave.addEventListener('click', async function() {
+  var text = sanitizeText(resumePaste.value).trim();
+  if (text.length < 30) {
+    setResumeStatus('Please paste a bit more of your resume.', '#ff9955');
+    return;
+  }
+  resumeText = text;
+  await chrome.storage.local.set({ resumeText: resumeText });
+  setResumeStatus('Resume saved from pasted text', '#4caf50');
+  pasteBox.classList.add('hidden');
+  updateToolButtons();
+});
+
 chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
   if (data.resumeText) {
     if (isLowQualityResumeText(data.resumeText)) {
-      // Stored resume is low quality (likely old binary/scanned upload). Clear it.
       chrome.storage.local.remove('resumeText');
       resumeText = null;
-      setResumeStatus('Your saved resume was unreadable or low-quality. Please re-upload.', '#ff9955');
+      setResumeStatus('Your saved resume was unreadable or low-quality. Please re-upload or paste text.', '#ff9955');
     } else {
       resumeText = sanitizeText(data.resumeText);
       setResumeStatus('Resume loaded from storage', '#4caf50');
@@ -465,7 +479,7 @@ async function runTailoringStep() {
       addTailoringQuickOptions(['Start over', 'Adjust suggestions']);
     } else {
       addTailoringMessage(result, 'ai');
-      addTailoringQuickOptions(['All of them', 'Skip this step'];
+      addTailoringQuickOptions(['All of them', 'Skip this step']);
     }
   } catch (err) {
     var lastMsg2 = tailoringConversation.lastElementChild;
@@ -546,38 +560,27 @@ async function sendChat() {
   } catch (err) {
     chatMessages.lastElementChild.remove();
     addChatMessage('Error: ' + err.message, 'ai');
-    // Drop the failed user turn so it does not corrupt later context.
     if (chatHistory.length && chatHistory[chatHistory.length - 1].role === 'user') {
       chatHistory.pop();
     }
   }
 }
 
-// Enhanced system prompt — makes Alicia a proactive job search coach
 function buildChatSystemMessage() {
-  let msg = `You are Alicia, an expert, friendly, and honest AI job search coach and career advisor.
-
-Core behaviors:
-- Be concise, actionable, and structured (use short paragraphs + bullets when helpful).
-- When a job is loaded, proactively analyze **fit**: highlight strong matches from the resume, identify gaps, and suggest how to position experience or address weaknesses.
-- Give practical suggestions for applications, networking, LinkedIn outreach, or interview prep.
-- For salary questions: give realistic ranges based on role + location + experience level (use general market knowledge). Be transparent about sources/uncertainty.
-- For company or market questions: share known signals about culture, recent news, hiring trends, or interview process.
-- Always tie advice back to the candidate’s actual resume and the specific job when possible.
-- Be encouraging but never sugarcoat — honesty builds trust.`;
+  let msg = 'You are Alicia, an expert, friendly, and honest AI job search coach and career advisor.\n\nCore behaviors:\n- Be concise, actionable, and structured (use short paragraphs + bullets when helpful).\n- When a job is loaded, proactively analyze fit: highlight strong matches from the resume, identify gaps, and suggest how to position experience or address weaknesses.\n- Give practical suggestions for applications, networking, LinkedIn outreach, or interview prep.\n- For salary questions: give realistic ranges based on role + location + experience level (use general market knowledge). Be transparent about sources/uncertainty.\n- For company or market questions: share known signals about culture, recent news, hiring trends, or interview process.\n- Always tie advice back to the candidate\'s actual resume and the specific job when possible.\n- Be encouraging but never sugarcoat -- honesty builds trust.';
 
   if (currentJob) {
-    msg += `\n\nCurrent job context:\nTitle: ${currentJob.title}\nCompany: ${currentJob.company}\nLocation: ${currentJob.location || 'Not specified'}`;
+    msg += '\n\nCurrent job context:\nTitle: ' + currentJob.title + '\nCompany: ' + currentJob.company + '\nLocation: ' + (currentJob.location || 'Not specified');
     if (currentJob.description) {
-      msg += `\nJob description (first 1200 chars): ${currentJob.description.substring(0, 1200)}`;
+      msg += '\nJob description (first 1200 chars): ' + currentJob.description.substring(0, 1200);
     }
   }
 
   if (resumeText) {
-    msg += `\n\nCandidate resume (first 1800 chars):\n${resumeText.substring(0, 1800)}`;
+    msg += '\n\nCandidate resume (first 1800 chars):\n' + resumeText.substring(0, 1800);
   }
 
-  msg += `\n\nRespond helpfully to any job-search related question.`;
+  msg += '\n\nRespond helpfully to any job-search related question.';
   return msg;
 }
 
