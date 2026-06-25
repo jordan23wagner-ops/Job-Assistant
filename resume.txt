@@ -1,0 +1,71 @@
+Jordon Wagner
+Cypress, TX | 775-351-6657 | jordan23wagner@gmail.com | LinkedIn
+
+SUMMARY
+Client Success Operations Project Manager driving strategic RCM solution scaling through AI automation and process optimization. Expertise in architecting agentic AI tools, cross-functional alignment, churn management, and enabling CA capacity scaling. Track record of leading $100M+ business units and delivering enterprise-scale healthcare implementations.
+
+TECHNICAL SKILLS
+- Project Management: Salesforce, JIRA, Asana, ServiceNow, Microsoft Project
+- AI & Automation: Agentic AI tools, NotebookLM, Gemini, Google Apps Script
+- Analytics & Reporting: Power BI, Data Integration, Salesforce Reporting
+- Software & Tools: BlueWorks Live, Visio, WMS, ETQ, SharePoint, Microsoft Office Suite
+- Certifications: Certified Scrum Master (CSM), Lean Six Sigma Green Belt
+
+EXPERIENCE
+
+RCM Operations Project Manager | Modernizing Medicine (ModMed)
+RCM Client Success Operations | Feb 2026 - Present
+- Architecting AI-driven automation infrastructure to support a targeted 3x RCM client growth trajectory -- reducing Client Advisor manual workload by 30% through agentic AI tools, NotebookLM, and Gemini to enable scalable operations without proportional headcount increases.
+- Designed and launched a structured RCM Client Retention Program targeting churn reduction from 13% to a 10% stretch goal, implementing a 5-stage risk funnel (Risk Identified, Verbal Intent, Formal Notice, Attrition, Churn) with manager-vetted mitigation plans tracked in Salesforce and reviewed via weekly tiered leadership cadence.
+- Managed 600 RCM client accounts ($100M+ ARR), monitoring Annual Transaction Revenue (ATR) exposure across at-risk accounts to protect $12.7M+ in at-risk revenue, maintaining churn below industry benchmarks through proactive risk identification, mitigation planning, and client enablement.
+- Served as Voice of Customer for RCM product, synthesizing churn driver data across 10+ risk categories (cost, performance, quality of support, scope/contract expectations) into strategic product and operational recommendations, coordinating deliverable tracking via JIRA.
+- Coordinated cross-functional alignment between Business Ops, CS Ops, and product teams to execute RCM retention and scaling initiatives, reducing implementation bottlenecks and improving time-to-value for high-priority accounts.
+
+Senior Project Manager | Modernizing Medicine (ModMed)
+EHR Implementations | Jun 2024 - Feb 2026
+- Orchestrated end-to-end cloud-based EHR software implementations for medical practices across the US in Orthopedics, Ophthalmology, Dermatology, Plastics, and Podiatry specialties, managing $1M+ software deployment budgets.
+- Achieved 20-50% increases in patient volume for implemented practices through ModMed EHR efficiency gains, driving estimated 15-20% revenue growth and demonstrating strong ROI for practice stakeholders.
+- Incorporated AI to compress implementation timelines from 90 to 75 days, improving data conversion velocity and accelerating go-live dates while maintaining quality and stakeholder trust.
+- Led cross-functional teams of up to 15 individuals, coordinating resource allocation and practice staff engagement to ensure smooth EHR adoption and minimize post-implementation issues.
+- Maintained sub-3% churn rate through proactive communication, regular stakeholder check-ins, and rapid escalation resolution, protecting implementation revenue and preserving long-term customer relationships.
+- Deployed Salesforce for comprehensive project and client data management, enabling real-time contract lifecycle oversight, deliverable tracking, and budget control across all implementations.
+
+Global Program Manager | Arrow Electronics
+Apr 2022 - Feb 2024
+- Spearheaded collaboration with MIT's Computer Science and AI Lab (CSAIL) on OCR technology integration, optimizing Arrow's business processes and delivering $10M+ in enterprise value.
+- Drove global ICS2 compliance project for air cargo imports into the European Union, streamlining customs processes and preventing millions in potential held-material losses.
+- Led optimization of Arrow's largest PDC Inbound processes, achieving annual savings exceeding $300K through process simplification and operational efficiency enhancements.
+- Instituted strategic improvements to team onboarding and training for Center of Excellence group, improving resource allocation and increasing project delivery efficiency.
+- Managed Mexico-based project leveraging OCR technology to optimize supplier data entry, targeting $91M in revenue protection through process automation and error reduction.
+
+Production Supervisor | Top Cap - Panasonic Energy of North America
+Jul 2021 - Apr 2022
+- Drove $2M in annual savings by reducing operator downtime by 32% through preventive maintenance and process optimization.
+- Improved quarterly production by 20% through effective machine downtime management and resource allocation.
+- Led mentorship and development of 25+ Lean Six Sigma Yellow Belts, increasing quality, reducing safety incidents, and fostering a continuous improvement culture.
+- Decreased annual operational costs by 14% through aluminum waste minimization and lean manufacturing principles.
+
+PREVIOUS ROLES
+
+Shift Lead | Top Cap - Panasonic Energy (Jun 2020 - Jul 2021)
+Spearheaded 25% production increase through process enhancements; achieved 50% defect reduction; reduced turnover 50% through mentorship; recognized as All-Star performer.
+
+Machine Operator | Panasonic Energy (Jun 2019 - Jun 2020)
+Optimized automated storage systems; earned Lean Six Sigma Yellow Belt certification.
+
+Operations Manager | Smith's (Jun 2018 - Jun 2019)
+Orchestrated high-performing store operations generating $40M+ annual revenue; guided 100-member team to 10%+ yearly sales growth; achieved 18% reduction in safety incidents.
+
+Process Specialist | Hamilton Company (Feb 2018 - Jun 2018)
+Implemented safety-centric culture reducing turnover 50%; exceeded production and quality targets by 15% quarterly.
+
+Quality Analyst | Valeo (Oct 2017 - Feb 2018)
+Facilitated leadership-team collaboration; cross-trained across all departments.
+
+Assistant Store Director | Safeway (Apr 2013 - Apr 2017)
+Directed multi-store operations achieving 12% yearly sales increase; managed 120+ employees; oversaw inventory, marketing, and safety protocols.
+
+EDUCATION
+
+Truckee Meadows Community College
+Business Administration & Radiology | Oct 2011 - Apr 2013
