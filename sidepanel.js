@@ -4,6 +4,9 @@ let groqApiKey = null;
 let chatHistory = [];
 let tailoringState = null;
 
+// TEST MODE: Set this to true to clear stored API key and test onboarding on load
+const TEST_FIRST_RUN = true;
+
 const jobInfo = document.getElementById('job-info');
 const detectBtn = document.getElementById('detect-btn');
 const analyzeBtn = document.getElementById('analyze-btn');
@@ -442,7 +445,11 @@ chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
     }
     updateToolButtons();
   }
-  if (data.groqApiKey) {
+  if (TEST_FIRST_RUN) {
+    chrome.storage.local.remove('groqApiKey');
+    groqApiKey = null;
+    showOnboarding();
+  } else if (data.groqApiKey) {
     groqApiKey = data.groqApiKey;
   } else {
     showOnboarding();
