@@ -16,16 +16,44 @@ async function _inflate(uint8, format) {
   var writer = ds.writable.getWriter();
   writer.write(uint8);
   writer.close();
-  var ab = await new Response(ds.readable).arrayBuffer();
-  return new Uint8Array(ab);
+  var chunks = [];
+  var reader = ds.readable.getReader();
+  while (true) {
+    var r = await reader.read();
+    if (r.done) break;
+    chunks.push(r.value);
+  }
+  var total = 0;
+  for (var ci = 0; ci < chunks.length; ci++) total += chunks[ci].length;
+  var result = new Uint8Array(total);
+  var offset = 0;
+  for (var ci2 = 0; ci2 < chunks.length; ci2++) {
+    result.set(chunks[ci2], offset);
+    offset += chunks[ci2].length;
+  }
+  return result;
+}
+
+function _trimStreamBytes(uint8) {
+  var end = uint8.length;
+  while (end > 0) {
+    var b = uint8[end - 1];
+    if (b === 0x0A || b === 0x0D || b === 0x20) end--;
+    else break;
+  }
+  return uint8.subarray(0, end);
 }
 
 async function _inflateZlib(uint8) {
-  // PDF FlateDecode is zlib-wrapped; fall back to raw deflate if needed.
+  uint8 = _trimStreamBytes(uint8);
   try {
     return await _inflate(uint8, 'deflate');
   } catch (e) {
-    return await _inflate(uint8, 'deflate-raw');
+    try {
+      return await _inflate(uint8, 'deflate-raw');
+    } catch (e2) {
+      return null;
+    }
   }
 }
 
@@ -267,28 +295,32 @@ function _pdfContentToText(cs, fontMaps) {
 }
 
 async function _decompressStream(bytes, s, objPos) {
-  var streamIdx = s.indexOf('stream', objPos);
-  if (streamIdx < 0) return null;
-  var endObj = s.indexOf('endobj', objPos);
-  if (endObj >= 0 && endObj < streamIdx) return null;
+  try {
+    var streamIdx = s.indexOf('stream', objPos);
+    if (streamIdx < 0) return null;
+    var endObj = s.indexOf('endobj', objPos);
+    if (endObj >= 0 && endObj < streamIdx) return null;
 
-  var dictStart = s.lastIndexOf('<<', streamIdx);
-  var dict = dictStart >= 0 ? s.substring(dictStart, streamIdx) : '';
+    var dictStart = s.lastIndexOf('<<', streamIdx);
+    var dict = dictStart >= 0 ? s.substring(dictStart, streamIdx) : '';
 
-  var ds = streamIdx + 6;
-  if (s[ds] === '\r') ds++;
-  if (s[ds] === '\n') ds++;
-  var ei = s.indexOf('endstream', ds);
-  if (ei < 0) return null;
+    var ds = streamIdx + 6;
+    if (s[ds] === '\r') ds++;
+    if (s[ds] === '\n') ds++;
+    var ei = s.indexOf('endstream', ds);
+    if (ei < 0) return null;
 
-  var streamBytes = bytes.subarray(ds, ei);
-  var content = null;
-  if (dict.indexOf('FlateDecode') >= 0) {
-    try { content = await _inflateZlib(streamBytes); } catch (e) { content = null; }
-  } else if (dict.indexOf('/Filter') < 0) {
-    content = streamBytes;
+    var streamBytes = bytes.subarray(ds, ei);
+    var content = null;
+    if (dict.indexOf('FlateDecode') >= 0) {
+      content = await _inflateZlib(streamBytes);
+    } else if (dict.indexOf('/Filter') < 0) {
+      content = streamBytes;
+    }
+    return content ? _latin1Decode(content) : null;
+  } catch (e) {
+    return null;
   }
-  return content ? _latin1Decode(content) : null;
 }
 
 async function extractPdfText(arrayBuffer) {
