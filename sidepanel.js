@@ -7,6 +7,10 @@ let tailoringState = null;
 let chatMode = 'job';
 let chatStore = { job: [], general: [] };
 let pendingImage = null; // { dataUrl, name } attached for the next general-mode message
+let chatSessions = []; // archived conversations: {id, title, mode, ts, pinned, records}
+
+const MAX_UNPINNED_SESSIONS = 10;
+const THEME_NAMES = ['midnight', 'yellow', 'slate', 'light'];
 
 // TEST MODE: Set this to true to clear stored API key and test onboarding on load
 const TEST_FIRST_RUN = false;
@@ -49,6 +53,11 @@ const chatModeHint = document.getElementById('chat-mode-hint');
 const chatAttachBtn = document.getElementById('chat-attach');
 const chatAttachment = document.getElementById('chat-attachment');
 const chatImageInput = document.getElementById('chat-image-input');
+const chatHistoryBtn = document.getElementById('chat-history-btn');
+const chatClearBtn = document.getElementById('chat-clear-btn');
+const chatNotice = document.getElementById('chat-notice');
+const chatHistoryPanel = document.getElementById('chat-history-panel');
+const themeDots = Array.prototype.slice.call(document.querySelectorAll('.theme-dot'));
 
 function showOnboarding(errorMsg) {
   if (!onboarding) return;
@@ -974,10 +983,12 @@ async function sendChat() {
     addChatMessage(result, 'ai');
     store.push({ role: 'ai', text: result, api: { role: 'assistant', content: result } });
     if (store.length > 16) store.splice(0, store.length - 16);
+    persistLive();
   } catch (err) {
     chatMessages.lastElementChild.remove();
     addChatMessage('Error: ' + err.message, 'ai');
     if (store.length && store[store.length - 1].role === 'user') store.pop();
+    persistLive();
   }
 }
 
@@ -998,6 +1009,210 @@ chatInput.addEventListener('paste', function (e) {
       var file = items[i].getAsFile();
       if (file) { e.preventDefault(); attachImage(file); break; }
     }
+  }
+});
+
+// ---------- Themes ----------
+
+function applyTheme(name) {
+  if (THEME_NAMES.indexOf(name) < 0) name = 'midnight';
+  for (var i = 0; i < THEME_NAMES.length; i++) {
+    document.body.classList.remove('theme-' + THEME_NAMES[i]);
+  }
+  document.body.classList.add('theme-' + name);
+  themeDots.forEach(function (d) {
+    d.classList.toggle('active', d.getAttribute('data-theme') === name);
+  });
+}
+
+themeDots.forEach(function (dot) {
+  dot.addEventListener('click', function () {
+    var name = dot.getAttribute('data-theme');
+    applyTheme(name);
+    chrome.storage.local.set({ theme: name });
+  });
+});
+
+// ---------- Live chat persistence ----------
+
+function persistLive() {
+  chrome.storage.local.set({ liveChat: chatStore });
+}
+
+// ---------- Saved chat sessions ----------
+
+function persistSessions() {
+  chrome.storage.local.set({ chatSessions: chatSessions });
+}
+
+function sessionTitle(records) {
+  for (var i = 0; i < records.length; i++) {
+    if (records[i].role === 'user' && records[i].text) {
+      var t = records[i].text.replace(/🖼️ \[image attached\]/g, '').replace(/\s+/g, ' ').trim();
+      if (t) return t.length > 42 ? t.slice(0, 42) + '…' : t;
+    }
+  }
+  return 'Chat';
+}
+
+function formatSessionDate(ts) {
+  var d = new Date(ts);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' +
+    d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+// Archive the current conversation (if any) into saved sessions, enforcing the cap.
+function archiveCurrent() {
+  var records = chatStore[chatMode];
+  if (!records || records.length === 0) return;
+
+  chatSessions.unshift({
+    id: 'cs_' + Date.now(),
+    title: sessionTitle(records),
+    mode: chatMode,
+    ts: Date.now(),
+    pinned: false,
+    records: records.map(function (r) { return { role: r.role, text: r.text, api: r.api }; })
+  });
+
+  // Enforce cap on UNPINNED sessions; collect evicted titles for the notice.
+  var unpinnedCount = 0;
+  var evicted = [];
+  var kept = [];
+  for (var i = 0; i < chatSessions.length; i++) {
+    var s = chatSessions[i];
+    if (s.pinned) { kept.push(s); continue; }
+    unpinnedCount++;
+    if (unpinnedCount <= MAX_UNPINNED_SESSIONS) { kept.push(s); }
+    else { evicted.push(s.title); }
+  }
+  chatSessions = kept;
+  persistSessions();
+
+  if (evicted.length) {
+    showChatNotice('Removed older chat' + (evicted.length > 1 ? 's' : '') + ' "' +
+      evicted.join('", "') + '" to keep your last ' + MAX_UNPINNED_SESSIONS +
+      '. Tap ★ on a chat to keep it permanently.');
+  }
+}
+
+function clearChat() {
+  archiveCurrent();
+  chatStore[chatMode] = [];
+  persistLive();
+  renderChat();
+  if (!chatHistoryPanel.classList.contains('hidden')) renderHistory();
+}
+
+function showChatNotice(text) {
+  chatNotice.innerHTML = '';
+  var span = document.createElement('span');
+  span.textContent = text;
+  var close = document.createElement('button');
+  close.textContent = '✕';
+  close.title = 'Dismiss';
+  close.addEventListener('click', function () { chatNotice.classList.add('hidden'); });
+  chatNotice.appendChild(span);
+  chatNotice.appendChild(close);
+  chatNotice.classList.remove('hidden');
+}
+
+function toggleHistoryPanel() {
+  if (chatHistoryPanel.classList.contains('hidden')) {
+    renderHistory();
+    chatHistoryPanel.classList.remove('hidden');
+  } else {
+    chatHistoryPanel.classList.add('hidden');
+  }
+}
+
+function renderHistory() {
+  chatHistoryPanel.innerHTML = '';
+  if (chatSessions.length === 0) {
+    var empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'No saved chats yet. Use Clear to save the current chat here.';
+    chatHistoryPanel.appendChild(empty);
+    return;
+  }
+
+  chatSessions.forEach(function (s) {
+    var row = document.createElement('div');
+    row.className = 'history-row';
+
+    var main = document.createElement('div');
+    main.className = 'history-main';
+    var title = document.createElement('div');
+    title.className = 'history-title';
+    title.textContent = s.title;
+    var meta = document.createElement('div');
+    meta.className = 'history-meta';
+    meta.textContent = (s.mode === 'job' ? 'Job Coach' : 'General') + ' · ' + formatSessionDate(s.ts) + (s.pinned ? ' · kept' : '');
+    main.appendChild(title);
+    main.appendChild(meta);
+    main.addEventListener('click', function () { loadSession(s.id); });
+
+    var star = document.createElement('button');
+    star.className = 'history-star' + (s.pinned ? ' pinned' : '');
+    star.textContent = s.pinned ? '★' : '☆';
+    star.title = s.pinned ? 'Saved permanently — click to unpin' : 'Keep permanently';
+    star.addEventListener('click', function (e) { e.stopPropagation(); pinSession(s.id); });
+
+    var del = document.createElement('button');
+    del.className = 'history-del';
+    del.textContent = '🗑';
+    del.title = 'Delete this chat';
+    del.addEventListener('click', function (e) { e.stopPropagation(); deleteSession(s.id); });
+
+    row.appendChild(main);
+    row.appendChild(star);
+    row.appendChild(del);
+    chatHistoryPanel.appendChild(row);
+  });
+}
+
+function findSession(id) {
+  for (var i = 0; i < chatSessions.length; i++) {
+    if (chatSessions[i].id === id) return chatSessions[i];
+  }
+  return null;
+}
+
+function loadSession(id) {
+  var s = findSession(id);
+  if (!s) return;
+  archiveCurrent(); // don't lose the current conversation
+  if (s.mode !== chatMode) setChatMode(s.mode);
+  chatStore[chatMode] = s.records.map(function (r) { return { role: r.role, text: r.text, api: r.api }; });
+  persistLive();
+  renderChat();
+  chatHistoryPanel.classList.add('hidden');
+}
+
+function pinSession(id) {
+  var s = findSession(id);
+  if (!s) return;
+  s.pinned = !s.pinned;
+  persistSessions();
+  renderHistory();
+}
+
+function deleteSession(id) {
+  chatSessions = chatSessions.filter(function (s) { return s.id !== id; });
+  persistSessions();
+  renderHistory();
+}
+
+chatClearBtn.addEventListener('click', clearChat);
+chatHistoryBtn.addEventListener('click', toggleHistoryPanel);
+
+// Restore theme, saved sessions, and the live conversation on startup.
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat'], function (data) {
+  applyTheme(data.theme || 'midnight');
+  if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
+  if (data.liveChat && data.liveChat.job && data.liveChat.general) {
+    chatStore = data.liveChat;
+    renderChat();
   }
 });
 

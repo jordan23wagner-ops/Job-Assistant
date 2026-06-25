@@ -6,7 +6,7 @@
   <title>Alicia AI</title>
   <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body class="theme-midnight">
   <div id="onboarding" class="onboarding hidden">
     <div class="onboarding-inner">
       <div class="onboarding-logo">Alicia AI</div>
@@ -48,7 +48,13 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v0.6.0</p>
+      <p class="subtitle">Job Assistant v0.6.1</p>
+      <div id="theme-picker" class="theme-picker">
+        <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
+        <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
+        <button class="theme-dot slate" data-theme="slate" title="Slate"></button>
+        <button class="theme-dot light" data-theme="light" title="Light"></button>
+      </div>
     </header>
 
     <section id="job-section" class="section">
@@ -108,12 +114,18 @@
     <section id="chat-section" class="section">
       <div class="section-header">
         <h2>Chat with Alicia</h2>
-        <div class="chat-mode-toggle">
-          <button id="mode-job" class="chat-mode-btn active">Job Coach</button>
-          <button id="mode-general" class="chat-mode-btn">General</button>
+        <div class="chat-header-actions">
+          <button id="chat-history-btn" class="btn-icon" title="Saved chats">&#128339; History</button>
+          <button id="chat-clear-btn" class="btn-icon" title="Clear &amp; save this chat">&#129529; Clear</button>
         </div>
       </div>
+      <div class="chat-mode-toggle chat-mode-row">
+        <button id="mode-job" class="chat-mode-btn active">Job Coach</button>
+        <button id="mode-general" class="chat-mode-btn">General</button>
+      </div>
       <p id="chat-mode-hint" class="chat-mode-hint">Ask about this job, your resume, or your search.</p>
+      <div id="chat-notice" class="chat-notice hidden"></div>
+      <div id="chat-history-panel" class="chat-history-panel hidden"></div>
       <div id="chat-messages" class="chat-messages"></div>
       <div id="chat-attachment" class="chat-attachment hidden"></div>
       <div class="chat-input-area">
