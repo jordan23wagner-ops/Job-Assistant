@@ -55,11 +55,33 @@ function sanitizeText(text) {
   return clean;
 }
 
-async function callGroq(messages, temperature) {
-  if (temperature === undefined) temperature = 0.7;
-  var key = groqApiKey || await getApiKey();
-  if (!key) throw new Error('No API key provided. Click any AI feature to set your Groq API key.');
+// Detects whether a string is mostly non-text (e.g. a PDF/DOCX read as text).
+function looksLikeGarbage(text) {
+  if (!text) return true;
+  var sample = text.substring(0, 3000);
+  if (sample.length === 0) return true;
+  var printable = 0;
+  for (var i = 0; i < sample.length; i++) {
+    var c = sample.charCodeAt(i);
+    if (c === 9 || c === 10 || c === 13) { printable++; continue; }
+    if (c >= 32 && c <= 126) { printable++; continue; }
+    if (c >= 160 && c <= 255) { printable++; continue; }
+  }
+  return (printable / sample.length) < 0.85;
+}
 
+// Loose check for clearly-corrupt AI output so we can retry once.
+function isResponseGarbage(text) {
+  if (!text || text.length < 5) return false;
+  var letters = 0;
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i);
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) letters++;
+  }
+  return (letters / text.length) < 0.2;
+}
+
+async function rawGroqCall(messages, temperature, key) {
   var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
@@ -81,7 +103,24 @@ async function callGroq(messages, temperature) {
   }
 
   var data = await resp.json();
-  var content = sanitizeText(data.choices[0].message.content);
+  return sanitizeText(data.choices[0].message.content);
+}
+
+async function callGroq(messages, temperature) {
+  if (temperature === undefined) temperature = 0.7;
+  var key = groqApiKey || await getApiKey();
+  if (!key) throw new Error('No API key provided. Click any AI feature to set your Groq API key.');
+
+  var content = await rawGroqCall(messages, temperature, key);
+
+  // If the model returns clear garbage, retry once at a lower temperature.
+  if (isResponseGarbage(content)) {
+    console.log('[Alicia] Garbage response detected, retrying:', content);
+    var retry = await rawGroqCall(messages, 0.3, key);
+    if (!isResponseGarbage(retry)) return retry;
+    throw new Error('The AI returned an invalid response. This is often caused by an unreadable resume file - try re-uploading your resume as a plain .txt file.');
+  }
+
   return content;
 }
 
@@ -100,23 +139,23 @@ function formatAnalysis(text) {
   var inList = false;
 
   for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
+    var line = escapeHtml(lines[i]);
 
     line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-    if (/^#{2,3}\s+(.+)/.test(line)) {
+    if (/^#{2,3}\s+(.+)/.test(lines[i])) {
       if (inList) { html += '</ul>'; inList = false; }
-      var heading = line.replace(/^#{2,3}\s+/, '');
+      var heading = escapeHtml(lines[i].replace(/^#{2,3}\s+/, ''));
       html += '<h3>' + heading + '</h3>';
-    } else if (/^[*\-]\s+(.+)/.test(line)) {
+    } else if (/^[*\-]\s+(.+)/.test(lines[i])) {
       if (!inList) { html += '<ul>'; inList = true; }
-      var item = line.replace(/^[*\-]\s+/, '');
+      var item = escapeHtml(lines[i].replace(/^[*\-]\s+/, '')).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       html += '<li>' + item + '</li>';
-    } else if (/^\d+\.\s+(.+)/.test(line)) {
+    } else if (/^\d+\.\s+(.+)/.test(lines[i])) {
       if (!inList) { html += '<ul>'; inList = true; }
-      var item2 = line.replace(/^\d+\.\s+/, '');
+      var item2 = escapeHtml(lines[i].replace(/^\d+\.\s+/, '')).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
       html += '<li>' + item2 + '</li>';
-    } else if (line.trim() === '') {
+    } else if (lines[i].trim() === '') {
       if (inList) { html += '</ul>'; inList = false; }
       html += '<br>';
     } else {
@@ -131,16 +170,47 @@ function formatAnalysis(text) {
 
 function displayJob(job) {
   currentJob = job;
-  var html = '<div class="job-title">' + escapeHtml(job.title || 'Unknown Title') + '</div>';
-  if (job.company) html += '<div class="job-company">' + escapeHtml(job.company) + '</div>';
-  if (job.location) html += '<div class="job-location">' + escapeHtml(job.location) + '</div>';
-  if (job.description) {
-    html += '<div class="job-desc collapsed" onclick="this.classList.toggle(\'collapsed\'); this.classList.toggle(\'expanded\');">';
-    html += escapeHtml(job.description);
-    html += '</div>';
-    html += '<div class="job-desc-toggle" onclick="var d=this.previousElementSibling; d.classList.toggle(\'collapsed\'); d.classList.toggle(\'expanded\'); this.textContent=d.classList.contains(\'collapsed\') ? \'Show more\' : \'Show less\';">Show more</div>';
+  jobInfo.innerHTML = '';
+
+  var titleDiv = document.createElement('div');
+  titleDiv.className = 'job-title';
+  titleDiv.textContent = job.title || 'Unknown Title';
+  jobInfo.appendChild(titleDiv);
+
+  if (job.company) {
+    var c = document.createElement('div');
+    c.className = 'job-company';
+    c.textContent = job.company;
+    jobInfo.appendChild(c);
   }
-  jobInfo.innerHTML = html;
+  if (job.location) {
+    var l = document.createElement('div');
+    l.className = 'job-location';
+    l.textContent = job.location;
+    jobInfo.appendChild(l);
+  }
+  if (job.description) {
+    var desc = document.createElement('div');
+    desc.className = 'job-desc collapsed';
+    desc.textContent = job.description;
+    jobInfo.appendChild(desc);
+
+    var toggle = document.createElement('div');
+    toggle.className = 'job-desc-toggle';
+    toggle.textContent = 'Show more';
+    toggle.addEventListener('click', function() {
+      if (desc.classList.contains('collapsed')) {
+        desc.classList.remove('collapsed');
+        desc.classList.add('expanded');
+        toggle.textContent = 'Show less';
+      } else {
+        desc.classList.add('collapsed');
+        desc.classList.remove('expanded');
+        toggle.textContent = 'Show more';
+      }
+    });
+    jobInfo.appendChild(toggle);
+  }
   updateToolButtons();
 }
 
@@ -170,23 +240,48 @@ detectBtn.addEventListener('click', function() {
 resumeUpload.addEventListener('change', function(e) {
   var file = e.target.files[0];
   if (!file) return;
+
+  var name = (file.name || '').toLowerCase();
+  if (name.endsWith('.pdf') || name.endsWith('.docx') || name.endsWith('.doc')) {
+    resumeStatus.textContent = 'Please convert to .txt first (PDF/Word not supported yet)';
+    resumeStatus.style.color = '#ff9955';
+    return;
+  }
+
   var reader = new FileReader();
   reader.onload = function(ev) {
-    resumeText = ev.target.result;
+    var text = sanitizeText(ev.target.result);
+    if (looksLikeGarbage(text)) {
+      resumeStatus.textContent = 'That file is not readable as text. Save your resume as a plain .txt file and try again.';
+      resumeStatus.style.color = '#ff9955';
+      return;
+    }
+    resumeText = text;
     resumeStatus.textContent = 'Loaded: ' + file.name;
+    resumeStatus.style.color = '#4caf50';
     chrome.storage.local.set({ resumeText: resumeText });
     updateToolButtons();
   };
   reader.onerror = function() {
     resumeStatus.textContent = 'Error reading file';
+    resumeStatus.style.color = '#ff5555';
   };
   reader.readAsText(file);
 });
 
 chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
   if (data.resumeText) {
-    resumeText = data.resumeText;
-    resumeStatus.textContent = 'Resume loaded from storage';
+    if (looksLikeGarbage(data.resumeText)) {
+      // Stored resume is corrupt (likely a PDF/DOCX). Clear it so it stops poisoning AI calls.
+      chrome.storage.local.remove('resumeText');
+      resumeText = null;
+      resumeStatus.textContent = 'Your saved resume was unreadable. Please re-upload it as a plain .txt file.';
+      resumeStatus.style.color = '#ff9955';
+    } else {
+      resumeText = sanitizeText(data.resumeText);
+      resumeStatus.textContent = 'Resume loaded from storage';
+      resumeStatus.style.color = '#4caf50';
+    }
     updateToolButtons();
   }
   if (data.groqApiKey) {
@@ -413,6 +508,10 @@ async function sendChat() {
   } catch (err) {
     chatMessages.lastElementChild.remove();
     addChatMessage('Error: ' + err.message, 'ai');
+    // Drop the failed user turn so it does not corrupt later context.
+    if (chatHistory.length && chatHistory[chatHistory.length - 1].role === 'user') {
+      chatHistory.pop();
+    }
   }
 }
 
@@ -421,11 +520,11 @@ function buildChatSystemMessage() {
   if (currentJob) {
     msg += '\n\nCurrent job being viewed: ' + currentJob.title + ' at ' + currentJob.company + ' (' + currentJob.location + ').';
     if (currentJob.description) {
-      msg += '\nJob description: ' + currentJob.description.substring(0, 500);
+      msg += '\nJob description: ' + currentJob.description.substring(0, 1500);
     }
   }
   if (resumeText) {
-    msg += '\n\nCandidate resume: ' + resumeText.substring(0, 1000);
+    msg += '\n\nCandidate resume: ' + resumeText.substring(0, 2000);
   }
   return msg;
 }
