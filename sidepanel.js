@@ -118,7 +118,7 @@ async function callGroq(messages, temperature) {
     console.log('[Alicia] Garbage response detected, retrying:', content);
     var retry = await rawGroqCall(messages, 0.3, key);
     if (!isResponseGarbage(retry)) return retry;
-    throw new Error('The AI returned an invalid response. This is often caused by an unreadable resume file - try re-uploading your resume as a plain .txt file.');
+    throw new Error('The AI returned an invalid response. Please try again.');
   }
 
   return content;
@@ -237,50 +237,58 @@ detectBtn.addEventListener('click', function() {
   }, 5000);
 });
 
-resumeUpload.addEventListener('change', function(e) {
+function setResumeStatus(text, color) {
+  resumeStatus.textContent = text;
+  resumeStatus.style.color = color;
+}
+
+async function extractResumeText(file) {
+  var name = (file.name || '').toLowerCase();
+  if (name.endsWith('.pdf')) {
+    return await extractPdfText(await file.arrayBuffer());
+  }
+  if (name.endsWith('.docx')) {
+    return await extractDocxText(await file.arrayBuffer());
+  }
+  if (name.endsWith('.doc')) {
+    throw new Error('The old .doc format is not supported. Please save as .docx, .pdf, or .txt.');
+  }
+  return await file.text();
+}
+
+resumeUpload.addEventListener('change', async function(e) {
   var file = e.target.files[0];
   if (!file) return;
 
-  var name = (file.name || '').toLowerCase();
-  if (name.endsWith('.pdf') || name.endsWith('.docx') || name.endsWith('.doc')) {
-    resumeStatus.textContent = 'Please convert to .txt first (PDF/Word not supported yet)';
-    resumeStatus.style.color = '#ff9955';
-    return;
-  }
+  setResumeStatus('Reading ' + file.name + '...', '#888');
 
-  var reader = new FileReader();
-  reader.onload = function(ev) {
-    var text = sanitizeText(ev.target.result);
-    if (looksLikeGarbage(text)) {
-      resumeStatus.textContent = 'That file is not readable as text. Save your resume as a plain .txt file and try again.';
-      resumeStatus.style.color = '#ff9955';
-      return;
+  try {
+    var text = sanitizeText(await extractResumeText(file));
+    text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+
+    if (!text || text.length < 30 || looksLikeGarbage(text)) {
+      throw new Error('Could not read text from this file. If it is a scanned or image-based PDF, please upload a text-based PDF, a .docx, or a .txt file.');
     }
+
     resumeText = text;
-    resumeStatus.textContent = 'Loaded: ' + file.name;
-    resumeStatus.style.color = '#4caf50';
     chrome.storage.local.set({ resumeText: resumeText });
+    setResumeStatus('Loaded: ' + file.name, '#4caf50');
     updateToolButtons();
-  };
-  reader.onerror = function() {
-    resumeStatus.textContent = 'Error reading file';
-    resumeStatus.style.color = '#ff5555';
-  };
-  reader.readAsText(file);
+  } catch (err) {
+    setResumeStatus(err.message || 'Could not read file', '#ff9955');
+  }
 });
 
 chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
   if (data.resumeText) {
     if (looksLikeGarbage(data.resumeText)) {
-      // Stored resume is corrupt (likely a PDF/DOCX). Clear it so it stops poisoning AI calls.
+      // Stored resume is corrupt (likely an old binary upload). Clear it.
       chrome.storage.local.remove('resumeText');
       resumeText = null;
-      resumeStatus.textContent = 'Your saved resume was unreadable. Please re-upload it as a plain .txt file.';
-      resumeStatus.style.color = '#ff9955';
+      setResumeStatus('Your saved resume was unreadable. Please re-upload it.', '#ff9955');
     } else {
       resumeText = sanitizeText(data.resumeText);
-      resumeStatus.textContent = 'Resume loaded from storage';
-      resumeStatus.style.color = '#4caf50';
+      setResumeStatus('Resume loaded from storage', '#4caf50');
     }
     updateToolButtons();
   }
