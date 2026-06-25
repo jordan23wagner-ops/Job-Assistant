@@ -68,14 +68,20 @@ function getTitleFromPageTitle() {
   return null;
 }
 
-function getJobTitle() {
-  var fromPage = getTitleFromPageTitle();
-  if (fromPage) {
-    console.log('[Alicia] Title found from page title:', fromPage);
-    return fromPage;
-  }
+// On a jobs SEARCH page, document.title is the search query (e.g. "Project Manager
+// OR Program Manager ... Jobs"), not the selected job. Detect that so we don't show it.
+function looksLikeSearchQuery(title) {
+  if (!title) return true;
+  var t = title.trim();
+  var orCount = (t.match(/\bOR\b/g) || []).length;
+  if (orCount >= 2) return true;                       // multiple boolean ORs
+  if (orCount >= 1 && /\bjobs?\s*$/i.test(t)) return true; // "... OR ... Jobs"
+  if (/^jobs?\b/i.test(t)) return true;
+  return false;
+}
 
-  var title = trySelectors([
+function getJobTitleFromDom() {
+  return trySelectors([
     '.job-details-jobs-unified-top-card__job-title h1 a',
     '.job-details-jobs-unified-top-card__job-title h1',
     '.job-details-jobs-unified-top-card__job-title h2',
@@ -91,9 +97,35 @@ function getJobTitle() {
     'h2.top-card-layout__title',
     '.t-24.t-bold.inline'
   ], 3, 200);
+}
+
+function getJobTitle() {
+  // On search pages the active job lives in the right-hand detail pane; the page
+  // <title> is the search query, so read the top card from the DOM first.
+  var isSearchPage = /\/jobs\/search/i.test(location.href) || /[?&]currentJobId=/i.test(location.href);
+  if (isSearchPage) {
+    var domTitle = getJobTitleFromDom();
+    if (domTitle) {
+      console.log('[Alicia] Title from DOM (search page):', domTitle);
+      return domTitle;
+    }
+  }
+
+  var fromPage = getTitleFromPageTitle();
+  if (fromPage && !looksLikeSearchQuery(fromPage)) {
+    console.log('[Alicia] Title found from page title:', fromPage);
+    return fromPage;
+  }
+
+  var title = getJobTitleFromDom();
   if (title) {
     console.log('[Alicia] Title found via selector:', title);
     return title;
+  }
+
+  if (fromPage) {
+    console.log('[Alicia] Falling back to page title:', fromPage);
+    return fromPage;
   }
 
   console.log('[Alicia] Title NOT found. document.title was:', document.title);
@@ -281,39 +313,68 @@ chrome.runtime.onMessage.addListener(function(message) {
     }, 500);
   }
   if (message.type === 'AUTOFILL_EEO') {
-    console.log('[Alicia] Auto-fill EEO triggered');
-    autoFillEeo(message.prefs || {});
+    console.log('[Alicia] Auto-fill EEO triggered (manual)');
+    var p = message.prefs && Object.keys(message.prefs).length ? message.prefs : null;
+    if (p) {
+      autoFillEeo(p);
+    } else {
+      chrome.storage.local.get('eeoPrefs', function (d) { autoFillEeo(d.eeoPrefs || {}); });
+    }
   }
 });
 
-// ========== EEO Auto-Fill ==========
+// ========== EEO / Demographic Auto-Fill ==========
 
 var EEO_MATCHERS = [
-  {
-    patterns: [/gender/i, /sex/i],
-    prefKey: 'eeo-gender'
-  },
-  {
-    patterns: [/race/i, /ethnicity/i],
-    prefKey: 'eeo-race'
-  },
-  {
-    patterns: [/veteran/i],
-    prefKey: 'eeo-veteran'
-  },
-  {
-    patterns: [/disability/i, /disabled/i],
-    prefKey: 'eeo-disability'
-  },
-  {
-    patterns: [/authorized?\s*(to)?\s*work/i, /work\s*authorization/i, /legally\s*(authorized|eligible)/i, /right\s*to\s*work/i],
-    prefKey: 'eeo-authorization'
-  },
-  {
-    patterns: [/sponsor/i, /visa\s*sponsor/i, /require.*sponsorship/i],
-    prefKey: 'eeo-sponsorship'
-  }
+  { patterns: [/\bgender\b/i, /\bsex\b/i], prefKey: 'eeo-gender' },
+  { patterns: [/\brace\b/i, /\bethnicit/i], prefKey: 'eeo-race' },
+  { patterns: [/\bveteran\b/i, /protected\s+veteran/i], prefKey: 'eeo-veteran' },
+  { patterns: [/disabilit/i, /\bdisabled\b/i], prefKey: 'eeo-disability' },
+  { patterns: [/authoriz\w*\s*(to)?\s*work/i, /work\s*authoriz/i, /legally\s*(authorized|eligible|entitled)/i, /right\s*to\s*work/i, /eligible\s*to\s*work/i], prefKey: 'eeo-authorization' },
+  { patterns: [/sponsor/i, /visa\s*status/i, /require.*sponsor/i, /need.*sponsor/i], prefKey: 'eeo-sponsorship' }
 ];
+
+function matchEeo(label) {
+  if (!label) return null;
+  // Sponsorship must win over work-authorization when a label mentions both.
+  if (/sponsor/i.test(label)) {
+    for (var s = 0; s < EEO_MATCHERS.length; s++) {
+      if (EEO_MATCHERS[s].prefKey === 'eeo-sponsorship') return EEO_MATCHERS[s];
+    }
+  }
+  for (var i = 0; i < EEO_MATCHERS.length; i++) {
+    for (var p = 0; p < EEO_MATCHERS[i].patterns.length; p++) {
+      if (EEO_MATCHERS[i].patterns[p].test(label)) return EEO_MATCHERS[i];
+    }
+  }
+  return null;
+}
+
+function normTxt(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Collapse the many ways people phrase "prefer not to answer" into one token.
+function canonicalAnswer(s) {
+  var n = normTxt(s);
+  if (/\b(decline|prefer not|do not wish|dont wish|not to answer|wish not|not wish|not to disclose|prefer not to)\b/.test(n)) return 'declined';
+  return n;
+}
+
+function matchScore(optText, desired) {
+  var a = canonicalAnswer(optText);
+  var b = canonicalAnswer(desired);
+  if (!a || !b) return 0;
+  if (a === b) return 100;
+  if (a.indexOf(b) >= 0 || b.indexOf(a) >= 0) return 80;
+  var at = a.split(' ');
+  var bt = b.split(' ');
+  var common = 0;
+  for (var i = 0; i < bt.length; i++) {
+    if (bt[i].length > 2 && at.indexOf(bt[i]) >= 0) common++;
+  }
+  return bt.length ? (common / bt.length) * 60 : 0;
+}
 
 function findLabelText(el) {
   var label = '';
@@ -322,132 +383,146 @@ function findLabelText(el) {
     if (lbl) label = getText(lbl);
   }
   if (!label) {
-    var parent = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, .artdeco-text-input--container, .t-14');
-    if (parent) label = getText(parent);
-  }
-  if (!label) {
-    var prev = el.previousElementSibling;
-    while (prev && !label) {
-      if (prev.tagName === 'LABEL' || prev.tagName === 'LEGEND' || prev.tagName === 'SPAN') {
-        label = getText(prev);
-      }
-      prev = prev.previousElementSibling;
+    var parent = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, .artdeco-text-input--container');
+    if (parent) {
+      var inner = parent.querySelector('label, legend, .fb-dash-form-element__label');
+      label = getText(inner) || getText(parent);
     }
   }
-  if (!label && el.parentElement) {
-    label = getText(el.parentElement);
-  }
+  if (!label && el.parentElement) label = getText(el.parentElement);
   return label;
 }
 
 function selectBestOption(selectEl, desiredValue) {
   if (!desiredValue) return false;
-  var desired = desiredValue.toLowerCase();
   var options = selectEl.querySelectorAll('option');
+  var best = null, bestScore = 0;
   for (var i = 0; i < options.length; i++) {
-    var optText = (options[i].textContent || '').trim().toLowerCase();
-    var optVal = (options[i].value || '').trim().toLowerCase();
-    if (optText === desired || optVal === desired) {
-      selectEl.value = options[i].value;
-      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
-    }
+    var v = (options[i].value || '').toLowerCase();
+    if (!options[i].value || v === 'select an option' || v === '') continue;
+    var sc = Math.max(matchScore(options[i].textContent, desiredValue), matchScore(options[i].value, desiredValue));
+    if (sc > bestScore) { bestScore = sc; best = options[i]; }
   }
-  for (var j = 0; j < options.length; j++) {
-    var optText2 = (options[j].textContent || '').trim().toLowerCase();
-    if (optText2.indexOf(desired) >= 0 || desired.indexOf(optText2) >= 0) {
-      selectEl.value = options[j].value;
-      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-      return true;
-    }
+  if (best && bestScore >= 45) {
+    selectEl.value = best.value;
+    selectEl.dispatchEvent(new Event('input', { bubbles: true }));
+    selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
   }
   return false;
+}
+
+function radioLabelText(radio) {
+  var label = '';
+  var wrap = radio.closest('label');
+  if (wrap) label = getText(wrap);
+  if (!label && radio.id) {
+    var lblEl = document.querySelector('label[for="' + radio.id + '"]');
+    if (lblEl) label = getText(lblEl);
+  }
+  if (!label) label = radio.value || '';
+  return label;
 }
 
 function clickBestRadio(container, desiredValue) {
   if (!desiredValue) return false;
-  var desired = desiredValue.toLowerCase();
   var radios = container.querySelectorAll('input[type="radio"]');
+  var best = null, bestScore = 0;
   for (var i = 0; i < radios.length; i++) {
-    var label = '';
-    var lbl = radios[i].closest('label');
-    if (lbl) label = getText(lbl);
-    if (!label && radios[i].id) {
-      var lblEl = document.querySelector('label[for="' + radios[i].id + '"]');
-      if (lblEl) label = getText(lblEl);
+    var sc = matchScore(radioLabelText(radios[i]), desiredValue);
+    if (sc > bestScore) { bestScore = sc; best = radios[i]; }
+  }
+  if (best && bestScore >= 45) {
+    if (!best.checked) {
+      best.checked = true;
+      best.dispatchEvent(new Event('click', { bubbles: true }));
+      best.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    if (!label) label = radios[i].value || '';
-    if (label.toLowerCase().indexOf(desired) >= 0 || desired.indexOf(label.toLowerCase()) >= 0) {
-      radios[i].checked = true;
-      radios[i].dispatchEvent(new Event('change', { bubbles: true }));
-      radios[i].dispatchEvent(new Event('click', { bubbles: true }));
-      return true;
-    }
+    return true;
   }
   return false;
 }
 
+// Set a value on a React/Ember-controlled text input so the framework registers it.
+function setNativeValue(el, value) {
+  var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  var setter = Object.getOwnPropertyDescriptor(proto, 'value');
+  if (setter && setter.set) { setter.set.call(el, value); }
+  else { el.value = value; }
+}
+
+function fillTextInput(inputEl, desiredValue) {
+  if (!desiredValue) return false;
+  if (inputEl.value && inputEl.value.trim()) return false; // don't clobber what's already there
+  setNativeValue(inputEl, desiredValue);
+  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+  inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
 function autoFillEeo(prefs) {
+  if (!prefs || Object.keys(prefs).length === 0) {
+    chrome.runtime.sendMessage({ type: 'EEO_FILL_RESULT', filled: 0 }).catch(function () {});
+    return;
+  }
   var filled = 0;
-  var selects = document.querySelectorAll('select');
-  selects.forEach(function (sel) {
-    var label = findLabelText(sel);
-    if (!label) return;
-    for (var i = 0; i < EEO_MATCHERS.length; i++) {
-      var matcher = EEO_MATCHERS[i];
-      var value = prefs[matcher.prefKey];
-      if (!value) continue;
-      for (var p = 0; p < matcher.patterns.length; p++) {
-        if (matcher.patterns[p].test(label)) {
-          if (selectBestOption(sel, value)) {
-            filled++;
-            console.log('[Alicia] Auto-filled select:', label, '->', value);
-          }
-          return;
-        }
-      }
+  var handled = [];
+
+  // Process each question container so we can pick the right control type per question.
+  var containers = document.querySelectorAll(
+    '.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, fieldset'
+  );
+  containers.forEach(function (container) {
+    if (handled.indexOf(container) >= 0) return;
+    var label = getText(container.querySelector('label, legend, .fb-dash-form-element__label')) || getText(container).slice(0, 220);
+    var matcher = matchEeo(label);
+    if (!matcher) return;
+    var value = prefs[matcher.prefKey];
+    if (!value) return;
+
+    var sel = container.querySelector('select');
+    if (sel) {
+      if (selectBestOption(sel, value)) { filled++; handled.push(container); console.log('[Alicia] Filled select:', label, '->', value); }
+      return;
+    }
+    var radios = container.querySelectorAll('input[type="radio"]');
+    if (radios.length) {
+      if (clickBestRadio(container, value)) { filled++; handled.push(container); console.log('[Alicia] Filled radio:', label, '->', value); }
+      return;
+    }
+    var text = container.querySelector('input[type="text"], input:not([type]), input[type="search"], textarea');
+    if (text) {
+      if (fillTextInput(text, value)) { filled++; handled.push(container); console.log('[Alicia] Filled text:', label, '->', value); }
+      return;
     }
   });
 
-  var fieldsets = document.querySelectorAll('fieldset, .fb-dash-form-element, .jobs-easy-apply-form-section__grouping');
-  fieldsets.forEach(function (fs) {
-    var label = getText(fs.querySelector('legend, label, span'));
-    if (!label) label = getText(fs);
-    for (var i = 0; i < EEO_MATCHERS.length; i++) {
-      var matcher = EEO_MATCHERS[i];
-      var value = prefs[matcher.prefKey];
-      if (!value) continue;
-      for (var p = 0; p < matcher.patterns.length; p++) {
-        if (matcher.patterns[p].test(label)) {
-          if (clickBestRadio(fs, value)) {
-            filled++;
-            console.log('[Alicia] Auto-filled radio:', label, '->', value);
-          }
-          return;
-        }
-      }
-    }
+  // Fallback: any stray <select> not inside a recognized container.
+  document.querySelectorAll('select').forEach(function (sel) {
+    if (handled.some(function (c) { return c.contains(sel); })) return;
+    var matcher = matchEeo(findLabelText(sel));
+    if (!matcher) return;
+    var value = prefs[matcher.prefKey];
+    if (value && selectBestOption(sel, value)) { filled++; console.log('[Alicia] Filled stray select'); }
   });
 
   console.log('[Alicia] Auto-fill complete, filled', filled, 'field(s)');
   chrome.runtime.sendMessage({ type: 'EEO_FILL_RESULT', filled: filled }).catch(function () {});
 }
 
-function tryAutoFillOnApplyPage() {
-  if (!/\/(jobs|apply)/i.test(location.href)) return;
-  var hasEeoForm = document.querySelector('select, fieldset, .jobs-easy-apply-form-section__grouping');
-  if (!hasEeoForm) return;
-  chrome.storage.local.get('eeoPrefs', function (data) {
-    if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) {
-      setTimeout(function () { autoFillEeo(data.eeoPrefs); }, 800);
-    }
-  });
+// Auto-fill whenever an application form / modal appears, debounced so step changes re-fill.
+var autofillTimer = null;
+function scheduleAutoFill() {
+  if (autofillTimer) clearTimeout(autofillTimer);
+  autofillTimer = setTimeout(function () {
+    chrome.storage.local.get('eeoPrefs', function (data) {
+      if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
+    });
+  }, 700);
 }
 
 var applyObserver = new MutationObserver(function () {
-  var modal = document.querySelector('.jobs-easy-apply-content, .jobs-apply-form');
-  if (modal) {
-    tryAutoFillOnApplyPage();
-  }
+  var form = document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, .artdeco-modal form, form.jobs-easy-apply-form');
+  if (form) scheduleAutoFill();
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });

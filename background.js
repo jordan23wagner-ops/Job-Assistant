@@ -37,7 +37,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
   }
-  if (message.type === 'EEO_FILL_RESULT') {
-    chrome.runtime.sendMessage(message).catch(() => {});
-  }
 });

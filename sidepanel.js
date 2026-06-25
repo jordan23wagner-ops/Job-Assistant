@@ -406,6 +406,19 @@ chrome.runtime.onMessage.addListener(function(message) {
   if (message.type === 'JOB_DETECTED' && message.job) {
     displayJob(message.job);
   }
+  if (message.type === 'EEO_FILL_RESULT') {
+    var status = document.getElementById('eeo-fill-status');
+    if (status) {
+      if (message.filled > 0) {
+        status.textContent = 'Filled ' + message.filled + ' field' + (message.filled === 1 ? '' : 's') + '. Review before submitting.';
+        status.style.color = '#4caf50';
+      } else {
+        status.textContent = 'No matching questions found on the open form.';
+        status.style.color = '#ff9955';
+      }
+      setTimeout(function () { status.textContent = ''; }, 5000);
+    }
+  }
 });
 
 detectBtn.addEventListener('click', function() {
@@ -1756,6 +1769,8 @@ const eeoToggle = document.getElementById('eeo-toggle');
 const eeoForm = document.getElementById('eeo-form');
 const eeoSave = document.getElementById('eeo-save');
 const eeoStatus = document.getElementById('eeo-status');
+const eeoFillNow = document.getElementById('eeo-fill-now');
+const eeoFillStatus = document.getElementById('eeo-fill-status');
 
 const EEO_FIELDS = ['eeo-gender', 'eeo-race', 'eeo-veteran', 'eeo-disability', 'eeo-authorization', 'eeo-sponsorship'];
 
@@ -1793,6 +1808,27 @@ if (eeoToggle) {
   });
 }
 if (eeoSave) eeoSave.addEventListener('click', saveEeoPrefs);
+
+if (eeoFillNow) {
+  eeoFillNow.addEventListener('click', function () {
+    chrome.storage.local.get('eeoPrefs', function (data) {
+      var prefs = data.eeoPrefs || {};
+      if (Object.keys(prefs).length === 0) {
+        if (eeoFillStatus) {
+          eeoFillStatus.textContent = 'Set up your answers first (tap Edit), then save them.';
+          eeoFillStatus.style.color = '#ff9955';
+          setTimeout(function () { eeoFillStatus.textContent = ''; }, 4000);
+        }
+        return;
+      }
+      chrome.runtime.sendMessage({ type: 'AUTOFILL_EEO', prefs: prefs });
+      if (eeoFillStatus) {
+        eeoFillStatus.textContent = 'Filling the open application…';
+        eeoFillStatus.style.color = '#4caf50';
+      }
+    });
+  });
+}
 
 // Console helper to unlock Premium on a specific install (e.g. yours/your wife's).
 // Open the side panel's DevTools and run: aliciaPremium.enable()

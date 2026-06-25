@@ -48,7 +48,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v0.8.1</p>
+      <p class="subtitle">Job Assistant v0.8.2</p>
       <div id="theme-picker" class="theme-picker">
         <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
         <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
@@ -147,7 +147,9 @@
         <h2>Application Auto-Fill</h2>
         <button id="eeo-toggle" class="btn-icon" title="Set up auto-fill for EEO questions">&#9998; Edit</button>
       </div>
-      <p class="eeo-hint">Save your answers to common application questions. Alicia will auto-fill them when you apply.</p>
+      <p class="eeo-hint">Save your answers to common application questions. Alicia auto-fills them when an application opens — or tap the button below to fill the form on screen now.</p>
+      <button id="eeo-fill-now" class="tool-btn" style="width:100%;">&#9889; Auto-Fill Open Application</button>
+      <span id="eeo-fill-status" class="resume-status"></span>
       <div id="eeo-form" class="eeo-form hidden">
         <div class="eeo-group">
           <label class="search-label">Gender</label>
