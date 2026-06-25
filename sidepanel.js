@@ -1,11 +1,18 @@
 let currentJob = null;
 let resumeText = null;
 let groqApiKey = null;
-let chatHistory = [];
 let tailoringState = null;
 
+// Chat: two independent conversations — 'job' (career coach) and 'general' (everyday assistant)
+let chatMode = 'job';
+let chatStore = { job: [], general: [] };
+let pendingImage = null; // { dataUrl, name } attached for the next general-mode message
+
 // TEST MODE: Set this to true to clear stored API key and test onboarding on load
-const TEST_FIRST_RUN = true;
+const TEST_FIRST_RUN = false;
+
+// Groq model. Qwen 3.6 27B: multimodal (text + image), fast, current as of 2026.
+const GROQ_MODEL = 'qwen/qwen3.6-27b';
 
 const jobInfo = document.getElementById('job-info');
 const detectBtn = document.getElementById('detect-btn');
@@ -36,6 +43,12 @@ const openGroqBtn = document.getElementById('open-groq-btn');
 const obKeyInput = document.getElementById('ob-key-input');
 const obSaveBtn = document.getElementById('ob-save-btn');
 const obError = document.getElementById('ob-error');
+const modeJobBtn = document.getElementById('mode-job');
+const modeGeneralBtn = document.getElementById('mode-general');
+const chatModeHint = document.getElementById('chat-mode-hint');
+const chatAttachBtn = document.getElementById('chat-attach');
+const chatAttachment = document.getElementById('chat-attachment');
+const chatImageInput = document.getElementById('chat-image-input');
 
 function showOnboarding(errorMsg) {
   if (!onboarding) return;
@@ -186,7 +199,7 @@ async function rawGroqCall(messages, temperature, key, maxTokens) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
     body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
+      model: GROQ_MODEL,
       messages: messages,
       temperature: temperature,
       max_tokens: maxTokens || 2048
@@ -729,33 +742,153 @@ function addChatMessage(text, role) {
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-async function sendChat() {
-  var text = chatInput.value.trim();
-  if (!text) return;
-  chatInput.value = '';
+function renderChat() {
+  chatMessages.innerHTML = '';
+  chatStore[chatMode].forEach(function(r) { addChatMessage(r.text, r.role); });
+}
 
-  addChatMessage(text, 'user');
-  chatHistory.push({ role: 'user', content: text });
+function setChatMode(mode) {
+  chatMode = mode;
+  modeJobBtn.classList.toggle('active', mode === 'job');
+  modeGeneralBtn.classList.toggle('active', mode === 'general');
+  if (mode === 'general') {
+    chatModeHint.textContent = 'General assistant — ask anything, attach a photo, or paste a link to discuss.';
+    chatAttachBtn.classList.remove('hidden');
+    chatInput.placeholder = 'Ask anything, or paste a link...';
+  } else {
+    chatModeHint.textContent = 'Ask about this job, your resume, or your search.';
+    chatAttachBtn.classList.add('hidden');
+    chatInput.placeholder = 'Ask Alicia anything...';
+    clearPendingImage();
+  }
+  renderChat();
+}
 
-  var systemMsg = buildChatSystemMessage();
-  var msgs = [{ role: 'system', content: systemMsg }].concat(chatHistory);
+// ---------- Image attachment ----------
 
-  addChatMessage('Thinking...', 'ai');
+function clearPendingImage() {
+  pendingImage = null;
+  chatAttachment.classList.add('hidden');
+  chatAttachment.innerHTML = '';
+  if (chatImageInput) chatImageInput.value = '';
+}
 
+function showPendingImage() {
+  if (!pendingImage) return;
+  chatAttachment.classList.remove('hidden');
+  chatAttachment.innerHTML = '';
+  var img = document.createElement('img');
+  img.src = pendingImage.dataUrl;
+  img.className = 'chat-attach-thumb';
+  var label = document.createElement('span');
+  label.className = 'chat-attach-name';
+  label.textContent = pendingImage.name || 'Image attached';
+  var remove = document.createElement('button');
+  remove.className = 'chat-attach-remove';
+  remove.textContent = '✕';
+  remove.title = 'Remove image';
+  remove.addEventListener('click', clearPendingImage);
+  chatAttachment.appendChild(img);
+  chatAttachment.appendChild(label);
+  chatAttachment.appendChild(remove);
+}
+
+// Read an image file/blob, downscale to keep the request light, return { dataUrl, name }.
+function loadImageFile(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function() {
+      var img = new Image();
+      img.onload = function() {
+        var maxDim = 1024;
+        var w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+          else { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve({ dataUrl: canvas.toDataURL('image/jpeg', 0.85), name: file.name || 'pasted image' });
+      };
+      img.onerror = function() { reject(new Error('Could not read that image.')); };
+      img.src = reader.result;
+    };
+    reader.onerror = function() { reject(new Error('Could not read that image.')); };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function attachImage(file) {
+  if (!file) return;
   try {
-    var result = await callGroq(msgs);
-    chatMessages.lastElementChild.remove();
-    addChatMessage(result, 'ai');
-    chatHistory.push({ role: 'assistant', content: result });
-    if (chatHistory.length > 20) chatHistory = chatHistory.slice(-16);
-  } catch (err) {
-    chatMessages.lastElementChild.remove();
-    addChatMessage('Error: ' + err.message, 'ai');
-    if (chatHistory.length && chatHistory[chatHistory.length - 1].role === 'user') {
-      chatHistory.pop();
-    }
+    pendingImage = await loadImageFile(file);
+    showPendingImage();
+  } catch (e) {
+    addChatMessage('Sorry, I could not load that image. Try a JPG or PNG.', 'ai');
   }
 }
+
+// ---------- Web browsing ----------
+
+function extractUrls(text) {
+  if (!text) return [];
+  var m = text.match(/https?:\/\/[^\s<>"')]+/g);
+  return m || [];
+}
+
+function decodeHtmlEntities(s) {
+  return s
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, function (_, d) { return String.fromCharCode(parseInt(d, 10)); })
+    .replace(/&#x([0-9a-fA-F]+);/g, function (_, h) { return String.fromCharCode(parseInt(h, 16)); });
+}
+
+function htmlToReadableText(html) {
+  var cleaned = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
+  var bodyMatch = cleaned.match(/<body[\s\S]*?<\/body>/i);
+  var src = bodyMatch ? bodyMatch[0] : cleaned;
+  var text = src
+    .replace(/<\/(p|div|h[1-6]|li|tr|section|article|header|footer)>/gi, '\n')
+    .replace(/<(br|hr)\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+  text = decodeHtmlEntities(text);
+  return text.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Fetch a page's readable text. Tries a direct fetch first (private, needs host
+// permission), then falls back to Jina's reader which renders JS-heavy pages.
+async function fetchPageText(url) {
+  try {
+    var resp = await fetch(url, { redirect: 'follow' });
+    if (resp.ok) {
+      var html = await resp.text();
+      var text = htmlToReadableText(html);
+      if (text && text.length > 500) return text;
+    }
+  } catch (e) { /* fall through to reader service */ }
+
+  try {
+    var jResp = await fetch('https://r.jina.ai/' + url);
+    if (jResp.ok) {
+      var jText = await jResp.text();
+      if (jText && jText.trim().length > 50) return jText.trim();
+    }
+  } catch (e2) { /* give up */ }
+
+  return null;
+}
+
+// ---------- Chat send ----------
 
 function buildChatSystemMessage() {
   let msg = 'You are Alicia, an expert, friendly, and honest AI job search coach and career advisor.\n\nCore behaviors:\n- Be concise, actionable, and structured (use short paragraphs + bullets when helpful).\n- When a job is loaded, proactively analyze fit: highlight strong matches from the resume, identify gaps, and suggest how to position experience or address weaknesses.\n- Give practical suggestions for applications, networking, LinkedIn outreach, or interview prep.\n- For salary questions: give realistic ranges based on role + location + experience level (use general market knowledge). Be transparent about sources/uncertainty.\n- For company or market questions: share known signals about culture, recent news, hiring trends, or interview process.\n- Always tie advice back to the candidate\'s actual resume and the specific job when possible.\n- Be encouraging but never sugarcoat -- honesty builds trust.';
@@ -774,6 +907,99 @@ function buildChatSystemMessage() {
   msg += '\n\nRespond helpfully to any job-search related question.';
   return msg;
 }
+
+function buildGeneralSystemMessage() {
+  return 'You are Alicia, a warm, practical, and knowledgeable personal assistant. You help with everyday life: fixing things around the house, work questions, budgeting and personal finance, hobbies, planning, cooking, writing, and learning new things. '
+    + 'Be clear, friendly, and genuinely useful. When solving a problem, give step-by-step help. When you are unsure or something is outside your knowledge, say so honestly rather than guessing. '
+    + 'Keep answers concise but complete; use short paragraphs or bullet points when they help. '
+    + 'When the user shares an image, describe what is relevant and answer their question about it. '
+    + 'When the user shares a link and its page content is provided to you, base your answer on that content; if the page could not be loaded, say so plainly and answer from general knowledge.';
+}
+
+async function sendChat() {
+  var text = chatInput.value.trim();
+  if (!text && !pendingImage) return;
+  chatInput.value = '';
+
+  var store = chatStore[chatMode];
+  var imageForTurn = (chatMode === 'general') ? pendingImage : null;
+
+  var userDisplay = text;
+  if (imageForTurn) userDisplay = (text ? text + '\n' : '') + '🖼️ [image attached]';
+  addChatMessage(userDisplay, 'user');
+  clearPendingImage();
+
+  // Web browsing (general mode only): if the message has a link, fetch it.
+  var urlContext = '';
+  if (chatMode === 'general' && !imageForTurn) {
+    var urls = extractUrls(text);
+    if (urls.length) {
+      var shortUrl = urls[0].replace(/^https?:\/\//, '').slice(0, 45);
+      addChatMessage('Reading ' + shortUrl + '…', 'ai');
+      var pageText = await fetchPageText(urls[0]);
+      chatMessages.lastElementChild.remove();
+      if (pageText) {
+        urlContext = '\n\n[Content fetched from ' + urls[0] + ']:\n' + pageText.slice(0, 6000);
+      } else {
+        urlContext = '\n\n[Note: the page at ' + urls[0] + ' could not be opened. Tell the user you could not load it, then answer from general knowledge if you can.]';
+      }
+    }
+  }
+
+  // Lightweight record kept in history (no base64 image, no full page dump).
+  var historyNote = text;
+  if (imageForTurn) historyNote = (text || 'What is in this image?') + ' [shared an image]';
+  store.push({ role: 'user', text: userDisplay, api: { role: 'user', content: historyNote } });
+
+  // Heavy content used only for THIS request.
+  var heavyContent;
+  if (imageForTurn) {
+    heavyContent = [
+      { type: 'text', text: (text || 'What is in this image?') + urlContext },
+      { type: 'image_url', image_url: { url: imageForTurn.dataUrl } }
+    ];
+  } else {
+    heavyContent = text + urlContext;
+  }
+
+  var systemMsg = chatMode === 'job' ? buildChatSystemMessage() : buildGeneralSystemMessage();
+  var apiMessages = [{ role: 'system', content: systemMsg }].concat(store.map(function (r) { return r.api; }));
+  apiMessages[apiMessages.length - 1] = { role: 'user', content: heavyContent };
+
+  addChatMessage('Thinking...', 'ai');
+
+  try {
+    var result = await callGroq(apiMessages);
+    chatMessages.lastElementChild.remove();
+    addChatMessage(result, 'ai');
+    store.push({ role: 'ai', text: result, api: { role: 'assistant', content: result } });
+    if (store.length > 16) store.splice(0, store.length - 16);
+  } catch (err) {
+    chatMessages.lastElementChild.remove();
+    addChatMessage('Error: ' + err.message, 'ai');
+    if (store.length && store[store.length - 1].role === 'user') store.pop();
+  }
+}
+
+modeJobBtn.addEventListener('click', function () { if (chatMode !== 'job') setChatMode('job'); });
+modeGeneralBtn.addEventListener('click', function () { if (chatMode !== 'general') setChatMode('general'); });
+
+chatAttachBtn.addEventListener('click', function () { chatImageInput.click(); });
+chatImageInput.addEventListener('change', function (e) {
+  if (e.target.files && e.target.files[0]) attachImage(e.target.files[0]);
+});
+
+// Paste an image straight into the input (e.g. a screenshot) while in General mode.
+chatInput.addEventListener('paste', function (e) {
+  if (chatMode !== 'general' || !e.clipboardData) return;
+  var items = e.clipboardData.items;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].type && items[i].type.indexOf('image') === 0) {
+      var file = items[i].getAsFile();
+      if (file) { e.preventDefault(); attachImage(file); break; }
+    }
+  }
+});
 
 chatSend.addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', function(e) {

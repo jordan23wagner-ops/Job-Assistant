@@ -426,6 +426,36 @@ header h1 {
 .tailoring-text-input input:focus {
   border-color: #7c83ff;
 }
+.chat-mode-toggle {
+  display: flex;
+  gap: 0;
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.chat-mode-btn {
+  background: transparent;
+  color: #888;
+  border: none;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: all 0.2s;
+}
+.chat-mode-btn.active {
+  background: #7c83ff;
+  color: #fff;
+  font-weight: 600;
+}
+.chat-mode-btn:not(.active):hover {
+  color: #c9ccff;
+}
+.chat-mode-hint {
+  font-size: 11px;
+  color: #777;
+  margin-bottom: 8px;
+}
 .chat-messages {
   background: #16213e;
   border: 1px solid #2a2a4a;
@@ -435,6 +465,55 @@ header h1 {
   max-height: 300px;
   overflow-y: auto;
   margin-bottom: 8px;
+}
+.chat-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+}
+.chat-attach-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+.chat-attach-name {
+  flex: 1;
+  font-size: 12px;
+  color: #aaa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-attach-remove {
+  background: #2a2a4a;
+  color: #ddd;
+  border: none;
+  border-radius: 4px;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.chat-attach-remove:hover {
+  background: #3a3a5a;
+}
+.chat-attach-btn {
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 10px;
+  line-height: 1;
+}
+.chat-attach-btn:hover {
+  border-color: #7c83ff;
 }
 .chat-msg {
   margin-bottom: 8px;
