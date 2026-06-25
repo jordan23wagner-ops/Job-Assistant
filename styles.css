@@ -78,13 +78,16 @@ header h1 {
 .job-desc {
   font-size: 12px;
   color: #aaa;
+  line-height: 1.6;
+  word-spacing: 1px;
+  transition: max-height 0.3s ease;
+}
+.job-desc.collapsed {
   max-height: 80px;
   overflow: hidden;
   position: relative;
-  word-spacing: 1px;
-  line-height: 1.6;
 }
-.job-desc::after {
+.job-desc.collapsed::after {
   content: '';
   position: absolute;
   bottom: 0;
@@ -92,6 +95,22 @@ header h1 {
   right: 0;
   height: 30px;
   background: linear-gradient(transparent, #16213e);
+}
+.job-desc.expanded {
+  max-height: none;
+  overflow-y: auto;
+}
+.job-desc-toggle {
+  color: #7c83ff;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+.job-desc-toggle:hover {
+  color: #9a9aff;
+  text-decoration: underline;
 }
 .btn-small {
   background: #7c83ff;

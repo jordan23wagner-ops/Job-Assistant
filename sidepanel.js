@@ -55,23 +55,6 @@ function sanitizeText(text) {
   return clean;
 }
 
-function isValidResponse(text) {
-  if (!text || text.length < 10) return false;
-  var letterCount = 0;
-  var totalCount = text.length;
-  for (var i = 0; i < text.length; i++) {
-    var c = text.charCodeAt(i);
-    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) letterCount++;
-  }
-  if (letterCount / totalCount < 0.3) return false;
-  var repeats = 0;
-  for (var j = 1; j < text.length; j++) {
-    if (text[j] === text[j - 1]) repeats++;
-  }
-  if (repeats / totalCount > 0.5) return false;
-  return true;
-}
-
 async function callGroq(messages, temperature) {
   if (temperature === undefined) temperature = 0.7;
   var key = groqApiKey || await getApiKey();
@@ -99,26 +82,6 @@ async function callGroq(messages, temperature) {
 
   var data = await resp.json();
   var content = sanitizeText(data.choices[0].message.content);
-
-  if (!isValidResponse(content)) {
-    var resp2 = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: messages,
-        temperature: 0.5,
-        max_tokens: 2048
-      })
-    });
-    if (resp2.ok) {
-      var data2 = await resp2.json();
-      var content2 = sanitizeText(data2.choices[0].message.content);
-      if (isValidResponse(content2)) return content2;
-    }
-    throw new Error('The AI returned an invalid response. Please try again.');
-  }
-
   return content;
 }
 
@@ -172,8 +135,10 @@ function displayJob(job) {
   if (job.company) html += '<div class="job-company">' + escapeHtml(job.company) + '</div>';
   if (job.location) html += '<div class="job-location">' + escapeHtml(job.location) + '</div>';
   if (job.description) {
-    var preview = job.description.substring(0, 300);
-    html += '<div class="job-desc">' + escapeHtml(preview) + '...</div>';
+    html += '<div class="job-desc collapsed" onclick="this.classList.toggle(\'collapsed\'); this.classList.toggle(\'expanded\');">';
+    html += escapeHtml(job.description);
+    html += '</div>';
+    html += '<div class="job-desc-toggle" onclick="var d=this.previousElementSibling; d.classList.toggle(\'collapsed\'); d.classList.toggle(\'expanded\'); this.textContent=d.classList.contains(\'collapsed\') ? \'Show more\' : \'Show less\';">Show more</div>';
   }
   jobInfo.innerHTML = html;
   updateToolButtons();
