@@ -1,65 +1,98 @@
 function findBySelectors(selectors) {
   for (const sel of selectors) {
     const el = document.querySelector(sel);
-    if (el && el.textContent.trim()) return el.textContent.trim();
+    if (el) {
+      const text = (el.innerText || el.textContent || '').trim();
+      if (text) return text;
+    }
   }
   return null;
 }
 
-function findByText(tag, patterns) {
-  const els = document.querySelectorAll(tag);
-  for (const el of els) {
-    const text = el.textContent.trim();
-    for (const p of patterns) {
-      if (typeof p === 'string' && text.includes(p)) return el;
-      if (p instanceof RegExp && p.test(text)) return el;
-    }
-  }
-  return null;
+function cleanText(text) {
+  return text
+    .replace(/[​-‍﻿­]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function expandJobDescription() {
-  const buttons = document.querySelectorAll('button, [role="button"]');
-  buttons.forEach(btn => {
-    const text = btn.textContent.toLowerCase().trim();
-    if (text.includes('see more') || text.includes('show more') || text === '...more') {
+  const allButtons = document.querySelectorAll('button, [role="button"], [class*="show-more"], [class*="see-more"]');
+  allButtons.forEach(btn => {
+    const text = (btn.innerText || btn.textContent || '').toLowerCase().trim();
+    if (text.includes('see more') || text.includes('show more') || text === '...more' || text === 'more') {
+      try {
+        btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      } catch (e) {
+        btn.click();
+      }
+    }
+  });
+  const specificBtns = document.querySelectorAll(
+    'button.jobs-description__footer-button, button[aria-label*="Show more"], button[aria-label*="See more"], button.show-more-less-html__button, .jobs-description__content button, .jobs-description button'
+  );
+  specificBtns.forEach(btn => {
+    try {
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    } catch (e) {
       btn.click();
     }
   });
-  const footerBtns = document.querySelectorAll(
-    'button.jobs-description__footer-button, button[aria-label="Show more"], button.show-more-less-html__button, .jobs-description__content button'
-  );
-  footerBtns.forEach(btn => btn.click());
 }
 
 function getJobTitle() {
   const selectors = [
+    '.job-details-jobs-unified-top-card__job-title h1 a',
     '.job-details-jobs-unified-top-card__job-title h1',
     '.job-details-jobs-unified-top-card__job-title a',
     '.job-details-jobs-unified-top-card__job-title',
     '.jobs-unified-top-card__job-title a',
+    '.jobs-unified-top-card__job-title h1',
     '.jobs-unified-top-card__job-title',
     'h1.t-24',
+    'h1.t-24.t-bold',
     'h1.topcard__title',
     'h2.top-card-layout__title',
     '.t-24.t-bold.inline',
-    'h1[class*="job"]',
-    'h1[class*="title"]',
+    'h1[class*="job-title"]',
+    'h1[class*="jobTitle"]',
     '.jobs-details__main-content h1',
-    '.job-view-layout h1'
+    '.job-view-layout h1',
+    '.jobs-details-top-card__job-title',
+    'a[data-tracking-control-name="public_jobs_topcard-title"]'
   ];
   let title = findBySelectors(selectors);
-  if (!title) {
-    const h1s = document.querySelectorAll('h1');
-    for (const h1 of h1s) {
-      const text = h1.textContent.trim();
-      if (text.length > 3 && text.length < 200 && !text.includes('LinkedIn')) {
-        title = text;
-        break;
-      }
+  if (title) return cleanText(title);
+
+  const topCard = document.querySelector('[class*="top-card"], [class*="topcard"], [class*="TopCard"]');
+  if (topCard) {
+    const h1 = topCard.querySelector('h1, h2');
+    if (h1) {
+      const text = cleanText(h1.innerText || h1.textContent || '');
+      if (text.length > 2 && text.length < 200) return text;
+    }
+    const link = topCard.querySelector('a');
+    if (link) {
+      const text = cleanText(link.innerText || link.textContent || '');
+      if (text.length > 2 && text.length < 200 && !text.includes('LinkedIn')) return text;
     }
   }
-  return title;
+
+  const h1s = document.querySelectorAll('h1');
+  for (const h1 of h1s) {
+    const text = cleanText(h1.innerText || h1.textContent || '');
+    if (text.length > 3 && text.length < 200 && !text.includes('LinkedIn') && !text.includes('Sign in')) {
+      return text;
+    }
+  }
+
+  const ariaTitle = document.querySelector('[aria-label*="job title"], [aria-label*="Job title"]');
+  if (ariaTitle) {
+    const text = cleanText(ariaTitle.innerText || ariaTitle.textContent || '');
+    if (text.length > 2) return text;
+  }
+
+  return null;
 }
 
 function getCompany() {
@@ -75,17 +108,14 @@ function getCompany() {
     '.jobs-details__main-content a[href*="/company/"]'
   ];
   let company = findBySelectors(selectors);
-  if (!company) {
-    const links = document.querySelectorAll('a[href*="/company/"]');
-    for (const link of links) {
-      const text = link.textContent.trim();
-      if (text.length > 1 && text.length < 100) {
-        company = text;
-        break;
-      }
-    }
+  if (company) return cleanText(company);
+
+  const links = document.querySelectorAll('a[href*="/company/"]');
+  for (const link of links) {
+    const text = cleanText(link.innerText || link.textContent || '');
+    if (text.length > 1 && text.length < 100) return text;
   }
-  return company;
+  return null;
 }
 
 function getLocation() {
@@ -98,21 +128,22 @@ function getLocation() {
     '.jobs-unified-top-card__subtitle span'
   ];
   let loc = findBySelectors(selectors);
-  if (!loc) {
-    const spans = document.querySelectorAll('span, div');
-    for (const span of spans) {
-      const text = span.textContent.trim();
-      if (text.match(/\b(Remote|Hybrid|On-site|United States|Canada|UK|India)\b/i) &&
-          text.length < 100 && !text.includes('Apply')) {
-        loc = text;
-        break;
-      }
+  if (loc) return cleanText(loc);
+
+  const spans = document.querySelectorAll('span, div');
+  for (const span of spans) {
+    const text = cleanText(span.innerText || span.textContent || '');
+    if (text.match(/\b(Remote|Hybrid|On-site|United States|Canada|UK|India)\b/i) &&
+        text.length < 100 && !text.includes('Apply')) {
+      return text;
     }
   }
-  return loc;
+  return null;
 }
 
 function getDescription() {
+  expandJobDescription();
+
   const selectors = [
     '.jobs-description__content',
     '.jobs-description-content__text',
@@ -125,23 +156,27 @@ function getDescription() {
   ];
   for (const sel of selectors) {
     const el = document.querySelector(sel);
-    if (el && el.textContent.trim().length > 50) {
-      return el.textContent.trim();
+    if (el) {
+      const text = cleanText(el.innerText || el.textContent || '');
+      if (text.length > 50) return text;
     }
   }
-  const aboutHeader = findByText('h2, h3, span', ['About the job', 'Job description', 'Description']);
-  if (aboutHeader) {
-    let container = aboutHeader.closest('section') || aboutHeader.parentElement?.parentElement;
-    if (container && container.textContent.trim().length > 50) {
-      return container.textContent.trim();
+
+  const headers = document.querySelectorAll('h2, h3, span');
+  for (const header of headers) {
+    const text = (header.innerText || header.textContent || '').trim();
+    if (text === 'About the job' || text === 'Job description' || text === 'Description') {
+      let container = header.closest('section') || header.parentElement?.parentElement;
+      if (container) {
+        const desc = cleanText(container.innerText || container.textContent || '');
+        if (desc.length > 50) return desc;
+      }
     }
   }
   return null;
 }
 
 function detectJob() {
-  expandJobDescription();
-
   const title = getJobTitle();
   const company = getCompany();
   const location = getLocation();
@@ -159,25 +194,32 @@ function detectJob() {
 }
 
 setTimeout(() => {
-  if (!detectJob()) {
-    setTimeout(detectJob, 3000);
-  }
+  expandJobDescription();
+  setTimeout(() => {
+    if (!detectJob()) {
+      setTimeout(detectJob, 3000);
+    }
+  }, 500);
 }, 2000);
 
 let lastUrl = location.href;
 const observer = new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    setTimeout(detectJob, 2000);
+    setTimeout(() => {
+      expandJobDescription();
+      setTimeout(detectJob, 500);
+    }, 2000);
   }
 });
 observer.observe(document.body, { childList: true, subtree: true });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'DETECT_JOB') {
+    expandJobDescription();
     setTimeout(() => {
       expandJobDescription();
       setTimeout(detectJob, 500);
-    }, 300);
+    }, 500);
   }
 });
