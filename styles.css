@@ -154,6 +154,7 @@ header h1 {
   align-items: center;
   gap: 8px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 .upload-label {
   color: #7c83ff;
@@ -169,11 +170,31 @@ header h1 {
   color: #888;
   max-width: 160px;
 }
+.paste-area {
+  margin-top: 8px;
+}
+#resume-paste {
+  width: 100%;
+  min-height: 120px;
+  background: #16213e;
+  border: 1px solid #2a2a4a;
+  color: #e0e0e0;
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  margin: 6px 0;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+#resume-paste:focus {
+  border-color: #7c83ff;
+}
 .resume-status {
   font-size: 11px;
   color: #4caf50;
   display: block;
-  margin-top: 4px;
+  margin-top: 6px;
 }
 .hidden {
   display: none;
