@@ -12,31 +12,46 @@ function _latin1Decode(bytes) {
 }
 
 async function _inflate(uint8, format) {
-  var ds = new DecompressionStream(format);
-  var writer = ds.writable.getWriter();
-  writer.write(uint8).catch(function() {});
-  writer.close().catch(function() {});
-  var chunks = [];
-  var reader = ds.readable.getReader();
-  try {
-    while (true) {
-      var r = await reader.read();
-      if (r.done) break;
-      chunks.push(r.value);
+  return new Promise(function(resolve, reject) {
+    try {
+      var ds = new DecompressionStream(format);
+      var writer = ds.writable.getWriter();
+      var reader = ds.readable.getReader();
+      var chunks = [];
+
+      function readChunks() {
+        reader.read().then(function(result) {
+          if (result.done) {
+            finish();
+          } else {
+            chunks.push(result.value);
+            readChunks();
+          }
+        }).catch(function() {
+          finish();
+        });
+      }
+
+      function finish() {
+        if (chunks.length === 0) { reject(new Error('empty')); return; }
+        var total = 0;
+        for (var i = 0; i < chunks.length; i++) total += chunks[i].length;
+        var out = new Uint8Array(total);
+        var off = 0;
+        for (var j = 0; j < chunks.length; j++) {
+          out.set(chunks[j], off);
+          off += chunks[j].length;
+        }
+        resolve(out);
+      }
+
+      writer.write(uint8).catch(function() {});
+      writer.close().catch(function() {});
+      readChunks();
+    } catch (e) {
+      reject(e);
     }
-  } catch (e) {
-    // Keep whatever was decompressed before the error
-  }
-  if (chunks.length === 0) throw new Error('No data decompressed');
-  var total = 0;
-  for (var ci = 0; ci < chunks.length; ci++) total += chunks[ci].length;
-  var result = new Uint8Array(total);
-  var offset = 0;
-  for (var ci2 = 0; ci2 < chunks.length; ci2++) {
-    result.set(chunks[ci2], offset);
-    offset += chunks[ci2].length;
-  }
-  return result;
+  });
 }
 
 function _trimStreamBytes(uint8) {
