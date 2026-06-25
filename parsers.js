@@ -64,8 +64,130 @@ function _trimStreamBytes(uint8) {
   return uint8.subarray(0, end);
 }
 
+// Pure-JS RFC 1951 inflate — bypasses Chrome's strict DecompressionStream
+// which throws on trailing bytes after compressed data (common in PDFs).
+function _pureInflate(src) {
+  var p = 0, out = [], buf = 0, bits = 0;
+  function readBits(n) {
+    while (bits < n) { if (p >= src.length) return -1; buf |= src[p++] << bits; bits += 8; }
+    var v = buf & ((1 << n) - 1); buf >>>= n; bits -= n; return v;
+  }
+  function readByte() { bits = 0; buf = 0; if (p >= src.length) return -1; return src[p++]; }
+
+  var LENS = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  var LEXT = [0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  var DISTS = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  var DEXT = [0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  var ORDER = [16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+
+  function buildTree(lengths) {
+    var maxLen = 0;
+    for (var i = 0; i < lengths.length; i++) if (lengths[i] > maxLen) maxLen = lengths[i];
+    if (maxLen === 0) return null;
+    var counts = new Uint16Array(maxLen + 1);
+    for (var i = 0; i < lengths.length; i++) if (lengths[i]) counts[lengths[i]]++;
+    var offsets = new Uint16Array(maxLen + 1);
+    for (var i = 1; i <= maxLen; i++) offsets[i] = offsets[i - 1] + counts[i - 1];
+    var table = new Uint16Array(lengths.length);
+    for (var i = 0; i < lengths.length; i++) if (lengths[i]) table[offsets[lengths[i]]++] = i;
+    return { counts: counts, table: table, maxLen: maxLen };
+  }
+
+  function decode(tree) {
+    var code = 0, first = 0, idx = 0;
+    for (var len = 1; len <= tree.maxLen; len++) {
+      code |= readBits(1);
+      var count = tree.counts[len];
+      if (code < first + count) return tree.table[idx + (code - first)];
+      idx += count;
+      first = (first + count) << 1;
+      code <<= 1;
+    }
+    return -1;
+  }
+
+  // Fixed Huffman tables
+  var fixedLitLens = new Uint8Array(288);
+  for (var i = 0; i < 144; i++) fixedLitLens[i] = 8;
+  for (var i = 144; i < 256; i++) fixedLitLens[i] = 9;
+  for (var i = 256; i < 280; i++) fixedLitLens[i] = 7;
+  for (var i = 280; i < 288; i++) fixedLitLens[i] = 8;
+  var fixedDistLens = new Uint8Array(32);
+  for (var i = 0; i < 32; i++) fixedDistLens[i] = 5;
+  var fixedLitTree = buildTree(fixedLitLens);
+  var fixedDistTree = buildTree(fixedDistLens);
+
+  function inflateBlock(litTree, distTree) {
+    while (true) {
+      var sym = decode(litTree);
+      if (sym < 0 || sym === 256) return;
+      if (sym < 256) {
+        out.push(sym);
+      } else {
+        sym -= 257;
+        var len = LENS[sym] + readBits(LEXT[sym]);
+        var dsym = decode(distTree);
+        if (dsym < 0) return;
+        var dist = DISTS[dsym] + readBits(DEXT[dsym]);
+        var pos = out.length;
+        for (var i = 0; i < len; i++) out.push(out[pos - dist + (i % dist)]);
+      }
+    }
+  }
+
+  var last = 0;
+  while (!last) {
+    last = readBits(1);
+    var type = readBits(2);
+    if (type === 0) {
+      bits = 0; buf = 0;
+      var len = src[p] | (src[p + 1] << 8); p += 4;
+      for (var i = 0; i < len; i++) out.push(src[p++]);
+    } else if (type === 1) {
+      inflateBlock(fixedLitTree, fixedDistTree);
+    } else if (type === 2) {
+      var hlit = readBits(5) + 257;
+      var hdist = readBits(5) + 1;
+      var hclen = readBits(4) + 4;
+      var codeLens = new Uint8Array(19);
+      for (var i = 0; i < hclen; i++) codeLens[ORDER[i]] = readBits(3);
+      var codeTree = buildTree(codeLens);
+      var allLens = new Uint8Array(hlit + hdist);
+      var ai = 0;
+      while (ai < hlit + hdist) {
+        var s = decode(codeTree);
+        if (s < 16) { allLens[ai++] = s; }
+        else if (s === 16) { var rep = readBits(2) + 3; var prev = ai > 0 ? allLens[ai - 1] : 0; for (var ri = 0; ri < rep; ri++) allLens[ai++] = prev; }
+        else if (s === 17) { var rep = readBits(3) + 3; for (var ri = 0; ri < rep; ri++) allLens[ai++] = 0; }
+        else if (s === 18) { var rep = readBits(7) + 11; for (var ri = 0; ri < rep; ri++) allLens[ai++] = 0; }
+      }
+      var litTree = buildTree(allLens.subarray(0, hlit));
+      var distTree = buildTree(allLens.subarray(hlit));
+      inflateBlock(litTree, distTree);
+    } else {
+      return null;
+    }
+  }
+  return new Uint8Array(out);
+}
+
 async function _inflateZlib(uint8) {
   uint8 = _trimStreamBytes(uint8);
+  // Try pure-JS inflate first (immune to Chrome's trailing-data strictness)
+  try {
+    // zlib format: 2-byte header, then raw deflate data
+    if (uint8.length >= 2 && (uint8[0] & 0x0F) === 8) {
+      var raw = uint8.subarray(2);
+      var result = _pureInflate(raw);
+      if (result && result.length > 0) return result;
+    }
+  } catch (e) {}
+  // Raw deflate without header
+  try {
+    var result = _pureInflate(uint8);
+    if (result && result.length > 0) return result;
+  } catch (e) {}
+  // Fall back to DecompressionStream
   try {
     return await _inflate(uint8, 'deflate');
   } catch (e) {
