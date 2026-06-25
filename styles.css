@@ -987,3 +987,91 @@ header h1 {
 .iv-practice-controls {
   margin-top: 8px;
 }
+
+/* ---------- Job Search Preferences ---------- */
+.search-prefs {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 6px;
+}
+.search-prefs.hidden {
+  display: none;
+}
+.search-group {
+  margin-bottom: 8px;
+}
+.search-label {
+  font-size: 11.5px;
+  color: var(--accent-2);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  display: block;
+  margin-bottom: 4px;
+}
+.search-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+.search-check {
+  font-size: 12px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.search-check input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.search-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+}
+.search-select:focus {
+  border-color: var(--accent);
+}
+.search-results-info {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-top: 6px;
+  line-height: 1.4;
+}
+.search-results-info:empty {
+  display: none;
+}
+
+/* ---------- EEO Auto-Fill ---------- */
+.eeo-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
+.eeo-form {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 6px;
+}
+.eeo-form.hidden {
+  display: none;
+}
+.eeo-group {
+  margin-bottom: 8px;
+}
+.eeo-status-saved {
+  color: #4caf50;
+}

@@ -48,7 +48,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v0.7.0</p>
+      <p class="subtitle">Job Assistant v0.8.0</p>
       <div id="theme-picker" class="theme-picker">
         <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
         <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
@@ -77,6 +77,138 @@
       <div id="tracker-body" class="tracker-body hidden">
         <div id="tracker-list" class="tracker-list"></div>
         <p id="tracker-empty" class="placeholder">No saved jobs yet. Detect a LinkedIn job and tap "Save to Tracker".</p>
+      </div>
+    </section>
+
+    <section id="search-section" class="section">
+      <div class="section-header">
+        <h2>Job Search</h2>
+        <button id="search-prefs-toggle" class="btn-icon" title="Show/hide preferences">&#9881; Filters</button>
+      </div>
+      <div id="search-prefs" class="search-prefs hidden">
+        <div class="search-group">
+          <label class="search-label">Roles</label>
+          <div class="search-checks" id="search-roles">
+            <label class="search-check"><input type="checkbox" value="Project Manager" checked> Project Manager</label>
+            <label class="search-check"><input type="checkbox" value="Senior Project Manager"> Sr. Project Manager</label>
+            <label class="search-check"><input type="checkbox" value="Principal Project Manager"> Principal PM</label>
+            <label class="search-check"><input type="checkbox" value="Program Manager" checked> Program Manager</label>
+            <label class="search-check"><input type="checkbox" value="Senior Program Manager"> Sr. Program Manager</label>
+            <label class="search-check"><input type="checkbox" value="Principal Program Manager"> Principal PgM</label>
+            <label class="search-check"><input type="checkbox" value="Business Analyst" checked> Business Analyst</label>
+            <label class="search-check"><input type="checkbox" value="Senior Business Analyst"> Sr. Business Analyst</label>
+            <label class="search-check"><input type="checkbox" value="Principal Business Analyst"> Principal BA</label>
+            <label class="search-check"><input type="checkbox" value="Data Analyst" checked> Data Analyst</label>
+            <label class="search-check"><input type="checkbox" value="Senior Data Analyst"> Sr. Data Analyst</label>
+            <label class="search-check"><input type="checkbox" value="Principal Data Analyst"> Principal DA</label>
+          </div>
+        </div>
+        <div class="search-group">
+          <label class="search-label">Work Type</label>
+          <div class="search-checks" id="search-worktype">
+            <label class="search-check"><input type="checkbox" value="2" checked> Remote</label>
+            <label class="search-check"><input type="checkbox" value="3"> Hybrid</label>
+            <label class="search-check"><input type="checkbox" value="1"> On-site</label>
+          </div>
+        </div>
+        <div class="search-group">
+          <label class="search-check"><input type="checkbox" id="search-easy-apply" checked> Easy Apply only</label>
+        </div>
+        <div class="search-group">
+          <label class="search-label">Contract Type</label>
+          <div class="search-checks" id="search-contract">
+            <label class="search-check"><input type="checkbox" value="W2" checked> W2</label>
+            <label class="search-check"><input type="checkbox" value="C2C"> C2C</label>
+            <label class="search-check"><input type="checkbox" value="1099"> 1099</label>
+          </div>
+        </div>
+        <div class="search-group">
+          <label class="search-label">Min. Salary</label>
+          <select id="search-salary" class="search-select">
+            <option value="">Any</option>
+            <option value="40000">$40,000+</option>
+            <option value="60000">$60,000+</option>
+            <option value="80000" selected>$80,000+</option>
+            <option value="100000">$100,000+</option>
+            <option value="120000">$120,000+</option>
+            <option value="140000">$140,000+</option>
+            <option value="160000">$160,000+</option>
+            <option value="200000">$200,000+</option>
+          </select>
+        </div>
+        <button id="search-save-prefs" class="btn-small" style="width:100%;margin-top:6px;">Save Preferences</button>
+      </div>
+      <button id="search-run" class="tool-btn" style="width:100%;margin-top:8px;">&#128269; Search LinkedIn Jobs</button>
+      <div id="search-results-info" class="search-results-info"></div>
+    </section>
+
+    <section id="eeo-section" class="section">
+      <div class="section-header">
+        <h2>Application Auto-Fill</h2>
+        <button id="eeo-toggle" class="btn-icon" title="Set up auto-fill for EEO questions">&#9998; Edit</button>
+      </div>
+      <p class="eeo-hint">Save your answers to common application questions. Alicia will auto-fill them when you apply.</p>
+      <div id="eeo-form" class="eeo-form hidden">
+        <div class="eeo-group">
+          <label class="search-label">Gender</label>
+          <select id="eeo-gender" class="search-select">
+            <option value="">-- Skip --</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Non-binary">Non-binary</option>
+            <option value="Decline to self-identify">Prefer not to say</option>
+          </select>
+        </div>
+        <div class="eeo-group">
+          <label class="search-label">Race / Ethnicity</label>
+          <select id="eeo-race" class="search-select">
+            <option value="">-- Skip --</option>
+            <option value="Hispanic or Latino">Hispanic or Latino</option>
+            <option value="White">White (Not Hispanic or Latino)</option>
+            <option value="Black or African American">Black or African American</option>
+            <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian / Pacific Islander</option>
+            <option value="Asian">Asian</option>
+            <option value="American Indian or Alaska Native">American Indian / Alaska Native</option>
+            <option value="Two or More Races">Two or More Races</option>
+            <option value="Decline to self-identify">Prefer not to say</option>
+          </select>
+        </div>
+        <div class="eeo-group">
+          <label class="search-label">Veteran Status</label>
+          <select id="eeo-veteran" class="search-select">
+            <option value="">-- Skip --</option>
+            <option value="I am not a protected veteran">Not a protected veteran</option>
+            <option value="I identify as one or more of the classifications of a protected veteran">Protected veteran</option>
+            <option value="I don't wish to answer">Prefer not to say</option>
+          </select>
+        </div>
+        <div class="eeo-group">
+          <label class="search-label">Disability Status</label>
+          <select id="eeo-disability" class="search-select">
+            <option value="">-- Skip --</option>
+            <option value="No, I do not have a disability">No, I don't have a disability</option>
+            <option value="Yes, I have a disability">Yes, I have a disability</option>
+            <option value="I don't wish to answer">Prefer not to say</option>
+          </select>
+        </div>
+        <div class="eeo-group">
+          <label class="search-label">Work Authorization</label>
+          <select id="eeo-authorization" class="search-select">
+            <option value="">-- Skip --</option>
+            <option value="Yes">Authorized to work in the US</option>
+            <option value="No">Not authorized</option>
+          </select>
+        </div>
+        <div class="eeo-group">
+          <label class="search-label">Sponsorship Required</label>
+          <select id="eeo-sponsorship" class="search-select">
+            <option value="">-- Skip --</option>
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+          </select>
+        </div>
+        <button id="eeo-save" class="btn-small" style="width:100%;margin-top:6px;">Save Auto-Fill Answers</button>
+        <span id="eeo-status" class="resume-status"></span>
       </div>
     </section>
 

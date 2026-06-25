@@ -280,4 +280,174 @@ chrome.runtime.onMessage.addListener(function(message) {
       setTimeout(detectJob, 800);
     }, 500);
   }
+  if (message.type === 'AUTOFILL_EEO') {
+    console.log('[Alicia] Auto-fill EEO triggered');
+    autoFillEeo(message.prefs || {});
+  }
 });
+
+// ========== EEO Auto-Fill ==========
+
+var EEO_MATCHERS = [
+  {
+    patterns: [/gender/i, /sex/i],
+    prefKey: 'eeo-gender'
+  },
+  {
+    patterns: [/race/i, /ethnicity/i],
+    prefKey: 'eeo-race'
+  },
+  {
+    patterns: [/veteran/i],
+    prefKey: 'eeo-veteran'
+  },
+  {
+    patterns: [/disability/i, /disabled/i],
+    prefKey: 'eeo-disability'
+  },
+  {
+    patterns: [/authorized?\s*(to)?\s*work/i, /work\s*authorization/i, /legally\s*(authorized|eligible)/i, /right\s*to\s*work/i],
+    prefKey: 'eeo-authorization'
+  },
+  {
+    patterns: [/sponsor/i, /visa\s*sponsor/i, /require.*sponsorship/i],
+    prefKey: 'eeo-sponsorship'
+  }
+];
+
+function findLabelText(el) {
+  var label = '';
+  if (el.id) {
+    var lbl = document.querySelector('label[for="' + el.id + '"]');
+    if (lbl) label = getText(lbl);
+  }
+  if (!label) {
+    var parent = el.closest('.fb-dash-form-element, .jobs-easy-apply-form-section__grouping, .artdeco-text-input--container, .t-14');
+    if (parent) label = getText(parent);
+  }
+  if (!label) {
+    var prev = el.previousElementSibling;
+    while (prev && !label) {
+      if (prev.tagName === 'LABEL' || prev.tagName === 'LEGEND' || prev.tagName === 'SPAN') {
+        label = getText(prev);
+      }
+      prev = prev.previousElementSibling;
+    }
+  }
+  if (!label && el.parentElement) {
+    label = getText(el.parentElement);
+  }
+  return label;
+}
+
+function selectBestOption(selectEl, desiredValue) {
+  if (!desiredValue) return false;
+  var desired = desiredValue.toLowerCase();
+  var options = selectEl.querySelectorAll('option');
+  for (var i = 0; i < options.length; i++) {
+    var optText = (options[i].textContent || '').trim().toLowerCase();
+    var optVal = (options[i].value || '').trim().toLowerCase();
+    if (optText === desired || optVal === desired) {
+      selectEl.value = options[i].value;
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+  }
+  for (var j = 0; j < options.length; j++) {
+    var optText2 = (options[j].textContent || '').trim().toLowerCase();
+    if (optText2.indexOf(desired) >= 0 || desired.indexOf(optText2) >= 0) {
+      selectEl.value = options[j].value;
+      selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+  }
+  return false;
+}
+
+function clickBestRadio(container, desiredValue) {
+  if (!desiredValue) return false;
+  var desired = desiredValue.toLowerCase();
+  var radios = container.querySelectorAll('input[type="radio"]');
+  for (var i = 0; i < radios.length; i++) {
+    var label = '';
+    var lbl = radios[i].closest('label');
+    if (lbl) label = getText(lbl);
+    if (!label && radios[i].id) {
+      var lblEl = document.querySelector('label[for="' + radios[i].id + '"]');
+      if (lblEl) label = getText(lblEl);
+    }
+    if (!label) label = radios[i].value || '';
+    if (label.toLowerCase().indexOf(desired) >= 0 || desired.indexOf(label.toLowerCase()) >= 0) {
+      radios[i].checked = true;
+      radios[i].dispatchEvent(new Event('change', { bubbles: true }));
+      radios[i].dispatchEvent(new Event('click', { bubbles: true }));
+      return true;
+    }
+  }
+  return false;
+}
+
+function autoFillEeo(prefs) {
+  var filled = 0;
+  var selects = document.querySelectorAll('select');
+  selects.forEach(function (sel) {
+    var label = findLabelText(sel);
+    if (!label) return;
+    for (var i = 0; i < EEO_MATCHERS.length; i++) {
+      var matcher = EEO_MATCHERS[i];
+      var value = prefs[matcher.prefKey];
+      if (!value) continue;
+      for (var p = 0; p < matcher.patterns.length; p++) {
+        if (matcher.patterns[p].test(label)) {
+          if (selectBestOption(sel, value)) {
+            filled++;
+            console.log('[Alicia] Auto-filled select:', label, '->', value);
+          }
+          return;
+        }
+      }
+    }
+  });
+
+  var fieldsets = document.querySelectorAll('fieldset, .fb-dash-form-element, .jobs-easy-apply-form-section__grouping');
+  fieldsets.forEach(function (fs) {
+    var label = getText(fs.querySelector('legend, label, span'));
+    if (!label) label = getText(fs);
+    for (var i = 0; i < EEO_MATCHERS.length; i++) {
+      var matcher = EEO_MATCHERS[i];
+      var value = prefs[matcher.prefKey];
+      if (!value) continue;
+      for (var p = 0; p < matcher.patterns.length; p++) {
+        if (matcher.patterns[p].test(label)) {
+          if (clickBestRadio(fs, value)) {
+            filled++;
+            console.log('[Alicia] Auto-filled radio:', label, '->', value);
+          }
+          return;
+        }
+      }
+    }
+  });
+
+  console.log('[Alicia] Auto-fill complete, filled', filled, 'field(s)');
+  chrome.runtime.sendMessage({ type: 'EEO_FILL_RESULT', filled: filled }).catch(function () {});
+}
+
+function tryAutoFillOnApplyPage() {
+  if (!/\/(jobs|apply)/i.test(location.href)) return;
+  var hasEeoForm = document.querySelector('select, fieldset, .jobs-easy-apply-form-section__grouping');
+  if (!hasEeoForm) return;
+  chrome.storage.local.get('eeoPrefs', function (data) {
+    if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) {
+      setTimeout(function () { autoFillEeo(data.eeoPrefs); }, 800);
+    }
+  });
+}
+
+var applyObserver = new MutationObserver(function () {
+  var modal = document.querySelector('.jobs-easy-apply-content, .jobs-apply-form');
+  if (modal) {
+    tryAutoFillOnApplyPage();
+  }
+});
+applyObserver.observe(document.body, { childList: true, subtree: true });

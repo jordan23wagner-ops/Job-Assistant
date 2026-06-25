@@ -19,4 +19,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
   }
+  if (message.type === 'AUTOFILL_EEO') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, message, (response) => {
+          if (chrome.runtime.lastError) {
+            chrome.scripting.executeScript({
+              target: { tabId: tabs[0].id },
+              files: ['content.js']
+            }).then(() => {
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tabs[0].id, message).catch(() => {});
+              }, 500);
+            }).catch(() => {});
+          }
+        });
+      }
+    });
+  }
+  if (message.type === 'EEO_FILL_RESULT') {
+    chrome.runtime.sendMessage(message).catch(() => {});
+  }
 });

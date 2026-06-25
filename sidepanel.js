@@ -1645,6 +1645,140 @@ ivPracticeStart.addEventListener('click', ivStartPractice);
 ivPracticeSend.addEventListener('click', ivSendPractice);
 ivPracticeInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') ivSendPractice(); });
 
+// ========== Job Search ==========
+
+const searchPrefsToggle = document.getElementById('search-prefs-toggle');
+const searchPrefs = document.getElementById('search-prefs');
+const searchRun = document.getElementById('search-run');
+const searchResultsInfo = document.getElementById('search-results-info');
+const searchSavePrefs = document.getElementById('search-save-prefs');
+const searchEasyApply = document.getElementById('search-easy-apply');
+const searchSalary = document.getElementById('search-salary');
+
+function getSearchPrefs() {
+  var roles = [];
+  document.querySelectorAll('#search-roles input:checked').forEach(function (cb) { roles.push(cb.value); });
+  var workTypes = [];
+  document.querySelectorAll('#search-worktype input:checked').forEach(function (cb) { workTypes.push(cb.value); });
+  var contracts = [];
+  document.querySelectorAll('#search-contract input:checked').forEach(function (cb) { contracts.push(cb.value); });
+  return {
+    roles: roles,
+    workTypes: workTypes,
+    easyApply: searchEasyApply.checked,
+    contracts: contracts,
+    minSalary: searchSalary.value
+  };
+}
+
+function applySearchPrefs(prefs) {
+  if (!prefs) return;
+  if (prefs.roles) {
+    document.querySelectorAll('#search-roles input').forEach(function (cb) {
+      cb.checked = prefs.roles.indexOf(cb.value) >= 0;
+    });
+  }
+  if (prefs.workTypes) {
+    document.querySelectorAll('#search-worktype input').forEach(function (cb) {
+      cb.checked = prefs.workTypes.indexOf(cb.value) >= 0;
+    });
+  }
+  if (prefs.contracts) {
+    document.querySelectorAll('#search-contract input').forEach(function (cb) {
+      cb.checked = prefs.contracts.indexOf(cb.value) >= 0;
+    });
+  }
+  if (prefs.easyApply !== undefined) searchEasyApply.checked = prefs.easyApply;
+  if (prefs.minSalary !== undefined) searchSalary.value = prefs.minSalary;
+}
+
+function saveSearchPrefs() {
+  var prefs = getSearchPrefs();
+  chrome.storage.local.set({ searchPrefs: prefs });
+  searchResultsInfo.textContent = 'Preferences saved.';
+  setTimeout(function () { searchResultsInfo.textContent = ''; }, 2000);
+}
+
+function buildLinkedInSearchUrl(role, prefs) {
+  var params = ['keywords=' + encodeURIComponent(role)];
+  if (prefs.easyApply) params.push('f_AL=true');
+  if (prefs.workTypes && prefs.workTypes.length > 0 && prefs.workTypes.length < 3) {
+    params.push('f_WT=' + prefs.workTypes.join('%2C'));
+  }
+  if (prefs.minSalary) {
+    params.push('f_SB2=' + encodeURIComponent(prefs.minSalary));
+  }
+  if (prefs.contracts && prefs.contracts.length > 0) {
+    params.push('f_JT=' + prefs.contracts.map(function (c) { return encodeURIComponent(c); }).join('%2C'));
+  }
+  return 'https://www.linkedin.com/jobs/search/?' + params.join('&');
+}
+
+function runJobSearch() {
+  var prefs = getSearchPrefs();
+  if (prefs.roles.length === 0) {
+    searchResultsInfo.textContent = 'Select at least one role to search for.';
+    return;
+  }
+  var keyword = prefs.roles.join(' OR ');
+  var url = buildLinkedInSearchUrl(keyword, prefs);
+  chrome.tabs.create({ url: url });
+  searchResultsInfo.textContent = 'Opened LinkedIn search for ' + prefs.roles.length + ' role(s) with your filters.';
+}
+
+if (searchPrefsToggle) {
+  searchPrefsToggle.addEventListener('click', function () {
+    searchPrefs.classList.toggle('hidden');
+    searchPrefsToggle.innerHTML = searchPrefs.classList.contains('hidden') ? '&#9881; Filters' : '&#9881; Hide';
+  });
+}
+if (searchSavePrefs) searchSavePrefs.addEventListener('click', saveSearchPrefs);
+if (searchRun) searchRun.addEventListener('click', runJobSearch);
+
+// ========== EEO Auto-Fill ==========
+
+const eeoToggle = document.getElementById('eeo-toggle');
+const eeoForm = document.getElementById('eeo-form');
+const eeoSave = document.getElementById('eeo-save');
+const eeoStatus = document.getElementById('eeo-status');
+
+const EEO_FIELDS = ['eeo-gender', 'eeo-race', 'eeo-veteran', 'eeo-disability', 'eeo-authorization', 'eeo-sponsorship'];
+
+function getEeoPrefs() {
+  var prefs = {};
+  EEO_FIELDS.forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el && el.value) prefs[id] = el.value;
+  });
+  return prefs;
+}
+
+function applyEeoPrefs(prefs) {
+  if (!prefs) return;
+  EEO_FIELDS.forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el && prefs[id]) el.value = prefs[id];
+  });
+}
+
+function saveEeoPrefs() {
+  var prefs = getEeoPrefs();
+  chrome.storage.local.set({ eeoPrefs: prefs });
+  if (eeoStatus) {
+    eeoStatus.textContent = 'Saved! Alicia will auto-fill these when you apply.';
+    eeoStatus.style.color = '#4caf50';
+    setTimeout(function () { eeoStatus.textContent = ''; }, 3000);
+  }
+}
+
+if (eeoToggle) {
+  eeoToggle.addEventListener('click', function () {
+    eeoForm.classList.toggle('hidden');
+    eeoToggle.innerHTML = eeoForm.classList.contains('hidden') ? '&#9998; Edit' : '&#9998; Hide';
+  });
+}
+if (eeoSave) eeoSave.addEventListener('click', saveEeoPrefs);
+
 // Console helper to unlock Premium on a specific install (e.g. yours/your wife's).
 // Open the side panel's DevTools and run: aliciaPremium.enable()
 window.aliciaPremium = {
@@ -1654,7 +1788,7 @@ window.aliciaPremium = {
 };
 
 // Restore theme, saved sessions, tracked jobs, usage, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium'], function (data) {
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
   if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
@@ -1668,6 +1802,8 @@ chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'u
     chatStore = data.liveChat;
     renderChat();
   }
+  if (data.searchPrefs) applySearchPrefs(data.searchPrefs);
+  if (data.eeoPrefs) applyEeoPrefs(data.eeoPrefs);
 });
 
 chatSend.addEventListener('click', sendChat);
