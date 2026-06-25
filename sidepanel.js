@@ -26,15 +26,15 @@ const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 
 async function getApiKey() {
-  const stored = await chrome.storage.local.get('groqApiKey');
+  var stored = await chrome.storage.local.get('groqApiKey');
   if (stored.groqApiKey) {
     groqApiKey = stored.groqApiKey;
     return groqApiKey;
   }
-  const key = prompt('Enter your Groq API key (get one at console.groq.com):');
+  var key = prompt('Enter your Groq API key (get one at console.groq.com):');
   if (key) {
     groqApiKey = key.trim();
-    await chrome.storage.local.set({ groqApiKey });
+    await chrome.storage.local.set({ groqApiKey: groqApiKey });
     return groqApiKey;
   }
   return null;
@@ -53,6 +53,23 @@ function sanitizeText(text) {
     clean += text[i];
   }
   return clean;
+}
+
+function isValidResponse(text) {
+  if (!text || text.length < 10) return false;
+  var letterCount = 0;
+  var totalCount = text.length;
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charCodeAt(i);
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) letterCount++;
+  }
+  if (letterCount / totalCount < 0.3) return false;
+  var repeats = 0;
+  for (var j = 1; j < text.length; j++) {
+    if (text[j] === text[j - 1]) repeats++;
+  }
+  if (repeats / totalCount > 0.5) return false;
+  return true;
 }
 
 async function callGroq(messages, temperature) {
@@ -81,7 +98,28 @@ async function callGroq(messages, temperature) {
   }
 
   var data = await resp.json();
-  return sanitizeText(data.choices[0].message.content);
+  var content = sanitizeText(data.choices[0].message.content);
+
+  if (!isValidResponse(content)) {
+    var resp2 = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: messages,
+        temperature: 0.5,
+        max_tokens: 2048
+      })
+    });
+    if (resp2.ok) {
+      var data2 = await resp2.json();
+      var content2 = sanitizeText(data2.choices[0].message.content);
+      if (isValidResponse(content2)) return content2;
+    }
+    throw new Error('The AI returned an invalid response. Please try again.');
+  }
+
+  return content;
 }
 
 function escapeHtml(str) {
@@ -154,6 +192,7 @@ chrome.runtime.onMessage.addListener(function(message) {
 });
 
 detectBtn.addEventListener('click', function() {
+  currentJob = null;
   jobInfo.innerHTML = '<p class="placeholder">Detecting job...</p>';
   chrome.runtime.sendMessage({ type: 'DETECT_JOB' });
   setTimeout(function() {
@@ -224,7 +263,7 @@ coverBtn.addEventListener('click', async function() {
       userMsg += '\n\nCandidate Resume:\n' + resumeText;
     }
     var msgs = [
-      { role: 'system', content: 'You are Alicia, a job search assistant. Write a compelling, professional cover letter. Keep it concise (3-4 paragraphs). Personalize it based on the job description and resume if provided. Use plain text, no markdown headers.' },
+      { role: 'system', content: 'You are Alicia, a job search assistant. Write a compelling, professional cover letter. Keep it concise (3-4 paragraphs). Personalize it based on the job description and resume if provided. Use plain text paragraphs only, no markdown or special formatting.' },
       { role: 'user', content: userMsg }
     ];
     var result = await callGroq(msgs);
@@ -266,7 +305,7 @@ var TAILORING_STEPS = [
     id: 'generate',
     getPrompt: function(job, resume, prev) {
       return {
-        system: 'You are Alicia. Generate specific resume tailoring suggestions:\n1. **Summary** - tailored statement\n2. **Experience Bullets** - rewritten for this job\n3. **Skills** - prioritized list\n4. **Keywords** - ATS-friendly terms\n\nGive actual text, not generic advice.',
+        system: 'You are Alicia. Generate specific resume tailoring suggestions:\n1. Summary - a tailored professional summary\n2. Experience Bullets - rewritten bullet points for this job\n3. Skills - prioritized skills list\n4. Keywords - ATS-friendly terms to include\n\nProvide actual text the candidate can use, not generic advice.',
         user: 'Job: ' + job.title + ' at ' + job.company + '\n\nDescription: ' + job.description + '\n\nResume: ' + resume + '\n\nRelevant: ' + prev.relevance + '\nSkills: ' + prev.skills_gap + '\nMetrics: ' + prev.achievements
       };
     }
@@ -413,12 +452,15 @@ async function sendChat() {
 }
 
 function buildChatSystemMessage() {
-  var msg = 'You are Alicia, a friendly AI job search assistant. Help with job searching, resume writing, interview prep, and career advice. Be concise and actionable. Use plain language without special symbols.';
+  var msg = 'You are Alicia, a friendly AI job search assistant. Help with job searching, resume writing, interview prep, and career advice. Be concise and actionable. Respond in plain English paragraphs and bullet points only.';
   if (currentJob) {
-    msg += '\n\nCurrent job: ' + currentJob.title + ' at ' + currentJob.company + ' (' + currentJob.location + ').\nDescription: ' + (currentJob.description ? currentJob.description.substring(0, 500) : '');
+    msg += '\n\nCurrent job being viewed: ' + currentJob.title + ' at ' + currentJob.company + ' (' + currentJob.location + ').';
+    if (currentJob.description) {
+      msg += '\nJob description: ' + currentJob.description.substring(0, 500);
+    }
   }
   if (resumeText) {
-    msg += '\n\nResume: ' + resumeText.substring(0, 1000);
+    msg += '\n\nCandidate resume: ' + resumeText.substring(0, 1000);
   }
   return msg;
 }

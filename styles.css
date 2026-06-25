@@ -81,6 +81,8 @@ header h1 {
   max-height: 80px;
   overflow: hidden;
   position: relative;
+  word-spacing: 1px;
+  line-height: 1.6;
 }
 .job-desc::after {
   content: '';
@@ -260,6 +262,8 @@ header h1 {
 .chat-msg {
   margin-bottom: 8px;
   font-size: 13px;
+  line-height: 1.5;
+  word-spacing: 1px;
 }
 .chat-msg.user {
   color: #7c83ff;
@@ -272,6 +276,16 @@ header h1 {
   content: 'Alicia: ';
   font-weight: 600;
   color: #9a9aff;
+}
+.chat-msg p {
+  margin-bottom: 6px;
+}
+.chat-msg ul {
+  padding-left: 16px;
+  margin: 4px 0;
+}
+.chat-msg li {
+  margin-bottom: 3px;
 }
 .chat-input-area {
   display: flex;
