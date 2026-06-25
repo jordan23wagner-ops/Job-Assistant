@@ -55,19 +55,34 @@ function sanitizeText(text) {
   return clean;
 }
 
-// Detects whether a string is mostly non-text (e.g. a PDF/DOCX read as text).
-function looksLikeGarbage(text) {
-  if (!text) return true;
-  var sample = text.substring(0, 3000);
-  if (sample.length === 0) return true;
-  var printable = 0;
-  for (var i = 0; i < sample.length; i++) {
-    var c = sample.charCodeAt(i);
+// Improved quality check for resume text extraction.
+// More tolerant of real resumes while still catching true garbage/binary output.
+function isLowQualityResumeText(text) {
+  if (!text || text.length < 50) return true;
+
+  const sample = text.substring(0, 4000);
+  let letters = 0;
+  let words = 0;
+  let printable = 0;
+
+  const wordRegex = /\b[a-zA-Z]{2,}\b/g;
+  const matches = sample.match(wordRegex);
+  if (matches) words = matches.length;
+
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i);
     if (c === 9 || c === 10 || c === 13) { printable++; continue; }
     if (c >= 32 && c <= 126) { printable++; continue; }
     if (c >= 160 && c <= 255) { printable++; continue; }
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) letters++;
   }
-  return (printable / sample.length) < 0.85;
+
+  const printableRatio = printable / sample.length;
+  const hasEnoughWords = words >= 15;
+  const letterDensity = letters / Math.max(1, sample.length);
+
+  // Only reject clearly unusable extractions
+  return (printableRatio < 0.75 && !hasEnoughWords) || letterDensity < 0.08;
 }
 
 // Loose check for clearly-corrupt AI output so we can retry once.
@@ -251,11 +266,12 @@ async function extractResumeText(file) {
     return await extractDocxText(await file.arrayBuffer());
   }
   if (name.endsWith('.doc')) {
-    throw new Error('The old .doc format is not supported. Please save as .docx, .pdf, or .txt.');
+    throw new Error('The old .doc format is not supported. Please save/export as .docx, .pdf, or paste text.');
   }
   return await file.text();
 }
 
+// Improved resume upload handler with better support for real-world PDFs (including hybrid/scanned)
 resumeUpload.addEventListener('change', async function(e) {
   var file = e.target.files[0];
   if (!file) return;
@@ -266,26 +282,40 @@ resumeUpload.addEventListener('change', async function(e) {
     var text = sanitizeText(await extractResumeText(file));
     text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
-    if (!text || text.length < 30 || looksLikeGarbage(text)) {
-      throw new Error('Could not read text from this file. If it is a scanned or image-based PDF, please upload a text-based PDF, a .docx, or a .txt file.');
+    if (!text || text.length < 40) {
+      throw new Error('Could not extract meaningful text from this file.');
     }
 
+    const isLowQuality = isLowQualityResumeText(text);
+
     resumeText = text;
-    chrome.storage.local.set({ resumeText: resumeText });
-    setResumeStatus('Loaded: ' + file.name, '#4caf50');
+    await chrome.storage.local.set({ resumeText: resumeText });
+
+    if (isLowQuality) {
+      setResumeStatus('Loaded (partial text — may be scanned or image-based)', '#ffaa00');
+      // Show helpful note
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:11px; color:#ffaa00; margin-top:4px; line-height:1.3';
+      note.textContent = 'Tip: For best AI results on scanned PDFs, upload a text-based PDF/DOCX or paste clean text manually.';
+      if (resumeStatus.parentNode) resumeStatus.parentNode.appendChild(note);
+      setTimeout(() => { if (note.parentNode) note.parentNode.removeChild(note); }, 9000);
+    } else {
+      setResumeStatus('Loaded: ' + file.name, '#4caf50');
+    }
+
     updateToolButtons();
   } catch (err) {
-    setResumeStatus(err.message || 'Could not read file', '#ff9955');
+    setResumeStatus(err.message || 'Could not read file', '#ff5555');
   }
 });
 
 chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
   if (data.resumeText) {
-    if (looksLikeGarbage(data.resumeText)) {
-      // Stored resume is corrupt (likely an old binary upload). Clear it.
+    if (isLowQualityResumeText(data.resumeText)) {
+      // Stored resume is low quality (likely old binary/scanned upload). Clear it.
       chrome.storage.local.remove('resumeText');
       resumeText = null;
-      setResumeStatus('Your saved resume was unreadable. Please re-upload it.', '#ff9955');
+      setResumeStatus('Your saved resume was unreadable or low-quality. Please re-upload.', '#ff9955');
     } else {
       resumeText = sanitizeText(data.resumeText);
       setResumeStatus('Resume loaded from storage', '#4caf50');
@@ -435,7 +465,7 @@ async function runTailoringStep() {
       addTailoringQuickOptions(['Start over', 'Adjust suggestions']);
     } else {
       addTailoringMessage(result, 'ai');
-      addTailoringQuickOptions(['All of them', 'Skip this step']);
+      addTailoringQuickOptions(['All of them', 'Skip this step'];
     }
   } catch (err) {
     var lastMsg2 = tailoringConversation.lastElementChild;
@@ -523,17 +553,31 @@ async function sendChat() {
   }
 }
 
+// Enhanced system prompt — makes Alicia a proactive job search coach
 function buildChatSystemMessage() {
-  var msg = 'You are Alicia, a friendly AI job search assistant. Help with job searching, resume writing, interview prep, and career advice. Be concise and actionable. Respond in plain English paragraphs and bullet points only.';
+  let msg = `You are Alicia, an expert, friendly, and honest AI job search coach and career advisor.
+
+Core behaviors:
+- Be concise, actionable, and structured (use short paragraphs + bullets when helpful).
+- When a job is loaded, proactively analyze **fit**: highlight strong matches from the resume, identify gaps, and suggest how to position experience or address weaknesses.
+- Give practical suggestions for applications, networking, LinkedIn outreach, or interview prep.
+- For salary questions: give realistic ranges based on role + location + experience level (use general market knowledge). Be transparent about sources/uncertainty.
+- For company or market questions: share known signals about culture, recent news, hiring trends, or interview process.
+- Always tie advice back to the candidate’s actual resume and the specific job when possible.
+- Be encouraging but never sugarcoat — honesty builds trust.`;
+
   if (currentJob) {
-    msg += '\n\nCurrent job being viewed: ' + currentJob.title + ' at ' + currentJob.company + ' (' + currentJob.location + ').';
+    msg += `\n\nCurrent job context:\nTitle: ${currentJob.title}\nCompany: ${currentJob.company}\nLocation: ${currentJob.location || 'Not specified'}`;
     if (currentJob.description) {
-      msg += '\nJob description: ' + currentJob.description.substring(0, 1500);
+      msg += `\nJob description (first 1200 chars): ${currentJob.description.substring(0, 1200)}`;
     }
   }
+
   if (resumeText) {
-    msg += '\n\nCandidate resume: ' + resumeText.substring(0, 2000);
+    msg += `\n\nCandidate resume (first 1800 chars):\n${resumeText.substring(0, 1800)}`;
   }
+
+  msg += `\n\nRespond helpfully to any job-search related question.`;
   return msg;
 }
 
