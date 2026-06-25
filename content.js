@@ -31,6 +31,27 @@ function trySelectors(selectors, minLen, maxLen) {
   return null;
 }
 
+function isLikelyTitle(text) {
+  if (!text || text.length < 3 || text.length > 200) return false;
+  var lower = text.toLowerCase();
+  var skip = [
+    'linkedin', 'sign in', 'sign up', 'messaging', 'notifications',
+    'my network', 'jobs based on', 'about the job', 'job description',
+    'people also viewed', 'similar jobs', 'you might like',
+    'premium', 'try premium', 'reactivate', 'home', 'search',
+    'show more', 'see more', 'apply', 'save', 'share',
+    'report', 'hide', 'dismiss', 'follow', 'connect',
+    'date posted', 'easy apply', 'applicants', 'in my network',
+    'jobs', 'ai-powered', 'description', 'how promoted'
+  ];
+  for (var i = 0; i < skip.length; i++) {
+    if (lower === skip[i] || lower.indexOf(skip[i]) === 0) return false;
+  }
+  if (/^\d+\s*(notification|message|connection|result|job)/i.test(text)) return false;
+  if (/^\d+$/.test(text.trim())) return false;
+  return true;
+}
+
 function expandJobDescription() {
   try {
     var allButtons = document.querySelectorAll('button, [role="button"]');
@@ -66,41 +87,23 @@ function getJobTitle() {
     'h2.top-card-layout__title',
     '.t-24.t-bold.inline'
   ], 3, 200);
-  if (title) { console.log('[Alicia] Title found via selector:', title); return title; }
+  if (title && isLikelyTitle(title)) {
+    console.log('[Alicia] Title found via selector:', title);
+    return title;
+  }
 
   try {
     var companyLink = document.querySelector('a[href*="/company/"]');
     if (companyLink) {
-      var card = companyLink.closest('[class*="top-card"], [class*="topcard"], [class*="job-details"], section, article');
-      if (card) {
-        var headings = card.querySelectorAll('h1, h2, h3');
+      var companyText = getText(companyLink);
+      var parent = companyLink.parentElement;
+      for (var up = 0; up < 8 && parent; up++) {
+        var headings = parent.querySelectorAll('h1, h2, h3, a[class*="title"], [class*="job-title"], [class*="job_title"]');
         for (var h = 0; h < headings.length; h++) {
           var ht = getText(headings[h]);
-          if (ht.length > 2 && ht.length < 200 && ht !== getText(companyLink)) {
-            console.log('[Alicia] Title found near company link:', ht);
+          if (isLikelyTitle(ht) && ht !== companyText) {
+            console.log('[Alicia] Title found near company (up ' + up + '):', ht);
             return ht;
-          }
-        }
-        var links = card.querySelectorAll('a');
-        for (var l = 0; l < links.length; l++) {
-          if (links[l] === companyLink) continue;
-          if (links[l].href && links[l].href.includes('/company/')) continue;
-          var lt = getText(links[l]);
-          if (lt.length > 3 && lt.length < 200 && lt !== getText(companyLink)) {
-            console.log('[Alicia] Title found via link near company:', lt);
-            return lt;
-          }
-        }
-      }
-
-      var parent = companyLink.parentElement;
-      for (var up = 0; up < 5 && parent; up++) {
-        var headingsUp = parent.querySelectorAll('h1, h2, h3');
-        for (var h2 = 0; h2 < headingsUp.length; h2++) {
-          var ht2 = getText(headingsUp[h2]);
-          if (ht2.length > 2 && ht2.length < 200 && ht2 !== getText(companyLink)) {
-            console.log('[Alicia] Title found walking up from company:', ht2);
-            return ht2;
           }
         }
         parent = parent.parentElement;
@@ -114,18 +117,25 @@ function getJobTitle() {
       var els = document.querySelectorAll(headingTags[ti]);
       for (var i = 0; i < els.length; i++) {
         var t = getText(els[i]);
-        if (t.length > 3 && t.length < 200) {
-          if (t.indexOf('LinkedIn') !== -1) continue;
-          if (t.indexOf('Sign') !== -1) continue;
-          if (t === 'Jobs' || t === 'Messaging' || t === 'Notifications') continue;
-          if (t.indexOf('Jobs based on') !== -1) continue;
-          if (t.indexOf('people also viewed') !== -1) continue;
-          if (t === 'About the job') continue;
-          var inSidebar = els[i].closest('.jobs-search__left-rail, .scaffold-layout__list');
+        if (isLikelyTitle(t)) {
+          var inSidebar = els[i].closest('.jobs-search__left-rail, .scaffold-layout__list, nav, header[class*="global"]');
           if (!inSidebar) {
             console.log('[Alicia] Title found via ' + headingTags[ti] + ' scan:', t);
             return t;
           }
+        }
+      }
+    } catch (e) {}
+  }
+
+  for (var ti2 = 0; ti2 < headingTags.length; ti2++) {
+    try {
+      var els2 = document.querySelectorAll(headingTags[ti2]);
+      for (var i2 = 0; i2 < els2.length; i2++) {
+        var t2 = getText(els2[i2]);
+        if (isLikelyTitle(t2)) {
+          console.log('[Alicia] Title found via last-resort ' + headingTags[ti2] + ':', t2);
+          return t2;
         }
       }
     } catch (e) {}
@@ -191,7 +201,7 @@ function getLocation() {
         for (var s = 0; s < spans.length; s++) {
           var st = getText(spans[s]);
           if (st.length > 2 && st.length < 80) {
-            if (/\b(Remote|Hybrid|On-site|United States|Houston|Texas|TX|CA|NY|India|Canada)\b/i.test(st)) {
+            if (/\b(Remote|Hybrid|On-site|United States|Houston|Texas|TX|CA|NY|India|Canada|UK|Germany|Australia)\b/i.test(st)) {
               console.log('[Alicia] Location found near company:', st);
               return st;
             }
@@ -244,17 +254,6 @@ function getDescription() {
             if (cleaned.length > 50) {
               console.log('[Alicia] Description found in section, length:', cleaned.length);
               return cleaned;
-            }
-          }
-        }
-        var parent = allEls[j].parentElement;
-        if (parent) {
-          var pt = getText(parent);
-          if (pt.length > 80) {
-            var cleaned2 = pt.replace(elText, '').trim();
-            if (cleaned2.length > 50) {
-              console.log('[Alicia] Description found in parent, length:', cleaned2.length);
-              return cleaned2;
             }
           }
         }
