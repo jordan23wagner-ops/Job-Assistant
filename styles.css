@@ -132,7 +132,7 @@ header h1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 8px;
 }
 .upload-label {
   color: #7c83ff;
@@ -143,9 +143,16 @@ header h1 {
 .upload-label:hover {
   color: #9a9aff;
 }
+#resume-upload {
+  font-size: 11px;
+  color: #888;
+  max-width: 160px;
+}
 .resume-status {
   font-size: 11px;
   color: #4caf50;
+  display: block;
+  margin-top: 4px;
 }
 .hidden {
   display: none;

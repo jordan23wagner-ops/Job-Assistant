@@ -7,7 +7,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'DETECT_JOB') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        chrome.tabs.sendMessage(tabs[0].id, { type: 'DETECT_JOB' }).catch(() => {});
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'DETECT_JOB' }, (response) => {
+          if (chrome.runtime.lastError) {
+            console.log('Content script not ready, injecting...');
+            chrome.scripting.executeScript({
+              target: { tabId: tabs[0].id },
+              files: ['content.js']
+            }).catch(() => {});
+          }
+        });
       }
     });
   }

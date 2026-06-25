@@ -31,7 +31,7 @@ async function getApiKey() {
     groqApiKey = stored.groqApiKey;
     return groqApiKey;
   }
-  const key = prompt('Enter your Groq API key:');
+  const key = prompt('Enter your Groq API key (get one at console.groq.com):');
   if (key) {
     groqApiKey = key.trim();
     await chrome.storage.local.set({ groqApiKey });
@@ -42,7 +42,7 @@ async function getApiKey() {
 
 async function callGroq(messages, temperature = 0.7) {
   const key = groqApiKey || await getApiKey();
-  if (!key) throw new Error('No API key');
+  if (!key) throw new Error('No API key provided. Click any AI feature to set your Groq API key.');
 
   const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -56,8 +56,13 @@ async function callGroq(messages, temperature = 0.7) {
   });
 
   if (!resp.ok) {
+    if (resp.status === 401) {
+      groqApiKey = null;
+      await chrome.storage.local.remove('groqApiKey');
+      throw new Error('Invalid API key. Click any AI feature to re-enter your key.');
+    }
     const err = await resp.text();
-    throw new Error(`Groq API error: ${resp.status} - ${err}`);
+    throw new Error(`Groq API error: ${resp.status}`);
   }
 
   const data = await resp.json();
@@ -92,9 +97,7 @@ function displayJob(job) {
     html += `<div class="job-desc">${escapeHtml(preview)}...</div>`;
   }
   jobInfo.innerHTML = html;
-  analyzeBtn.disabled = false;
-  tailorBtn.disabled = !resumeText;
-  coverBtn.disabled = false;
+  updateToolButtons();
 }
 
 function updateToolButtons() {
@@ -110,7 +113,13 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 detectBtn.addEventListener('click', () => {
+  jobInfo.innerHTML = '<p class="placeholder">Detecting job...</p>';
   chrome.runtime.sendMessage({ type: 'DETECT_JOB' });
+  setTimeout(() => {
+    if (!currentJob) {
+      jobInfo.innerHTML = '<p class="placeholder">No job found. Make sure you\'re on a LinkedIn job posting page and try again.</p>';
+    }
+  }, 5000);
 });
 
 resumeUpload.addEventListener('change', (e) => {
@@ -119,9 +128,12 @@ resumeUpload.addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = (ev) => {
     resumeText = ev.target.result;
-    resumeStatus.textContent = `✓ ${file.name}`;
+    resumeStatus.textContent = `Loaded: ${file.name}`;
     chrome.storage.local.set({ resumeText });
     updateToolButtons();
+  };
+  reader.onerror = () => {
+    resumeStatus.textContent = 'Error reading file';
   };
   reader.readAsText(file);
 });
@@ -129,13 +141,15 @@ resumeUpload.addEventListener('change', (e) => {
 chrome.storage.local.get(['resumeText', 'groqApiKey'], (data) => {
   if (data.resumeText) {
     resumeText = data.resumeText;
-    resumeStatus.textContent = '✓ Resume loaded';
+    resumeStatus.textContent = 'Resume loaded from storage';
     updateToolButtons();
   }
   if (data.groqApiKey) {
     groqApiKey = data.groqApiKey;
   }
 });
+
+// --- Analyze Job ---
 
 analyzeBtn.addEventListener('click', async () => {
   if (!currentJob) return;
@@ -159,6 +173,8 @@ closeAnalysis.addEventListener('click', () => {
   analysisSection.classList.add('hidden');
 });
 
+// --- Cover Letter ---
+
 coverBtn.addEventListener('click', async () => {
   if (!currentJob) return;
   analysisTitle.textContent = 'Cover Letter';
@@ -166,14 +182,13 @@ coverBtn.addEventListener('click', async () => {
   analysisSection.classList.remove('hidden');
 
   try {
-    let prompt = `Write a professional cover letter for the following job:\n\nJob Title: ${currentJob.title}\nCompany: ${currentJob.company}\nLocation: ${currentJob.location}\n\nJob Description:\n${currentJob.description}`;
+    let userMsg = `Write a professional cover letter for:\n\nJob Title: ${currentJob.title}\nCompany: ${currentJob.company}\nLocation: ${currentJob.location}\n\nJob Description:\n${currentJob.description}`;
     if (resumeText) {
-      prompt += `\n\nCandidate's Resume:\n${resumeText}`;
+      userMsg += `\n\nCandidate's Resume:\n${resumeText}`;
     }
-
     const messages = [
       { role: 'system', content: 'You are Alicia, a job search assistant. Write a compelling, professional cover letter. Keep it concise (3-4 paragraphs). Personalize it based on the job description and resume if provided.' },
-      { role: 'user', content: prompt }
+      { role: 'user', content: userMsg }
     ];
     const result = await callGroq(messages);
     analysisContent.innerHTML = formatAnalysis(result);
@@ -182,33 +197,35 @@ coverBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Interactive Resume Tailoring ---
+
 const TAILORING_STEPS = [
   {
     id: 'relevance',
     getPrompt: (job, resume) => ({
-      system: `You are Alicia, an expert resume tailoring assistant. Analyze the job and resume, then ask which experiences are MOST relevant. List 3-5 specific items from their resume as options, noting why each could be relevant. End with: "Which are most relevant? (pick all, or tell me about other experience)"`,
+      system: 'You are Alicia, an expert resume tailoring assistant. Analyze the job and resume, then ask which experiences are MOST relevant. List 3-5 specific items from their resume as numbered options, noting why each could be relevant. End with: "Which are most relevant? (pick all, or tell me about other experience)"',
       user: `Job: ${job.title} at ${job.company}\n\nDescription: ${job.description}\n\nResume:\n${resume}`
     })
   },
   {
     id: 'skills_gap',
-    getPrompt: (job, resume, prevAnswers) => ({
-      system: `You are Alicia, an expert resume tailoring assistant. Based on job requirements and their selected experiences, identify 2-3 skills from the job posting not clearly shown. Ask if they have unlisted experience or something similar. Present as numbered questions. Be encouraging.`,
-      user: `Job: ${job.title} at ${job.company}\n\nDescription: ${job.description}\n\nResume: ${resume}\n\nThey said: ${prevAnswers.relevance}`
+    getPrompt: (job, resume, prev) => ({
+      system: 'You are Alicia, an expert resume tailoring assistant. Identify 2-3 skills from the job posting not clearly shown in the resume. Ask if they have unlisted experience. Present as numbered questions. Be encouraging.',
+      user: `Job: ${job.title} at ${job.company}\n\nDescription: ${job.description}\n\nResume: ${resume}\n\nThey said: ${prev.relevance}`
     })
   },
   {
     id: 'achievements',
-    getPrompt: (job, resume, prevAnswers) => ({
-      system: `You are Alicia, an expert resume tailoring assistant. Ask about quantifiable achievements for their relevant experiences. For each, suggest metrics ("How many users?", "What % improvement?"). Ask 2-3 questions. If no metrics, suggest impact alternatives.`,
-      user: `Job: ${job.title}\n\nRelevant: ${prevAnswers.relevance}\nSkills: ${prevAnswers.skills_gap}\n\nResume: ${resume}`
+    getPrompt: (job, resume, prev) => ({
+      system: 'You are Alicia, an expert resume tailoring assistant. Ask about quantifiable achievements. For each experience, suggest metrics ("How many users?", "What % improvement?"). Ask 2-3 questions.',
+      user: `Job: ${job.title}\n\nRelevant: ${prev.relevance}\nSkills: ${prev.skills_gap}\n\nResume: ${resume}`
     })
   },
   {
     id: 'generate',
-    getPrompt: (job, resume, prevAnswers) => ({
-      system: `You are Alicia. Generate specific, actionable resume tailoring. Format as:\n1. **Summary** - tailored statement\n2. **Experience Bullets** - rewritten for this job\n3. **Skills** - prioritized list\n4. **Keywords** - ATS-friendly terms\n\nGive actual text, not generic advice.`,
-      user: `Job: ${job.title} at ${job.company}\n\nDescription: ${job.description}\n\nResume: ${resume}\n\nRelevant: ${prevAnswers.relevance}\nSkills: ${prevAnswers.skills_gap}\nMetrics: ${prevAnswers.achievements}`
+    getPrompt: (job, resume, prev) => ({
+      system: 'You are Alicia. Generate specific resume tailoring suggestions:\n1. **Summary** - tailored statement\n2. **Experience Bullets** - rewritten for this job\n3. **Skills** - prioritized list\n4. **Keywords** - ATS-friendly terms\n\nGive actual text, not generic advice.',
+      user: `Job: ${job.title} at ${job.company}\n\nDescription: ${job.description}\n\nResume: ${resume}\n\nRelevant: ${prev.relevance}\nSkills: ${prev.skills_gap}\nMetrics: ${prev.achievements}`
     })
   }
 ];
@@ -265,7 +282,6 @@ async function runTailoringStep() {
 
     if (step.id === 'generate') {
       addTailoringMessage(result, 'final');
-      clearTailoringOptions();
       addTailoringQuickOptions(['Start over', 'Adjust suggestions']);
     } else {
       addTailoringMessage(result, 'ai');
@@ -282,25 +298,18 @@ async function handleTailoringResponse(response) {
   addTailoringMessage(response, 'user');
   clearTailoringOptions();
 
-  const step = TAILORING_STEPS[tailoringState.step];
-
-  if (response === 'Start over') {
-    await startTailoring();
-    return;
-  }
-
+  if (response === 'Start over') { await startTailoring(); return; }
   if (response === 'Adjust suggestions') {
     tailoringState.step = 2;
-    addTailoringMessage("What would you like to adjust? Tell me what to change.", 'ai');
+    addTailoringMessage("What would you like to adjust?", 'ai');
     return;
   }
 
+  const step = TAILORING_STEPS[tailoringState.step];
   if (step) tailoringState.answers[step.id] = response;
   tailoringState.step++;
 
-  if (tailoringState.step < TAILORING_STEPS.length) {
-    await runTailoringStep();
-  } else {
+  if (tailoringState.step <= TAILORING_STEPS.length - 1) {
     await runTailoringStep();
   }
 }
@@ -312,19 +321,13 @@ tailorBtn.addEventListener('click', () => {
 
 tailoringSend.addEventListener('click', () => {
   const val = tailoringInput.value.trim();
-  if (val) {
-    tailoringInput.value = '';
-    handleTailoringResponse(val);
-  }
+  if (val) { tailoringInput.value = ''; handleTailoringResponse(val); }
 });
 
 tailoringInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     const val = tailoringInput.value.trim();
-    if (val) {
-      tailoringInput.value = '';
-      handleTailoringResponse(val);
-    }
+    if (val) { tailoringInput.value = ''; handleTailoringResponse(val); }
   }
 });
 
@@ -333,14 +336,12 @@ closeTailoring.addEventListener('click', () => {
   tailoringState = null;
 });
 
+// --- Chat ---
+
 function addChatMessage(text, role) {
   const div = document.createElement('div');
   div.className = `chat-msg ${role}`;
-  if (role === 'ai') {
-    div.innerHTML = formatAnalysis(text);
-  } else {
-    div.textContent = text;
-  }
+  div.innerHTML = role === 'ai' ? formatAnalysis(text) : escapeHtml(text);
   chatMessages.appendChild(div);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 }
@@ -363,9 +364,7 @@ async function sendChat() {
     chatMessages.lastElementChild.remove();
     addChatMessage(result, 'ai');
     chatHistory.push({ role: 'assistant', content: result });
-    if (chatHistory.length > 20) {
-      chatHistory = chatHistory.slice(-16);
-    }
+    if (chatHistory.length > 20) chatHistory = chatHistory.slice(-16);
   } catch (err) {
     chatMessages.lastElementChild.remove();
     addChatMessage(`Error: ${err.message}`, 'ai');
@@ -375,10 +374,10 @@ async function sendChat() {
 function buildChatSystemMessage() {
   let msg = 'You are Alicia, a friendly AI job search assistant. Help with job searching, resume writing, interview prep, and career advice. Be concise and actionable.';
   if (currentJob) {
-    msg += `\n\nCurrent job: ${currentJob.title} at ${currentJob.company} (${currentJob.location}). Description: ${currentJob.description?.substring(0, 300)}`;
+    msg += `\n\nCurrent job: ${currentJob.title} at ${currentJob.company} (${currentJob.location}).\nDescription: ${currentJob.description?.substring(0, 500)}`;
   }
   if (resumeText) {
-    msg += `\n\nResume: ${resumeText.substring(0, 800)}`;
+    msg += `\n\nResume: ${resumeText.substring(0, 1000)}`;
   }
   return msg;
 }
