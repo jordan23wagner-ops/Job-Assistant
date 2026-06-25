@@ -10,7 +10,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v0.3.2</p>
+      <p class="subtitle">Job Assistant v0.4.0</p>
     </header>
 
     <section id="job-section" class="section">
@@ -31,8 +31,8 @@
         <button id="cover-btn" class="tool-btn" disabled>Cover Letter</button>
       </div>
       <div class="upload-area">
-        <label for="resume-upload" class="upload-label">Upload Resume (.txt)</label>
-        <input type="file" id="resume-upload" accept=".txt">
+        <label for="resume-upload" class="upload-label">Upload Resume (.pdf, .docx, .txt)</label>
+        <input type="file" id="resume-upload" accept=".txt,.pdf,.docx">
         <span id="resume-status" class="resume-status"></span>
       </div>
     </section>
@@ -69,6 +69,7 @@
       </div>
     </section>
   </div>
+  <script src="parsers.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
