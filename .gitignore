@@ -1,0 +1,15 @@
+# Chrome Web Store screenshots and promo images (kept locally, not in repo)
+Screenshot*.png
+resized-*.png
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Packaging artifacts
+*.zip
+*.crx
+*.pem
