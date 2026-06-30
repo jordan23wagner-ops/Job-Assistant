@@ -1901,6 +1901,22 @@ const peopleResults = document.getElementById('people-results');
 let findingPeople = false;
 let peopleTimeout = null;
 
+// LinkedIn connection-note limit. The model can't reliably count characters, so we enforce
+// this in code (clean trim + textarea maxlength), not by trusting the prompt.
+const OUTREACH_LIMIT = 300;
+
+// Trim a message to <= limit without cutting mid-word: prefer a sentence boundary, else the
+// last whole word.
+function enforceLimit(msg, limit) {
+  msg = (msg || '').trim();
+  if (msg.length <= limit) return msg;
+  var cut = msg.slice(0, limit);
+  var lastPunct = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (lastPunct > limit * 0.6) return cut.slice(0, lastPunct + 1).trim();
+  var lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trim();
+}
+
 function startFindPeople() {
   if (findingPeople) return;
   findingPeople = true;
@@ -1974,12 +1990,12 @@ async function draftOutreach(person, btn, msgWrap) {
   try {
     var company = (currentJob && currentJob.company) || '';
     var role = (currentJob && currentJob.title) || 'the role';
-    var sys = 'You write short, warm, professional LinkedIn outreach messages for a job seeker contacting someone on a company hiring team. Under 280 characters (LinkedIn connection-note limit). Specific and genuine: name the role and ONE relevant strength from the candidate background. No cliches like "I hope this finds you well", no hashtags, no emojis. Output ONLY the message text, nothing else.';
+    var sys = 'You write short, warm, professional LinkedIn outreach messages for a job seeker contacting someone on a company hiring team. Write only 1-2 SHORT sentences. Aim for about 250 characters and NEVER exceed 300 — brevity is essential. Be specific and genuine: name the role and ONE relevant strength from the candidate background. No cliches like "I hope this finds you well", no hashtags, no emojis. Output ONLY the message text, nothing else.';
     var user = 'CANDIDATE BACKGROUND:\n' + resumeText.slice(0, 2500) +
       '\n\nREACHING OUT TO: ' + person.name + (person.title ? ', ' + person.title : '') + (company ? ' at ' + company : '') +
       '\nROLE THEY ARE HIRING FOR: ' + role + '\n\nWrite the message.';
     var msg = await callGroq([{ role: 'system', content: sys }, { role: 'user', content: user }], 0.6, 512);
-    msg = msg.trim().replace(/^["']|["']$/g, '');
+    msg = enforceLimit(msg.trim().replace(/^["']|["']$/g, ''), OUTREACH_LIMIT);
     renderOutreach(msgWrap, msg);
   } catch (e) {
     console.log('[Alicia] outreach error', e);
@@ -1991,15 +2007,27 @@ async function draftOutreach(person, btn, msgWrap) {
 
 function renderOutreach(msgWrap, msg) {
   msgWrap.innerHTML = '';
-  var box = document.createElement('div'); box.className = 'person-msg-text'; box.textContent = msg;
-  msgWrap.appendChild(box);
+  // Editable so the user can tweak before copying; maxlength hard-caps it at the limit.
+  var ta = document.createElement('textarea');
+  ta.className = 'person-msg-text';
+  ta.maxLength = OUTREACH_LIMIT;
+  ta.rows = 3;
+  ta.value = msg;
+  msgWrap.appendChild(ta);
+
   var actions = document.createElement('div'); actions.className = 'person-msg-actions';
   var len = document.createElement('span'); len.className = 'person-msg-len';
-  len.textContent = msg.length + ' chars';
-  if (msg.length > 280) len.style.color = '#c0564b';
+  function updateLen() {
+    var n = ta.value.length;
+    len.textContent = n + ' / ' + OUTREACH_LIMIT;
+    len.style.color = n >= OUTREACH_LIMIT ? '#c0564b' : '';
+  }
+  ta.addEventListener('input', updateLen);
+  updateLen();
+
   var copy = document.createElement('button'); copy.className = 'btn-small'; copy.textContent = 'Copy';
   copy.addEventListener('click', function () {
-    navigator.clipboard.writeText(msg).then(function () {
+    navigator.clipboard.writeText(ta.value).then(function () {
       copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500);
     }).catch(function () {});
   });

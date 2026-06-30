@@ -1179,14 +1179,23 @@ header h1 {
   margin-top: 8px;
 }
 .person-msg-text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px;
   font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
   color: var(--text);
-  white-space: pre-wrap;
-  word-break: break-word;
+  resize: vertical;
+  min-height: 64px;
+}
+.person-msg-text:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 .person-msg-actions {
   display: flex;
