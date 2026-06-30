@@ -1075,3 +1075,60 @@ header h1 {
 .eeo-status-saved {
   color: #4caf50;
 }
+
+/* ---------- Scan & Rank (auto-pull + AI fit-filter) ---------- */
+.scan-results {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scan-job {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.scan-job-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.scan-score {
+  flex: 0 0 auto;
+  min-width: 26px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  border-radius: 6px;
+  padding: 2px 6px;
+  line-height: 1.4;
+}
+.scan-job-title-wrap {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.scan-job-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  text-decoration: none;
+  word-break: break-word;
+}
+.scan-job-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.scan-job-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+.scan-job-reason {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 5px;
+  font-style: italic;
+}

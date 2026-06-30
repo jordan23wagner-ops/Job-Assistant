@@ -1779,6 +1779,120 @@ if (searchPrefsToggle) {
 if (searchSavePrefs) searchSavePrefs.addEventListener('click', saveSearchPrefs);
 if (searchRun) searchRun.addEventListener('click', runJobSearch);
 
+// ----- Auto-pull + AI fit-filter: scan the job cards on a LinkedIn search page, then rank
+// every job by how well it fits the saved resume (free Ollama backend). Best matches first. -----
+const scanRankBtn = document.getElementById('scan-rank-btn');
+const scanResults = document.getElementById('scan-results');
+let scanning = false;
+let scanTimeout = null;
+
+function setScanInfo(msg) { if (searchResultsInfo) searchResultsInfo.textContent = msg || ''; }
+
+function startScan() {
+  if (scanning) return;
+  if (!resumeText) { setScanInfo('Add your resume first so Alicia can rank jobs by fit.'); return; }
+  scanning = true;
+  if (scanResults) scanResults.innerHTML = '';
+  if (scanRankBtn) scanRankBtn.disabled = true;
+  setScanInfo('Scanning jobs on this page…');
+  // Bail out if we're not on a results page (no content script answers).
+  scanTimeout = setTimeout(function () {
+    if (scanning) { scanning = false; if (scanRankBtn) scanRankBtn.disabled = false;
+      setScanInfo('No jobs found. Open a LinkedIn Jobs search page, then scan.'); }
+  }, 8000);
+  chrome.runtime.sendMessage({ type: 'SCAN_JOBS' }).catch(function () {});
+}
+
+async function handleScannedJobs(jobs) {
+  if (!scanning) return;
+  clearTimeout(scanTimeout);
+  if (!jobs || !jobs.length) {
+    scanning = false; if (scanRankBtn) scanRankBtn.disabled = false;
+    setScanInfo('No job cards found here. Make sure you are on a LinkedIn Jobs search results page.');
+    return;
+  }
+  setScanInfo('Found ' + jobs.length + ' jobs. Ranking by fit to your resume…');
+  try {
+    var ranked = await rankScannedJobs(jobs);
+    renderRankedJobs(ranked);
+    setScanInfo('Ranked ' + ranked.length + ' jobs by fit — best matches first.');
+  } catch (e) {
+    console.log('[Alicia] rank error', e);
+    setScanInfo('Could not rank these jobs. Please try again.');
+  } finally {
+    scanning = false; if (scanRankBtn) scanRankBtn.disabled = false;
+  }
+}
+
+async function rankScannedJobs(jobs) {
+  var list = jobs.map(function (j, i) {
+    return i + '. ' + j.title + ' — ' + (j.company || '?') + ' — ' + (j.location || '?');
+  }).join('\n');
+  var sys = 'You are a job-fit screener. Given the candidate resume and a numbered list of job postings (title — company — location only), rate how well each fits the candidate\'s field, seniority, and location. Respond ONLY with a JSON array, one object per job, same order and indices: [{"i":<index>,"score":<0-100>,"reason":"<max 12 words>"}]. No prose, no markdown fences.';
+  var user = 'RESUME:\n' + resumeText.slice(0, 4000) + '\n\nJOBS:\n' + list;
+  var raw = await callGroq([{ role: 'system', content: sys }, { role: 'user', content: user }], 0.2, 2048);
+  var clean = raw.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+  var scores;
+  try { scores = JSON.parse(clean); }
+  catch (e) { var m = clean.match(/\[[\s\S]*\]/); scores = m ? JSON.parse(m[0]) : []; }
+  var byIndex = {};
+  scores.forEach(function (s) { if (s && typeof s.i === 'number') byIndex[s.i] = s; });
+  var merged = jobs.map(function (j, i) {
+    var s = byIndex[i] || {};
+    return { title: j.title, company: j.company, location: j.location, url: j.url,
+             score: typeof s.score === 'number' ? s.score : 0, reason: s.reason || '' };
+  });
+  merged.sort(function (a, b) { return b.score - a.score; });
+  return merged;
+}
+
+function scoreColor(score) {
+  if (score >= 75) return '#4caf50';
+  if (score >= 50) return '#e0a800';
+  return '#c0564b';
+}
+
+function renderRankedJobs(ranked) {
+  if (!scanResults) return;
+  scanResults.innerHTML = '';
+  ranked.forEach(function (j) {
+    var row = document.createElement('div');
+    row.className = 'scan-job';
+    var head = document.createElement('div');
+    head.className = 'scan-job-head';
+    var badge = document.createElement('span');
+    badge.className = 'scan-score';
+    badge.textContent = j.score;
+    badge.style.background = scoreColor(j.score);
+    head.appendChild(badge);
+    var titleWrap = document.createElement('div');
+    titleWrap.className = 'scan-job-title-wrap';
+    var a = document.createElement('a');
+    a.className = 'scan-job-title';
+    a.textContent = j.title;
+    if (j.url) { a.href = j.url; a.target = '_blank'; a.rel = 'noopener'; }
+    titleWrap.appendChild(a);
+    var meta = document.createElement('div');
+    meta.className = 'scan-job-meta';
+    meta.textContent = [j.company, j.location].filter(Boolean).join(' · ');
+    titleWrap.appendChild(meta);
+    head.appendChild(titleWrap);
+    row.appendChild(head);
+    if (j.reason) {
+      var reason = document.createElement('div');
+      reason.className = 'scan-job-reason';
+      reason.textContent = j.reason;
+      row.appendChild(reason);
+    }
+    scanResults.appendChild(row);
+  });
+}
+
+if (scanRankBtn) scanRankBtn.addEventListener('click', startScan);
+chrome.runtime.onMessage.addListener(function (message) {
+  if (message.type === 'JOBS_SCANNED') handleScannedJobs(message.jobs);
+});
+
 // ========== EEO Auto-Fill ==========
 
 const eeoToggle = document.getElementById('eeo-toggle');

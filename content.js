@@ -279,6 +279,58 @@ function detectJob() {
   return false;
 }
 
+// ========== Scrape the job-search RESULTS LIST (for auto-pull + AI fit-filter) ==========
+
+function getCardText(card, selectors) {
+  for (var i = 0; i < selectors.length; i++) {
+    try {
+      var el = card.querySelector(selectors[i]);
+      if (el) { var t = getText(el); if (t) return t; }
+    } catch (e) {}
+  }
+  return '';
+}
+
+// Read the visible job cards on a /jobs/search results page into a lightweight list.
+// LinkedIn churns these class names often, so every field has ordered fallbacks.
+function scrapeJobList() {
+  var nodes = document.querySelectorAll(
+    'li.scaffold-layout__list-item, li.jobs-search-results__list-item, div.job-card-container, [data-occludable-job-id], [data-job-id]'
+  );
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < nodes.length; i++) {
+    var card = nodes[i];
+    var jobId = card.getAttribute('data-occludable-job-id') || card.getAttribute('data-job-id') || '';
+    var link = card.querySelector('a.job-card-container__link, a.job-card-list__title--link, a[href*="/jobs/view/"]');
+    var url = link && link.href ? link.href.split('?')[0] : '';
+    if (!jobId && url) { var m = url.match(/\/jobs\/view\/(\d+)/); if (m) jobId = m[1]; }
+    var key = jobId || url;
+    if (!key || seen[key]) continue;
+
+    var title = getCardText(card, [
+      '.job-card-list__title--link', '.job-card-list__title',
+      'a.job-card-container__link span[aria-hidden="true"]',
+      'a.job-card-container__link', '.artdeco-entity-lockup__title'
+    ]);
+    if (!title) continue;
+    var company = getCardText(card, [
+      '.job-card-container__primary-description', '.job-card-container__company-name',
+      '.artdeco-entity-lockup__subtitle'
+    ]);
+    var location = getCardText(card, [
+      '.job-card-container__metadata-item', '.artdeco-entity-lockup__caption'
+    ]);
+    if (!url && jobId) url = 'https://www.linkedin.com/jobs/view/' + jobId + '/';
+
+    seen[key] = true;
+    out.push({ title: title, company: company, location: location, url: url });
+    if (out.length >= 40) break;
+  }
+  console.log('[Alicia] Scraped', out.length, 'job cards from list');
+  return out;
+}
+
 setTimeout(function() {
   expandJobDescription();
   setTimeout(function() {
@@ -311,6 +363,11 @@ chrome.runtime.onMessage.addListener(function(message) {
       expandJobDescription();
       setTimeout(detectJob, 800);
     }, 500);
+  }
+  if (message.type === 'SCAN_JOBS') {
+    console.log('[Alicia] Scan jobs triggered');
+    var jobs = scrapeJobList();
+    chrome.runtime.sendMessage({ type: 'JOBS_SCANNED', jobs: jobs }).catch(function() {});
   }
   if (message.type === 'AUTOFILL_EEO') {
     console.log('[Alicia] Auto-fill EEO triggered (manual)');

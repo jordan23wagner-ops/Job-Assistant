@@ -19,6 +19,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
   }
+  if (message.type === 'SCAN_JOBS') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'SCAN_JOBS' }, (response) => {
+          if (chrome.runtime.lastError) {
+            chrome.scripting.executeScript({
+              target: { tabId: tabs[0].id },
+              files: ['content.js']
+            }).then(() => {
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tabs[0].id, { type: 'SCAN_JOBS' }).catch(() => {});
+              }, 600);
+            }).catch(() => {});
+          }
+        });
+      }
+    });
+  }
   if (message.type === 'AUTOFILL_EEO') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
