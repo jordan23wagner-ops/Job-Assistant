@@ -2050,6 +2050,7 @@ const eeoFillNow = document.getElementById('eeo-fill-now');
 const eeoFillStatus = document.getElementById('eeo-fill-status');
 
 const EEO_FIELDS = ['eeo-gender', 'eeo-race', 'eeo-veteran', 'eeo-disability', 'eeo-authorization', 'eeo-sponsorship'];
+const PROFILE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'city', 'state', 'zip', 'linkedin', 'website'];
 
 function getEeoPrefs() {
   var prefs = {};
@@ -2068,9 +2069,25 @@ function applyEeoPrefs(prefs) {
   });
 }
 
+function getProfile() {
+  var p = {};
+  PROFILE_FIELDS.forEach(function (k) {
+    var el = document.getElementById('pf-' + k);
+    if (el && el.value.trim()) p[k] = el.value.trim();
+  });
+  return p;
+}
+
+function applyProfile(p) {
+  if (!p) return;
+  PROFILE_FIELDS.forEach(function (k) {
+    var el = document.getElementById('pf-' + k);
+    if (el && p[k]) el.value = p[k];
+  });
+}
+
 function saveEeoPrefs() {
-  var prefs = getEeoPrefs();
-  chrome.storage.local.set({ eeoPrefs: prefs });
+  chrome.storage.local.set({ eeoPrefs: getEeoPrefs(), profile: getProfile() });
   if (eeoStatus) {
     eeoStatus.textContent = 'Saved! Alicia will auto-fill these when you apply.';
     eeoStatus.style.color = '#4caf50';
@@ -2086,23 +2103,145 @@ if (eeoToggle) {
 }
 if (eeoSave) eeoSave.addEventListener('click', saveEeoPrefs);
 
+function setFillStatus(text, color) {
+  if (!eeoFillStatus) return;
+  eeoFillStatus.textContent = text;
+  eeoFillStatus.style.color = color;
+  setTimeout(function () { if (eeoFillStatus.textContent === text) eeoFillStatus.textContent = ''; }, 5000);
+}
+
+// Self-contained autofill, INJECTED into the active tab (works on any site — LinkedIn Easy
+// Apply and external ATS like Workday/Greenhouse/Lever). Matches each field by its label +
+// name/id/autocomplete/placeholder, fills contact fields, and answers EEO selects/radios by
+// fuzzy-matching the saved options. Returns the number of fields filled. No outer references.
+function runAutofill(profile, eeo) {
+  profile = profile || {}; eeo = eeo || {};
+  function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+  function fire(el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+  function setNativeValue(el, value) {
+    var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    var d = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (d && d.set) d.set.call(el, value); else el.value = value;
+  }
+  function labelText(el) {
+    var t = '';
+    try { if (el.id) { var l = document.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id) + '"]'); if (l) t = l.innerText || l.textContent || ''; } } catch (e) {}
+    if (!t) { var p = el.closest('label'); if (p) t = p.innerText || p.textContent || ''; }
+    if (!t) { var c = el.closest('.form-group,fieldset,div,section'); if (c) { var li = c.querySelector('label,legend'); if (li) t = li.innerText || li.textContent || ''; } }
+    return t;
+  }
+  function signals(el) {
+    return norm([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), labelText(el)].filter(Boolean).join(' '));
+  }
+
+  var fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
+  var STD = [
+    { v: profile.email,     t: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
+    { v: profile.phone,     t: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
+    { v: profile.firstName, t: function (s) { return /\b(given name|first name|firstname|fname)\b/.test(s); } },
+    { v: profile.lastName,  t: function (s) { return /\b(family name|last name|lastname|surname|lname)\b/.test(s); } },
+    { v: profile.linkedin,  t: function (s) { return /linkedin/.test(s); } },
+    { v: profile.website,   t: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
+    { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
+    { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
+    { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
+    { v: fullName,          t: function (s) { return /\bfull name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
+  ];
+
+  var filled = 0;
+  var inputs = document.querySelectorAll('input, textarea');
+  for (var i = 0; i < inputs.length; i++) {
+    var el = inputs[i];
+    var ty = (el.type || '').toLowerCase();
+    if (['hidden', 'password', 'file', 'checkbox', 'radio', 'submit', 'button', 'image', 'reset', 'search'].indexOf(ty) >= 0) continue;
+    if (el.disabled || el.readOnly) continue;
+    if (el.value && el.value.trim()) continue;
+    if (el.offsetParent === null) continue; // not visible
+    var s = signals(el);
+    if (!s) continue;
+    for (var f = 0; f < STD.length; f++) {
+      if (STD[f].v && STD[f].t(s, el)) { setNativeValue(el, STD[f].v); fire(el); filled++; break; }
+    }
+  }
+
+  // ----- EEO answers (selects + radios) -----
+  var EEO = [
+    { key: 'eeo-sponsorship',  pats: [/sponsor/, /visa status/] },
+    { key: 'eeo-authorization', pats: [/authoriz/, /legally (authorized|eligible|entitled)/, /right to work/, /eligible to work/] },
+    { key: 'eeo-gender',       pats: [/\bgender\b/, /\bsex\b/] },
+    { key: 'eeo-race',         pats: [/\brace\b/, /ethnic/] },
+    { key: 'eeo-veteran',      pats: [/veteran/] },
+    { key: 'eeo-disability',   pats: [/disabilit/, /\bdisabled\b/] }
+  ];
+  function eeoKey(s) { for (var i = 0; i < EEO.length; i++) { for (var p = 0; p < EEO[i].pats.length; p++) { if (EEO[i].pats[p].test(s)) return EEO[i].key; } } return null; }
+  function canon(s) { var n = norm(s); if (/(decline|prefer not|do not wish|dont wish|not to answer|wish not|not to disclose)/.test(n)) return 'declined'; return n; }
+  function score(a, b) {
+    a = canon(a); b = canon(b); if (!a || !b) return 0;
+    if (a === b) return 100; if (a.indexOf(b) >= 0 || b.indexOf(a) >= 0) return 80;
+    var at = a.split(' '), bt = b.split(' '), c = 0;
+    for (var i = 0; i < bt.length; i++) { if (bt[i].length > 2 && at.indexOf(bt[i]) >= 0) c++; }
+    return bt.length ? (c / bt.length) * 60 : 0;
+  }
+  var selects = document.querySelectorAll('select');
+  for (var si = 0; si < selects.length; si++) {
+    var sel = selects[si];
+    var cur = (sel.value || '').toLowerCase();
+    if (cur && !/select|choose|--|^$/.test(cur)) continue;
+    var key = eeoKey(signals(sel)); if (!key || !eeo[key]) continue;
+    var best = null, bs = 0;
+    for (var o = 0; o < sel.options.length; o++) {
+      var op = sel.options[o]; if (!op.value) continue;
+      var sc = Math.max(score(op.textContent, eeo[key]), score(op.value, eeo[key]));
+      if (sc > bs) { bs = sc; best = op; }
+    }
+    if (best && bs >= 45) { sel.value = best.value; fire(sel); filled++; }
+  }
+  function radioLabel(r) { var w = r.closest('label'); if (w) return w.innerText || w.textContent || ''; if (r.id) { var l = document.querySelector('label[for="' + r.id + '"]'); if (l) return l.innerText || l.textContent || ''; } return r.value || ''; }
+  var radios = document.querySelectorAll('input[type="radio"]');
+  var groups = {};
+  for (var ri = 0; ri < radios.length; ri++) { var r = radios[ri]; var nm = r.name || ('__' + ri); (groups[nm] = groups[nm] || []).push(r); }
+  Object.keys(groups).forEach(function (nm) {
+    var rs = groups[nm];
+    if (rs.some(function (x) { return x.checked; })) return;
+    var cont = rs[0].closest('fieldset, .form-group, div');
+    var qlabel = '';
+    if (cont) { var lg = cont.querySelector('legend, label'); qlabel = norm((lg ? (lg.innerText || lg.textContent) : '') || cont.textContent.slice(0, 200)); }
+    var key = eeoKey(qlabel); if (!key || !eeo[key]) return;
+    var best = null, bs = 0;
+    rs.forEach(function (x) { var sc = score(radioLabel(x), eeo[key]); if (sc > bs) { bs = sc; best = x; } });
+    if (best && bs >= 45) { if (!best.checked) { best.checked = true; best.dispatchEvent(new Event('click', { bubbles: true })); best.dispatchEvent(new Event('change', { bubbles: true })); } filled++; }
+  });
+
+  return filled;
+}
+
 if (eeoFillNow) {
   eeoFillNow.addEventListener('click', function () {
-    chrome.storage.local.get('eeoPrefs', function (data) {
+    chrome.storage.local.get(['eeoPrefs', 'profile'], function (data) {
       var prefs = data.eeoPrefs || {};
-      if (Object.keys(prefs).length === 0) {
-        if (eeoFillStatus) {
-          eeoFillStatus.textContent = 'Set up your answers first (tap Edit), then save them.';
-          eeoFillStatus.style.color = '#ff9955';
-          setTimeout(function () { eeoFillStatus.textContent = ''; }, 4000);
-        }
+      var profile = data.profile || {};
+      if (Object.keys(prefs).length === 0 && Object.keys(profile).length === 0) {
+        setFillStatus('Add your info first (tap Edit), then Save.', '#ff9955');
         return;
       }
-      chrome.runtime.sendMessage({ type: 'AUTOFILL_EEO', prefs: prefs });
-      if (eeoFillStatus) {
-        eeoFillStatus.textContent = 'Filling the open application…';
-        eeoFillStatus.style.color = '#4caf50';
-      }
+      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        if (!tabs[0]) { setFillStatus('No active tab to fill.', '#ff9955'); return; }
+        setFillStatus('Filling the open application…', '#4caf50');
+        chrome.scripting.executeScript(
+          { target: { tabId: tabs[0].id }, func: runAutofill, args: [profile, prefs] },
+          function (results) {
+            if (chrome.runtime.lastError) {
+              setFillStatus('Could not fill this page. Open the application form and try again.', '#ff9955');
+              return;
+            }
+            var n = results && results[0] ? results[0].result : 0;
+            setFillStatus(
+              n > 0 ? ('Filled ' + n + ' field' + (n === 1 ? '' : 's') + '. Review before submitting.') : 'No matching fields found on this page.',
+              n > 0 ? '#4caf50' : '#ff9955'
+            );
+          }
+        );
+      });
     });
   });
 }
@@ -2116,7 +2255,7 @@ window.aliciaPremium = {
 };
 
 // Restore theme, saved sessions, tracked jobs, usage, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs'], function (data) {
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
   if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
@@ -2132,6 +2271,7 @@ chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'u
   }
   if (data.searchPrefs) applySearchPrefs(data.searchPrefs);
   if (data.eeoPrefs) applyEeoPrefs(data.eeoPrefs);
+  if (data.profile) applyProfile(data.profile);
 });
 
 chatSend.addEventListener('click', sendChat);

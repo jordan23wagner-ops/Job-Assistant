@@ -1207,3 +1207,28 @@ header h1 {
   font-size: 11px;
   color: var(--text-dim);
 }
+
+/* ---------- Profile / contact auto-fill inputs ---------- */
+.pf-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 5px;
+  padding: 7px 9px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+}
+.pf-input:first-of-type {
+  margin-top: 0;
+}
+.pf-input::placeholder {
+  color: var(--text-dim);
+}
+.pf-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
