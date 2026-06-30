@@ -258,42 +258,65 @@ function isResponseGarbage(text) {
   return (letters / text.length) < 0.2;
 }
 
-async function rawGroqCall(messages, temperature, key, maxTokens) {
-  var resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+// Wagner-GPT's free chat backend (Ollama Cloud -> NVIDIA NIM fallback). No API key:
+// the keys live server-side on Vercel, so Alicia is 100% free for the user. CORS on that
+// endpoint allows this extension's origin through.
+var BACKEND_URL = 'https://wagner-gpt.vercel.app/api/chat';
+
+// Call the backend and return a single completion string. The endpoint streams NDJSON
+// ({"delta":"..."}\n ... {"done":true}\n), so we read the stream and concatenate the deltas
+// into the one-shot string the rest of the UI expects.
+async function rawBackendCall(messages, temperature, maxTokens) {
+  var msgs = messages || [];
+  // The last message is the current user turn; everything before it is history. Wagner-GPT
+  // forwards history messages with their role intact, so the tool's system prompt (always
+  // the first message) reaches the model.
+  var last = msgs.length ? msgs[msgs.length - 1] : { content: '' };
+  var history = msgs.slice(0, -1).map(function (m) { return { role: m.role, content: m.content }; });
+
+  var resp = await fetch(BACKEND_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages: messages,
-      temperature: temperature,
-      max_tokens: maxTokens || 2048
-    })
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: history, newMessage: last.content || '', model: 'auto' })
   });
+  if (!resp.ok) throw new Error('Backend error: ' + resp.status);
 
-  if (!resp.ok) {
-    if (resp.status === 401) {
-      groqApiKey = null;
-      await chrome.storage.local.remove('groqApiKey');
-      showOnboarding('Your saved API key stopped working. Please paste a new one to continue.');
-      throw new Error('Invalid API key. Please re-enter your Groq API key in the welcome screen.');
+  var reader = resp.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = '';
+  var text = '';
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    var lines = buffer.split('\n');
+    buffer = lines.pop(); // keep the trailing partial line for the next chunk
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      var evt;
+      try { evt = JSON.parse(line); } catch (e) { continue; }
+      if (evt.delta) text += evt.delta;
+      else if (evt.error) throw new Error(evt.error);
+      // {image:...} / {done:...} events carry no text for these callers — ignore.
     }
-    throw new Error('Groq API error: ' + resp.status);
   }
-
-  var data = await resp.json();
-  return stripThinking(sanitizeText(data.choices[0].message.content));
+  if (buffer.trim()) {
+    try { var fin = JSON.parse(buffer.trim()); if (fin.delta) text += fin.delta; } catch (e) {}
+  }
+  return stripThinking(sanitizeText(text));
 }
 
+// Kept the name callGroq so the ~12 existing call sites are untouched; it now routes to the
+// free Wagner-GPT backend instead of Groq.
 async function callGroq(messages, temperature, maxTokens) {
   if (temperature === undefined) temperature = 0.7;
-  var key = groqApiKey || await getApiKey();
-  if (!key) throw new Error('Please add your free Groq API key in the welcome screen to use this feature.');
 
-  var content = await rawGroqCall(messages, temperature, key, maxTokens);
+  var content = await rawBackendCall(messages, temperature, maxTokens);
 
   if (isResponseGarbage(content)) {
     console.log('[Alicia] Garbage response detected, retrying:', content);
-    var retry = await rawGroqCall(messages, 0.3, key, maxTokens);
+    var retry = await rawBackendCall(messages, 0.3, maxTokens);
     if (!isResponseGarbage(retry)) return retry;
     throw new Error('The AI returned an invalid response. Please try again.');
   }
@@ -540,15 +563,8 @@ chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
     }
     updateToolButtons();
   }
-  if (TEST_FIRST_RUN) {
-    chrome.storage.local.remove('groqApiKey');
-    groqApiKey = null;
-    showOnboarding();
-  } else if (data.groqApiKey) {
-    groqApiKey = data.groqApiKey;
-  } else {
-    showOnboarding();
-  }
+  // No API key needed any more — Alicia runs on the free Wagner-GPT backend, so the
+  // onboarding key screen is no longer shown on load.
 });
 
 analyzeBtn.addEventListener('click', async function() {
