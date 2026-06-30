@@ -423,6 +423,8 @@ function updateToolButtons() {
     saveJobBtn.classList.toggle('hidden', !currentJob);
     refreshSaveJobBtn();
   }
+  var fp = document.getElementById('find-people-btn');
+  if (fp) fp.classList.toggle('hidden', !currentJob);
 }
 
 chrome.runtime.onMessage.addListener(function(message) {
@@ -1891,6 +1893,123 @@ function renderRankedJobs(ranked) {
 if (scanRankBtn) scanRankBtn.addEventListener('click', startScan);
 chrome.runtime.onMessage.addListener(function (message) {
   if (message.type === 'JOBS_SCANNED') handleScannedJobs(message.jobs);
+});
+
+// ----- People to reach out to: scrape the job's "Meet the hiring team", draft a tailored note -----
+const findPeopleBtn = document.getElementById('find-people-btn');
+const peopleResults = document.getElementById('people-results');
+let findingPeople = false;
+let peopleTimeout = null;
+
+function startFindPeople() {
+  if (findingPeople) return;
+  findingPeople = true;
+  if (peopleResults) peopleResults.innerHTML = '<p class="placeholder">Looking for the hiring team on this job…</p>';
+  if (findPeopleBtn) findPeopleBtn.disabled = true;
+  peopleTimeout = setTimeout(function () {
+    if (findingPeople) {
+      findingPeople = false;
+      if (findPeopleBtn) findPeopleBtn.disabled = false;
+      if (peopleResults) peopleResults.innerHTML = '<p class="placeholder">No hiring-team contacts shown for this job.</p>';
+    }
+  }, 8000);
+  chrome.runtime.sendMessage({ type: 'SCAN_PEOPLE' }).catch(function () {});
+}
+
+function handlePeopleFound(people) {
+  if (!findingPeople) return;
+  clearTimeout(peopleTimeout);
+  findingPeople = false;
+  if (findPeopleBtn) findPeopleBtn.disabled = false;
+  renderPeople(people || []);
+}
+
+function renderPeople(people) {
+  if (!peopleResults) return;
+  peopleResults.innerHTML = '';
+  if (!people.length) {
+    peopleResults.innerHTML = '<p class="placeholder">No hiring-team contacts found. Open the job posting and scroll to "Meet the hiring team", then try again.</p>';
+    return;
+  }
+  people.forEach(function (p) {
+    var card = document.createElement('div');
+    card.className = 'person-card';
+    var top = document.createElement('div');
+    top.className = 'person-top';
+    var info = document.createElement('div');
+    info.className = 'person-info';
+    var nameEl = document.createElement('a');
+    nameEl.className = 'person-name';
+    nameEl.textContent = p.name;
+    if (p.url) { nameEl.href = p.url; nameEl.target = '_blank'; nameEl.rel = 'noopener'; }
+    info.appendChild(nameEl);
+    if (p.title) {
+      var t = document.createElement('div'); t.className = 'person-title'; t.textContent = p.title; info.appendChild(t);
+    }
+    top.appendChild(info);
+    var draftBtn = document.createElement('button');
+    draftBtn.className = 'btn-small';
+    draftBtn.textContent = 'Draft message';
+    top.appendChild(draftBtn);
+    card.appendChild(top);
+
+    var msgWrap = document.createElement('div');
+    msgWrap.className = 'person-msg hidden';
+    card.appendChild(msgWrap);
+
+    draftBtn.addEventListener('click', function () { draftOutreach(p, draftBtn, msgWrap); });
+    peopleResults.appendChild(card);
+  });
+}
+
+async function draftOutreach(person, btn, msgWrap) {
+  if (!resumeText) {
+    msgWrap.classList.remove('hidden');
+    msgWrap.innerHTML = '<p class="placeholder">Add your resume first so the message can mention your background.</p>';
+    return;
+  }
+  btn.disabled = true; btn.textContent = 'Writing…';
+  msgWrap.classList.remove('hidden');
+  msgWrap.innerHTML = '<p class="placeholder">Drafting a personalized note…</p>';
+  try {
+    var company = (currentJob && currentJob.company) || '';
+    var role = (currentJob && currentJob.title) || 'the role';
+    var sys = 'You write short, warm, professional LinkedIn outreach messages for a job seeker contacting someone on a company hiring team. Under 280 characters (LinkedIn connection-note limit). Specific and genuine: name the role and ONE relevant strength from the candidate background. No cliches like "I hope this finds you well", no hashtags, no emojis. Output ONLY the message text, nothing else.';
+    var user = 'CANDIDATE BACKGROUND:\n' + resumeText.slice(0, 2500) +
+      '\n\nREACHING OUT TO: ' + person.name + (person.title ? ', ' + person.title : '') + (company ? ' at ' + company : '') +
+      '\nROLE THEY ARE HIRING FOR: ' + role + '\n\nWrite the message.';
+    var msg = await callGroq([{ role: 'system', content: sys }, { role: 'user', content: user }], 0.6, 512);
+    msg = msg.trim().replace(/^["']|["']$/g, '');
+    renderOutreach(msgWrap, msg);
+  } catch (e) {
+    console.log('[Alicia] outreach error', e);
+    msgWrap.innerHTML = '<p class="placeholder">Could not draft a message. Please try again.</p>';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Redraft';
+  }
+}
+
+function renderOutreach(msgWrap, msg) {
+  msgWrap.innerHTML = '';
+  var box = document.createElement('div'); box.className = 'person-msg-text'; box.textContent = msg;
+  msgWrap.appendChild(box);
+  var actions = document.createElement('div'); actions.className = 'person-msg-actions';
+  var len = document.createElement('span'); len.className = 'person-msg-len';
+  len.textContent = msg.length + ' chars';
+  if (msg.length > 280) len.style.color = '#c0564b';
+  var copy = document.createElement('button'); copy.className = 'btn-small'; copy.textContent = 'Copy';
+  copy.addEventListener('click', function () {
+    navigator.clipboard.writeText(msg).then(function () {
+      copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500);
+    }).catch(function () {});
+  });
+  actions.appendChild(len); actions.appendChild(copy);
+  msgWrap.appendChild(actions);
+}
+
+if (findPeopleBtn) findPeopleBtn.addEventListener('click', startFindPeople);
+chrome.runtime.onMessage.addListener(function (message) {
+  if (message.type === 'PEOPLE_FOUND') handlePeopleFound(message.people);
 });
 
 // ========== EEO Auto-Fill ==========

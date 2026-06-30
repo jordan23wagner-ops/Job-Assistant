@@ -1132,3 +1132,69 @@ header h1 {
   margin-top: 5px;
   font-style: italic;
 }
+
+/* ---------- People to reach out to + outreach drafts ---------- */
+.people-results {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.person-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.person-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.person-info {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.person-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  text-decoration: none;
+  word-break: break-word;
+}
+.person-name:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.person-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 1px;
+}
+.person-top .btn-small {
+  flex: 0 0 auto;
+}
+.person-msg {
+  margin-top: 8px;
+}
+.person-msg-text {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.person-msg-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 5px;
+}
+.person-msg-len {
+  font-size: 11px;
+  color: var(--text-dim);
+}

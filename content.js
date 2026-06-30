@@ -331,6 +331,56 @@ function scrapeJobList() {
   return out;
 }
 
+// ========== Scrape the "Meet the hiring team" people on a job posting ==========
+
+function scrapeHiringTeam() {
+  var containers = [];
+  // Known container classes for the hiring-team / "who can help" module.
+  document.querySelectorAll('.hirer-card__container, .job-details-people-who-can-help__section, .jobs-poster, .job-details-module').forEach(function (c) { containers.push(c); });
+  // Also find the module by its header text, in case the classes changed.
+  var heads = document.querySelectorAll('h2, h3, .t-16, .text-heading-large');
+  for (var i = 0; i < heads.length; i++) {
+    var ht = (heads[i].innerText || heads[i].textContent || '').toLowerCase();
+    if (ht.indexOf('meet the hiring team') >= 0 || ht.indexOf('who can help') >= 0 || ht.indexOf('people you can reach') >= 0) {
+      var sec = heads[i].closest('section, div');
+      if (sec) containers.push(sec);
+    }
+  }
+
+  var people = [];
+  var seen = {};
+  containers.forEach(function (c) {
+    var anchors = c.querySelectorAll('a[href*="/in/"]');
+    for (var a = 0; a < anchors.length; a++) {
+      var anchor = anchors[a];
+      var url = (anchor.href || '').split('?')[0];
+      if (!url || seen[url]) continue;
+
+      var name = getText(anchor);
+      if (!name || name.length < 2) {
+        var nameEl = anchor.querySelector('span[aria-hidden="true"], strong, .hirer-card__hirer-information span');
+        if (nameEl) name = getText(nameEl);
+      }
+      if (!name || name.length < 2 || /^\d/.test(name)) continue;
+
+      var title = '';
+      var wrap = anchor.closest('.hirer-card__container, li, .artdeco-entity-lockup, div');
+      if (wrap) {
+        var subs = wrap.querySelectorAll('.hirer-card__hirer-job-title, .artdeco-entity-lockup__subtitle, .t-14, .t-12, .t-black--light');
+        for (var s = 0; s < subs.length; s++) {
+          var st = getText(subs[s]);
+          if (st && st !== name && st.length > 1 && st.length < 120) { title = st; break; }
+        }
+      }
+      seen[url] = true;
+      people.push({ name: name, title: title, url: url });
+      if (people.length >= 8) break;
+    }
+  });
+  console.log('[Alicia] Found', people.length, 'hiring-team people');
+  return people;
+}
+
 setTimeout(function() {
   expandJobDescription();
   setTimeout(function() {
@@ -368,6 +418,11 @@ chrome.runtime.onMessage.addListener(function(message) {
     console.log('[Alicia] Scan jobs triggered');
     var jobs = scrapeJobList();
     chrome.runtime.sendMessage({ type: 'JOBS_SCANNED', jobs: jobs }).catch(function() {});
+  }
+  if (message.type === 'SCAN_PEOPLE') {
+    console.log('[Alicia] Scan people triggered');
+    var people = scrapeHiringTeam();
+    chrome.runtime.sendMessage({ type: 'PEOPLE_FOUND', people: people }).catch(function() {});
   }
   if (message.type === 'AUTOFILL_EEO') {
     console.log('[Alicia] Auto-fill EEO triggered (manual)');
