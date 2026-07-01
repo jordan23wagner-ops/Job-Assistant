@@ -270,13 +270,175 @@ function detectJob() {
   console.log('[Alicia] Detection result:', { title: title, company: company, location: location, descLength: description ? description.length : 0 });
 
   if (title || company) {
-    chrome.runtime.sendMessage({
-      type: 'JOB_DETECTED',
-      job: { title: title, company: company, location: location, description: description, url: window.location.href, detectedAt: Date.now() }
-    }).catch(function() {});
+    var job = { title: title, company: company, location: location, description: description, url: window.location.href, detectedAt: Date.now() };
+    chrome.runtime.sendMessage({ type: 'JOB_DETECTED', job: job }).catch(function() {});
+    if (title && description) maybeShowMatchOverlay(job);
     return true;
   }
   return false;
+}
+
+// ========== Match Score overlay: mirrors the side panel's "Match Score" tool, but shows
+// automatically on the job page itself (like Jobright), scored against the saved resume. ==========
+
+var MATCH_BACKEND_URL = 'https://wagner-gpt.vercel.app/api/chat';
+var matchScoreCache = {}; // "title|company" -> {score,matched,missing,summary}
+var matchScoreInFlight = {};
+
+function matchJobKey(job) { return (job.title || '') + '|' + (job.company || ''); }
+
+// Qwen (and other reasoning models) emit chain-of-thought in <think>...</think> before the
+// real answer — strip it so JSON parsing doesn't choke on it.
+function stripThinkingTags(text) {
+  if (!text) return text;
+  var cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  if (/<\/think>/i.test(cleaned)) cleaned = cleaned.replace(/[\s\S]*<\/think>/i, '');
+  return cleaned.replace(/<\/?think>/gi, '').trim();
+}
+
+function parseMatchJson(raw) {
+  var clean = stripThinkingTags(raw).replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+  try { return JSON.parse(clean); } catch (e) {}
+  var m = clean.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch (e2) {} }
+  return null;
+}
+
+// Self-contained copy of sidepanel.js's rawBackendCall — content scripts run in a separate
+// JS context and can't call into the side panel, so the NDJSON-stream client is duplicated here.
+async function callMatchBackend(job, resumeText) {
+  var sys = 'You are Alicia, a resume-to-job matching engine. Compare the candidate resume to the job posting. Respond ONLY with strict JSON, no markdown fences, no prose: {"score":<0-100 integer, overall fit>,"matched":[<up to 8 short keywords/skills from the job that the resume clearly covers>],"missing":[<up to 8 short keywords/skills the job wants that the resume does not clearly show>],"summary":"<one sentence on the overall fit>"}';
+  var user = 'Job Title: ' + (job.title || '') + '\nCompany: ' + (job.company || '') + '\n\nJob Description:\n' + (job.description || '') + '\n\nCandidate Resume:\n' + resumeText.slice(0, 6000);
+  var resp = await fetch(MATCH_BACKEND_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: [{ role: 'system', content: sys }], newMessage: user, model: 'auto' })
+  });
+  if (!resp.ok) throw new Error('Backend error: ' + resp.status);
+  var reader = resp.body.getReader();
+  var decoder = new TextDecoder();
+  var buffer = '', text = '';
+  while (true) {
+    var chunk = await reader.read();
+    if (chunk.done) break;
+    buffer += decoder.decode(chunk.value, { stream: true });
+    var lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      var evt;
+      try { evt = JSON.parse(line); } catch (e) { continue; }
+      if (evt.delta) text += evt.delta;
+      else if (evt.error) throw new Error(evt.error);
+    }
+  }
+  if (buffer.trim()) { try { var fin = JSON.parse(buffer.trim()); if (fin.delta) text += fin.delta; } catch (e) {} }
+  var data = parseMatchJson(text);
+  if (!data || typeof data.score !== 'number') throw new Error('Could not parse a match score from the response.');
+  return data;
+}
+
+function matchScoreColor(score) {
+  if (score >= 75) return '#4caf50';
+  if (score >= 50) return '#e0a800';
+  return '#c0564b';
+}
+
+function escapeOverlayHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+function findMatchOverlayAnchor() {
+  return document.querySelector(
+    '.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, h1.t-24.t-bold, h1.t-24, h2.top-card-layout__title'
+  );
+}
+
+function toggleMatchOverlayDetails(badgeEl, result) {
+  var existing = document.getElementById('alicia-match-details');
+  if (existing) { existing.remove(); if (existing.__forBadge === badgeEl) return; }
+
+  var panel = document.createElement('div');
+  panel.id = 'alicia-match-details';
+  panel.__forBadge = badgeEl;
+  panel.style.cssText = 'margin:6px 0 10px;padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;';
+
+  var html = result.summary ? '<div style="margin-bottom:4px;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
+  function chips(label, items, color) {
+    if (!items || !items.length) return '';
+    var s = '<div style="margin-top:6px;"><strong>' + label + ':</strong><br>';
+    items.forEach(function (kw) {
+      s += '<span style="display:inline-block;margin:3px 4px 0 0;padding:2px 8px;border-radius:10px;font-weight:600;background:' + color + '33;color:' + color + ';">' + escapeOverlayHtml(kw) + '</span>';
+    });
+    return s + '</div>';
+  }
+  html += chips('Matched', result.matched, '#4caf50');
+  html += chips('Missing', result.missing, '#e0a800');
+  panel.innerHTML = html;
+  badgeEl.insertAdjacentElement('afterend', panel);
+}
+
+function renderMatchOverlay(state, result) {
+  var anchor = findMatchOverlayAnchor();
+  if (!anchor) return;
+  var el = document.getElementById('alicia-match-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'alicia-match-overlay';
+    anchor.insertAdjacentElement('afterend', el);
+  }
+  el.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin:8px 0;padding:5px 12px;border-radius:20px;font:600 12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;cursor:default;user-select:none;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);';
+
+  if (state === 'loading') {
+    el.style.background = '#4a4a68';
+    el.style.cursor = 'default';
+    el.textContent = '⚡ Alicia is scoring your fit…';
+    el.onclick = null;
+  } else if (state === 'error') {
+    el.style.background = '#6a4a4a';
+    el.style.cursor = 'default';
+    el.textContent = 'Could not score this job right now.';
+    el.onclick = null;
+  } else if (state === 'done') {
+    el.style.background = matchScoreColor(result.score);
+    el.style.cursor = 'pointer';
+    el.textContent = '🎯 ' + result.score + '% match — tap for details';
+    el.onclick = function () { toggleMatchOverlayDetails(el, result); };
+  }
+}
+
+function maybeShowMatchOverlay(job) {
+  chrome.storage.local.get('resumeText', function (data) {
+    var resumeText = data && data.resumeText;
+    if (!resumeText) return; // nothing to score against — same gate as the side panel's button
+
+    var key = matchJobKey(job);
+    var cached = matchScoreCache[key];
+    if (cached) { renderMatchOverlay('done', cached); return; }
+    if (matchScoreInFlight[key]) return; // already scoring this job, avoid duplicate calls
+
+    matchScoreInFlight[key] = true;
+    renderMatchOverlay('loading');
+    callMatchBackend(job, resumeText).then(function (result) {
+      matchScoreCache[key] = result;
+      delete matchScoreInFlight[key];
+      // The user may have navigated to a different job while this was in flight.
+      if (matchJobKey(currentJobForMatch()) === key) renderMatchOverlay('done', result);
+    }).catch(function (err) {
+      console.log('[Alicia] Match score error:', err);
+      delete matchScoreInFlight[key];
+      if (matchJobKey(currentJobForMatch()) === key) renderMatchOverlay('error');
+    });
+  });
+}
+
+// Re-reads title/company from the DOM to confirm the in-flight score still matches what's
+// on screen (the SPA may have navigated to another job while the backend call was pending).
+function currentJobForMatch() {
+  return { title: getJobTitle(), company: getCompany() };
 }
 
 // ========== Scrape the job-search RESULTS LIST (for auto-pull + AI fit-filter) ==========
