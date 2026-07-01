@@ -18,6 +18,24 @@ function getText(el) {
   return cleanText(el.innerText || el.textContent || '');
 }
 
+// Reloading/updating the extension orphans this content script in any tab that was already
+// open — chrome.runtime/chrome.storage calls then throw "Extension context invalidated"
+// synchronously (not just a rejected promise), so a plain .catch() doesn't catch it. Every
+// call site below goes through these wrappers instead of calling chrome.* directly.
+function extAlive() {
+  try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; }
+}
+
+function safeSendMessage(msg) {
+  if (!extAlive()) return;
+  try { chrome.runtime.sendMessage(msg).catch(function () {}); } catch (e) {}
+}
+
+function safeStorageGet(keys, cb) {
+  if (!extAlive()) return;
+  try { chrome.storage.local.get(keys, cb); } catch (e) {}
+}
+
 function trySelectors(selectors, minLen, maxLen) {
   for (var i = 0; i < selectors.length; i++) {
     try {
@@ -271,7 +289,7 @@ function detectJob() {
 
   if (title || company) {
     var job = { title: title, company: company, location: location, description: description, url: window.location.href, detectedAt: Date.now() };
-    chrome.runtime.sendMessage({ type: 'JOB_DETECTED', job: job }).catch(function() {});
+    safeSendMessage({ type: 'JOB_DETECTED', job: job });
     if (title && description) maybeShowMatchOverlay(job);
     return true;
   }
@@ -411,7 +429,7 @@ function renderMatchOverlay(state, result) {
 }
 
 function maybeShowMatchOverlay(job) {
-  chrome.storage.local.get('resumeText', function (data) {
+  safeStorageGet('resumeText', function (data) {
     var resumeText = data && data.resumeText;
     if (!resumeText) return; // nothing to score against — same gate as the side panel's button
 
@@ -557,6 +575,7 @@ setTimeout(function() {
 
 var lastUrl = location.href;
 var observer = new MutationObserver(function() {
+  if (!extAlive()) { observer.disconnect(); return; }
   if (location.href !== lastUrl) {
     lastUrl = location.href;
     setTimeout(function() {
@@ -579,12 +598,12 @@ chrome.runtime.onMessage.addListener(function(message) {
   if (message.type === 'SCAN_JOBS') {
     console.log('[Alicia] Scan jobs triggered');
     var jobs = scrapeJobList();
-    chrome.runtime.sendMessage({ type: 'JOBS_SCANNED', jobs: jobs }).catch(function() {});
+    safeSendMessage({ type: 'JOBS_SCANNED', jobs: jobs });
   }
   if (message.type === 'SCAN_PEOPLE') {
     console.log('[Alicia] Scan people triggered');
     var people = scrapeHiringTeam();
-    chrome.runtime.sendMessage({ type: 'PEOPLE_FOUND', people: people }).catch(function() {});
+    safeSendMessage({ type: 'PEOPLE_FOUND', people: people });
   }
   if (message.type === 'AUTOFILL_EEO') {
     console.log('[Alicia] Auto-fill EEO triggered (manual)');
@@ -592,7 +611,7 @@ chrome.runtime.onMessage.addListener(function(message) {
     if (p) {
       autoFillEeo(p);
     } else {
-      chrome.storage.local.get('eeoPrefs', function (d) { autoFillEeo(d.eeoPrefs || {}); });
+      safeStorageGet('eeoPrefs', function (d) { autoFillEeo(d.eeoPrefs || {}); });
     }
   }
 });
@@ -736,7 +755,7 @@ function fillTextInput(inputEl, desiredValue) {
 
 function autoFillEeo(prefs) {
   if (!prefs || Object.keys(prefs).length === 0) {
-    chrome.runtime.sendMessage({ type: 'EEO_FILL_RESULT', filled: 0 }).catch(function () {});
+    safeSendMessage({ type: 'EEO_FILL_RESULT', filled: 0 });
     return;
   }
   var filled = 0;
@@ -781,7 +800,7 @@ function autoFillEeo(prefs) {
   });
 
   console.log('[Alicia] Auto-fill complete, filled', filled, 'field(s)');
-  chrome.runtime.sendMessage({ type: 'EEO_FILL_RESULT', filled: filled }).catch(function () {});
+  safeSendMessage({ type: 'EEO_FILL_RESULT', filled: filled });
 }
 
 // ========== Easy Apply auto-advance ==========
@@ -848,7 +867,7 @@ function showEasyApplyBanner(text, color) {
 
 function tryAutoAdvanceEasyApply() {
   if (autoAdvanceBusy) return;
-  chrome.storage.local.get('autoAdvanceEasyApply', function (data) {
+  safeStorageGet('autoAdvanceEasyApply', function (data) {
     if (data.autoAdvanceEasyApply === false) return; // opted out in the side panel
 
     var modal = findEasyApplyModal();
@@ -883,7 +902,7 @@ var autofillTimer = null;
 function scheduleAutoFill() {
   if (autofillTimer) clearTimeout(autofillTimer);
   autofillTimer = setTimeout(function () {
-    chrome.storage.local.get('eeoPrefs', function (data) {
+    safeStorageGet('eeoPrefs', function (data) {
       if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
       setTimeout(tryAutoAdvanceEasyApply, 400);
     });
@@ -891,6 +910,7 @@ function scheduleAutoFill() {
 }
 
 var applyObserver = new MutationObserver(function () {
+  if (!extAlive()) { applyObserver.disconnect(); return; }
   var form = document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, .artdeco-modal form, form.jobs-easy-apply-form');
   if (form) scheduleAutoFill();
 });
