@@ -784,6 +784,100 @@ function autoFillEeo(prefs) {
   chrome.runtime.sendMessage({ type: 'EEO_FILL_RESULT', filled: filled }).catch(function () {});
 }
 
+// ========== Easy Apply auto-advance ==========
+// Fills each step, then clicks "Next" / "Continue to next step" / "Review your application"
+// to move forward automatically. It STOPS the instant it sees a Submit button and never
+// clicks it — a human always makes the final call on submitting a real application. This is
+// an allowlist (only recognized advance-button text is clicked), not a denylist that tries to
+// exclude "submit" — if LinkedIn shows button text we don't recognize, we do nothing rather
+// than risk clicking it.
+var EASY_APPLY_ADVANCE_PATTERNS = [/^next$/, /continue to next step/, /review your application/, /save and continue/];
+var EASY_APPLY_SUBMIT_PATTERNS = [/submit application/, /submit your application/];
+var MAX_AUTO_ADVANCES = 15;
+var autoAdvanceModal = null;
+var autoAdvanceCount = 0;
+var autoAdvanceBusy = false;
+
+function findEasyApplyForm() {
+  return document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, form.jobs-easy-apply-form');
+}
+
+// Scope button search to the Easy Apply modal itself — never the whole document — so this
+// can't reach into an unrelated LinkedIn modal (e.g. a "Save this job" confirmation) and click
+// something unintended.
+function findEasyApplyModal() {
+  var form = findEasyApplyForm();
+  if (!form) return null;
+  return form.closest('.artdeco-modal') || form;
+}
+
+function findModalButton(modal, patterns) {
+  var buttons = modal.querySelectorAll('button');
+  for (var i = 0; i < buttons.length; i++) {
+    var btn = buttons[i];
+    if (btn.disabled || btn.offsetParent === null) continue;
+    var t = normTxt((btn.getAttribute('aria-label') || '') + ' ' + (btn.innerText || btn.textContent || ''));
+    for (var p = 0; p < patterns.length; p++) { if (patterns[p].test(t)) return btn; }
+  }
+  return null;
+}
+
+function hasVisibleValidationError(modal) {
+  var errs = modal.querySelectorAll('.artdeco-inline-feedback--error, [role="alert"]');
+  for (var i = 0; i < errs.length; i++) {
+    if (errs[i].offsetParent !== null && getText(errs[i])) return true;
+  }
+  return false;
+}
+
+function showEasyApplyBanner(text, color) {
+  var el = document.getElementById('alicia-apply-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'alicia-apply-banner';
+    el.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;padding:10px 16px;border-radius:8px;color:#fff;font:600 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:320px;cursor:pointer;';
+    el.title = 'Click to dismiss';
+    el.onclick = function () { el.remove(); };
+    document.body.appendChild(el);
+  }
+  el.style.background = color;
+  el.textContent = text;
+  clearTimeout(el.hideTimer);
+  el.hideTimer = setTimeout(function () { if (el.parentNode) el.remove(); }, 12000);
+}
+
+function tryAutoAdvanceEasyApply() {
+  if (autoAdvanceBusy) return;
+  chrome.storage.local.get('autoAdvanceEasyApply', function (data) {
+    if (data.autoAdvanceEasyApply === false) return; // opted out in the side panel
+
+    var modal = findEasyApplyModal();
+    if (!modal) { autoAdvanceModal = null; autoAdvanceCount = 0; return; }
+    if (modal !== autoAdvanceModal) { autoAdvanceModal = modal; autoAdvanceCount = 0; }
+
+    // Never click this — reaching it means the application is ready for a human to submit.
+    if (findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS)) {
+      showEasyApplyBanner('Filled and ready — review, then click Submit yourself.', '#4caf50');
+      return;
+    }
+
+    if (autoAdvanceCount >= MAX_AUTO_ADVANCES) return; // safety cap against an unexpected loop
+
+    if (hasVisibleValidationError(modal)) {
+      showEasyApplyBanner('This step needs your input before Alicia can continue.', '#e0a800');
+      return;
+    }
+
+    var nextBtn = findModalButton(modal, EASY_APPLY_ADVANCE_PATTERNS);
+    if (nextBtn) {
+      autoAdvanceBusy = true;
+      autoAdvanceCount++;
+      nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      setTimeout(function () { autoAdvanceBusy = false; }, 400);
+    }
+  });
+}
+
 // Auto-fill whenever an application form / modal appears, debounced so step changes re-fill.
 var autofillTimer = null;
 function scheduleAutoFill() {
@@ -791,6 +885,7 @@ function scheduleAutoFill() {
   autofillTimer = setTimeout(function () {
     chrome.storage.local.get('eeoPrefs', function (data) {
       if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
+      setTimeout(tryAutoAdvanceEasyApply, 400);
     });
   }, 700);
 }

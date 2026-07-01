@@ -2298,6 +2298,13 @@ const eeoSave = document.getElementById('eeo-save');
 const eeoStatus = document.getElementById('eeo-status');
 const eeoFillNow = document.getElementById('eeo-fill-now');
 const eeoFillStatus = document.getElementById('eeo-fill-status');
+const autoAdvanceToggle = document.getElementById('auto-advance-toggle');
+
+if (autoAdvanceToggle) {
+  autoAdvanceToggle.addEventListener('change', function () {
+    chrome.storage.local.set({ autoAdvanceEasyApply: autoAdvanceToggle.checked });
+  });
+}
 
 const EEO_FIELDS = ['eeo-gender', 'eeo-race', 'eeo-veteran', 'eeo-disability', 'eeo-authorization', 'eeo-sponsorship'];
 const PROFILE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'city', 'state', 'zip', 'linkedin', 'website'];
@@ -2547,7 +2554,7 @@ window.aliciaPremium = {
 };
 
 // Restore theme, saved sessions, tracked jobs, usage, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile'], function (data) {
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile', 'autoAdvanceEasyApply'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
   if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
@@ -2564,6 +2571,7 @@ chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'u
   if (data.searchPrefs) applySearchPrefs(data.searchPrefs);
   if (data.eeoPrefs) applyEeoPrefs(data.eeoPrefs);
   if (data.profile) applyProfile(data.profile);
+  if (autoAdvanceToggle) autoAdvanceToggle.checked = data.autoAdvanceEasyApply !== false;
 });
 
 chatSend.addEventListener('click', sendChat);
