@@ -43,6 +43,7 @@ const detectBtn = document.getElementById('detect-btn');
 const analyzeBtn = document.getElementById('analyze-btn');
 const tailorBtn = document.getElementById('tailor-btn');
 const coverBtn = document.getElementById('cover-btn');
+const matchScoreBtn = document.getElementById('match-score-btn');
 const resumeUpload = document.getElementById('resume-upload');
 const resumeStatus = document.getElementById('resume-status');
 const analysisSection = document.getElementById('analysis-section');
@@ -55,6 +56,13 @@ const tailoringOptions = document.getElementById('tailoring-options');
 const tailoringInput = document.getElementById('tailoring-input');
 const tailoringSend = document.getElementById('tailoring-send');
 const closeTailoring = document.getElementById('close-tailoring');
+const buildResumeBtn = document.getElementById('build-resume-btn');
+const builderSection = document.getElementById('builder-section');
+const builderConversation = document.getElementById('builder-conversation');
+const builderOptions = document.getElementById('builder-options');
+const builderInput = document.getElementById('builder-input');
+const builderSend = document.getElementById('builder-send');
+const closeBuilder = document.getElementById('close-builder');
 const chatMessages = document.getElementById('chat-messages');
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
@@ -419,6 +427,7 @@ function updateToolButtons() {
   tailorBtn.disabled = !currentJob || !resumeText;
   coverBtn.disabled = !currentJob;
   interviewBtn.disabled = !currentJob;
+  matchScoreBtn.disabled = !currentJob || !resumeText;
   if (saveJobBtn) {
     saveJobBtn.classList.toggle('hidden', !currentJob);
     refreshSaveJobBtn();
@@ -589,6 +598,46 @@ analyzeBtn.addEventListener('click', async function() {
 
 closeAnalysis.addEventListener('click', function() {
   analysisSection.classList.add('hidden');
+});
+
+function renderMatchScore(data) {
+  var color = scoreColor(data.score);
+  var html = '';
+  html += '<div class="match-score-head">';
+  html += '<span class="match-score-badge" style="background:' + color + '">' + data.score + '</span>';
+  html += '<div class="match-bar-track"><div class="match-bar-fill" style="width:' + data.score + '%;background:' + color + '"></div></div>';
+  html += '</div>';
+  if (data.summary) html += '<p>' + escapeHtml(data.summary) + '</p>';
+  function chipRow(label, items, cls) {
+    if (!items.length) return '';
+    var row = '<h3>' + label + '</h3><div class="match-chips">';
+    items.forEach(function (kw) { row += '<span class="match-chip ' + cls + '">' + escapeHtml(kw) + '</span>'; });
+    return row + '</div>';
+  }
+  html += chipRow('Matched', data.matched || [], 'matched');
+  html += chipRow('Missing', data.missing || [], 'missing');
+  analysisContent.innerHTML = html;
+}
+
+matchScoreBtn.addEventListener('click', async function () {
+  if (!currentJob || !resumeText) return;
+  analysisTitle.textContent = 'Match Score';
+  analysisContent.innerHTML = '<p class="loading">Scoring your fit for this role...</p>';
+  analysisSection.classList.remove('hidden');
+
+  try {
+    var sys = 'You are Alicia, a resume-to-job matching engine. Compare the candidate resume to the job posting. Respond ONLY with strict JSON, no markdown fences, no prose: {"score":<0-100 integer, overall fit>,"matched":[<up to 8 short keywords/skills from the job that the resume clearly covers>],"missing":[<up to 8 short keywords/skills the job wants that the resume does not clearly show>],"summary":"<one sentence on the overall fit>"}';
+    var user = 'Job Title: ' + currentJob.title + '\nCompany: ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCandidate Resume:\n' + resumeText.slice(0, 6000);
+    var raw = await callGroq([{ role: 'system', content: sys }, { role: 'user', content: user }], 0.2, 1024);
+    var clean = raw.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    var data;
+    try { data = JSON.parse(clean); }
+    catch (e) { var m = clean.match(/\{[\s\S]*\}/); data = m ? JSON.parse(m[0]) : null; }
+    if (!data || typeof data.score !== 'number') throw new Error('Could not parse a match score from the response.');
+    renderMatchScore(data);
+  } catch (err) {
+    analysisContent.innerHTML = '<p style="color:#ff5555">' + escapeHtml(err.message) + '</p>';
+  }
 });
 
 coverBtn.addEventListener('click', async function() {
@@ -832,6 +881,207 @@ tailoringInput.addEventListener('keydown', function(e) {
 closeTailoring.addEventListener('click', function() {
   tailoringSection.classList.add('hidden');
   tailoringState = null;
+});
+
+// ----- AI Resume Builder: guided Q&A that produces a resume from scratch -----
+var BUILDER_SYSTEM = 'You are Alicia, an expert resume writer. Build a complete, professional resume from the structured notes the candidate gave you.\n\nRules:\n- Use ONLY the facts provided — never invent jobs, dates, schools, or achievements\n- Write a targeted professional summary (2-3 sentences) based on their target role\n- Turn their rough notes into strong, quantified achievement bullets using action verbs\n- Group skills into sensible categories if possible\n- Include every job and school they gave you\n\nFormat the resume in markdown using these exact patterns:\n# [Candidate Name]\n[Contact info on one line, separated by |]\n\n## Summary\n[2-3 sentence tailored summary]\n\n## Technical Skills\n- **[Category]:** [comma-separated skills]\n\n## Experience\n### [Job Title] | [Company]\n*[Date range]*\n- [achievement bullet]\n- [achievement bullet]\n\n## Education\n**[School]**\n[Degree/program] | [Dates]';
+
+var builderState = null;
+
+function addBuilderMessage(text, role) {
+  var div = document.createElement('div');
+  div.className = 'tailoring-msg ' + role;
+  div.innerHTML = (role === 'ai' || role === 'final') ? formatAnalysis(text) : escapeHtml(text);
+  builderConversation.appendChild(div);
+  builderConversation.scrollTop = builderConversation.scrollHeight;
+}
+
+function clearBuilderOptions() {
+  builderOptions.innerHTML = '';
+}
+
+function addBuilderQuickOptions(options) {
+  clearBuilderOptions();
+  options.forEach(function (opt) {
+    var btn = document.createElement('button');
+    btn.className = 'tailoring-option-btn';
+    btn.textContent = opt;
+    btn.addEventListener('click', function () { handleBuilderResponse(opt); });
+    builderOptions.appendChild(btn);
+  });
+}
+
+function removeBuilderLoadingMessage(keyword) {
+  var msgs = builderConversation.querySelectorAll('.tailoring-msg.ai');
+  for (var i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].textContent.indexOf(keyword) >= 0) { msgs[i].remove(); break; }
+  }
+}
+
+function startBuilder() {
+  builderSection.classList.remove('hidden');
+  builderConversation.innerHTML = '';
+  clearBuilderOptions();
+  builderInput.value = '';
+  builderState = {
+    step: 'name',
+    data: { name: '', email: '', phone: '', location: '', linkedin: '', targetRole: '', jobs: [], education: [], skills: '' },
+    jobDraft: null,
+    generatedResume: null
+  };
+  addBuilderMessage('Let\'s build your resume from scratch. What\'s your full name?', 'ai');
+}
+
+async function generateBuiltResume() {
+  addBuilderMessage('Building your resume...', 'ai');
+  try {
+    var d = builderState.data;
+    var jobsText = d.jobs.length
+      ? d.jobs.map(function (j, i) { return (i + 1) + '. ' + j.title + ' at ' + j.company + ' (' + j.dates + ')\n' + j.bullets; }).join('\n\n')
+      : '(no work history provided)';
+    var eduText = d.education.length ? d.education.join('\n') : '(no education provided)';
+    var contact = [d.email, d.phone, d.location, d.linkedin].filter(Boolean).join(' | ');
+    var user = 'Name: ' + d.name + '\nContact: ' + contact + '\nTarget Role: ' + d.targetRole +
+      '\n\nWork History:\n' + jobsText + '\n\nEducation:\n' + eduText + '\n\nSkills:\n' + (d.skills || '(none provided)');
+    var result = await callGroq([{ role: 'system', content: BUILDER_SYSTEM }, { role: 'user', content: user }], 0.4, 4096);
+    removeBuilderLoadingMessage('Building');
+    builderState.generatedResume = result;
+    addBuilderMessage(result, 'final');
+    addBuilderQuickOptions(['Download Resume', 'Use as My Resume', 'Start over']);
+  } catch (err) {
+    removeBuilderLoadingMessage('Building');
+    addBuilderMessage('Error: ' + err.message, 'ai');
+    addBuilderQuickOptions(['Try again', 'Start over']);
+  }
+}
+
+function downloadBuiltResume() {
+  if (!builderState || !builderState.generatedResume) return;
+  var html = formatResumeContent(builderState.generatedResume);
+  chrome.storage.local.set({ tailoredResumeHtml: html }, function () {
+    chrome.tabs.create({ url: chrome.runtime.getURL('resume-preview.html') });
+  });
+  addBuilderMessage('Your resume is open in a new tab. Click **Save as PDF** or press **Ctrl+P** to download it.', 'ai');
+}
+
+async function useBuiltResumeAsMyResume() {
+  if (!builderState || !builderState.generatedResume) return;
+  resumeText = builderState.generatedResume;
+  await chrome.storage.local.set({ resumeText: resumeText });
+  setResumeStatus('Resume saved from builder', '#4caf50');
+  updateToolButtons();
+  addBuilderMessage('Saved as your resume — Tailor Resume, Cover Letter, Interview Prep, and Match Score can all use it now.', 'ai');
+}
+
+function handleBuilderResponse(response) {
+  addBuilderMessage(response, 'user');
+  clearBuilderOptions();
+  if (!builderState) return;
+
+  if (response === 'Start over') { startBuilder(); return; }
+  if (response === 'Download Resume') { downloadBuiltResume(); return; }
+  if (response === 'Use as My Resume') { useBuiltResumeAsMyResume(); return; }
+  if (response === 'Try again') { generateBuiltResume(); return; }
+
+  var d = builderState.data;
+  switch (builderState.step) {
+    case 'name':
+      d.name = response; builderState.step = 'email';
+      addBuilderMessage('What email address should be on it?', 'ai');
+      break;
+    case 'email':
+      d.email = response; builderState.step = 'phone';
+      addBuilderMessage('Phone number?', 'ai');
+      break;
+    case 'phone':
+      d.phone = response; builderState.step = 'location';
+      addBuilderMessage('City and state?', 'ai');
+      break;
+    case 'location':
+      d.location = response; builderState.step = 'linkedin';
+      addBuilderMessage('LinkedIn URL? (or tap Skip)', 'ai');
+      addBuilderQuickOptions(['Skip']);
+      break;
+    case 'linkedin':
+      d.linkedin = (response === 'Skip') ? '' : response;
+      builderState.step = 'targetRole';
+      addBuilderMessage('What job title or field are you targeting with this resume?', 'ai');
+      break;
+    case 'targetRole':
+      d.targetRole = response; builderState.step = 'job_title'; builderState.jobDraft = {};
+      addBuilderMessage('Let\'s add your work history. What was your job title? (or tap Done if you have none to add)', 'ai');
+      addBuilderQuickOptions(['Done adding jobs']);
+      break;
+    case 'job_title':
+      if (response === 'Done adding jobs') {
+        builderState.step = 'edu_entry';
+        addBuilderMessage('Now education — add a school (degree, school, dates), or tap Done.', 'ai');
+        addBuilderQuickOptions(['Done adding education']);
+      } else {
+        builderState.jobDraft.title = response; builderState.step = 'job_company';
+        addBuilderMessage('What company?', 'ai');
+      }
+      break;
+    case 'job_company':
+      builderState.jobDraft.company = response; builderState.step = 'job_dates';
+      addBuilderMessage('What dates did you work there? (e.g. Jan 2022 – Present)', 'ai');
+      break;
+    case 'job_dates':
+      builderState.jobDraft.dates = response; builderState.step = 'job_bullets';
+      addBuilderMessage('Give me 2-4 bullet points on what you did or achieved there (separate with new lines or semicolons).', 'ai');
+      break;
+    case 'job_bullets':
+      builderState.jobDraft.bullets = response;
+      d.jobs.push(builderState.jobDraft);
+      builderState.jobDraft = null;
+      builderState.step = 'job_more';
+      addBuilderMessage('Add another job?', 'ai');
+      addBuilderQuickOptions(['Yes', 'No, that\'s all']);
+      break;
+    case 'job_more':
+      if (response.toLowerCase().indexOf('yes') >= 0) {
+        builderState.jobDraft = {}; builderState.step = 'job_title';
+        addBuilderMessage('What was your job title?', 'ai');
+      } else {
+        builderState.step = 'edu_entry';
+        addBuilderMessage('Now education — add a school (degree, school, dates), or tap Done.', 'ai');
+        addBuilderQuickOptions(['Done adding education']);
+      }
+      break;
+    case 'edu_entry':
+      if (response === 'Done adding education') {
+        builderState.step = 'skills';
+        addBuilderMessage('List your key skills, comma-separated.', 'ai');
+      } else {
+        d.education.push(response);
+        addBuilderMessage('Add another school, or tap Done.', 'ai');
+        addBuilderQuickOptions(['Done adding education']);
+      }
+      break;
+    case 'skills':
+      d.skills = response; builderState.step = 'generating';
+      generateBuiltResume();
+      break;
+  }
+}
+
+buildResumeBtn.addEventListener('click', startBuilder);
+
+builderSend.addEventListener('click', function () {
+  var val = builderInput.value.trim();
+  if (val) { builderInput.value = ''; handleBuilderResponse(val); }
+});
+
+builderInput.addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') {
+    var val = builderInput.value.trim();
+    if (val) { builderInput.value = ''; handleBuilderResponse(val); }
+  }
+});
+
+closeBuilder.addEventListener('click', function () {
+  builderSection.classList.add('hidden');
+  builderState = null;
 });
 
 function addChatMessage(text, role) {
@@ -2114,7 +2364,7 @@ function setFillStatus(text, color) {
 // Apply and external ATS like Workday/Greenhouse/Lever). Matches each field by its label +
 // name/id/autocomplete/placeholder, fills contact fields, and answers EEO selects/radios by
 // fuzzy-matching the saved options. Returns the number of fields filled. No outer references.
-function runAutofill(profile, eeo) {
+async function runAutofill(profile, eeo) {
   profile = profile || {}; eeo = eeo || {};
   function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim(); }
   function fire(el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
@@ -2126,6 +2376,10 @@ function runAutofill(profile, eeo) {
   function labelText(el) {
     var t = '';
     try { if (el.id) { var l = document.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id) + '"]'); if (l) t = l.innerText || l.textContent || ''; } } catch (e) {}
+    if (!t) {
+      var lbAttr = el.getAttribute('aria-labelledby');
+      if (lbAttr) { var lb = document.getElementById(lbAttr.split(' ')[0]); if (lb) t = lb.innerText || lb.textContent || ''; }
+    }
     if (!t) { var p = el.closest('label'); if (p) t = p.innerText || p.textContent || ''; }
     if (!t) { var c = el.closest('.form-group,fieldset,div,section'); if (c) { var li = c.querySelector('label,legend'); if (li) t = li.innerText || li.textContent || ''; } }
     return t;
@@ -2211,6 +2465,44 @@ function runAutofill(profile, eeo) {
     rs.forEach(function (x) { var sc = score(radioLabel(x), eeo[key]); if (sc > bs) { bs = sc; best = x; } });
     if (best && bs >= 45) { if (!best.checked) { best.checked = true; best.dispatchEvent(new Event('click', { bubbles: true })); best.dispatchEvent(new Event('change', { bubbles: true })); } filled++; }
   });
+
+  // ----- EEO answers (custom ARIA comboboxes — Workday-style dropdowns with no native <select>) -----
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function fireClick(el) {
+    el.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    el.click();
+  }
+  var triggers = document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"]');
+  for (var ti = 0; ti < triggers.length; ti++) {
+    var trig = triggers[ti];
+    try {
+      if (trig.tagName === 'SELECT' || trig.disabled || trig.offsetParent === null) continue;
+      var curText = norm(trig.innerText || trig.textContent || trig.value || '');
+      if (curText && !/select|choose|--|^$/.test(curText)) continue; // already shows a real value
+      var tKey = eeoKey(signals(trig));
+      if (!tKey || !eeo[tKey]) continue;
+
+      fireClick(trig);
+      await sleep(150); // Workday-style listboxes render async, often portaled to <body>
+
+      var opts = document.querySelectorAll('[role="option"]:not([aria-disabled="true"])');
+      var tBest = null, tbs = 0;
+      for (var oi = 0; oi < opts.length; oi++) {
+        var opt = opts[oi];
+        if (opt.offsetParent === null) continue;
+        var sc = score(opt.innerText || opt.textContent || '', eeo[tKey]);
+        if (sc > tbs) { tbs = sc; tBest = opt; }
+      }
+      if (tBest && tbs >= 45) {
+        fireClick(tBest);
+        await sleep(80);
+        filled++;
+      } else {
+        trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      }
+    } catch (e) { /* one odd widget shouldn't abort the rest of the autofill */ }
+  }
 
   return filled;
 }

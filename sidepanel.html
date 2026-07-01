@@ -236,7 +236,8 @@
         <button id="analyze-btn" class="tool-btn" disabled>Analyze Job</button>
         <button id="tailor-btn" class="tool-btn" disabled>Tailor Resume</button>
         <button id="cover-btn" class="tool-btn" disabled>Cover Letter</button>
-        <button id="interview-btn" class="tool-btn tool-btn-wide" disabled>Interview Prep</button>
+        <button id="interview-btn" class="tool-btn" disabled>Interview Prep</button>
+        <button id="match-score-btn" class="tool-btn tool-btn-wide" disabled>&#128202; Match Score</button>
       </div>
       <div class="upload-area">
         <input type="file" id="resume-upload" accept=".txt,.pdf,.docx">
@@ -249,6 +250,22 @@
         </div>
       </div>
       <span id="resume-status" class="resume-status"></span>
+      <button id="build-resume-btn" class="btn-small" style="width:100%;margin-top:6px;">&#9997;&#65039; Build a Resume from Scratch</button>
+    </section>
+
+    <section id="builder-section" class="section hidden">
+      <div class="section-header">
+        <h2>Build a Resume</h2>
+        <button id="close-builder" class="btn-small">Close</button>
+      </div>
+      <div id="builder-conversation" class="card tailoring-card"></div>
+      <div id="builder-input-area" class="tailoring-input-area">
+        <div id="builder-options" class="tailoring-options"></div>
+        <div class="tailoring-text-input">
+          <input type="text" id="builder-input" placeholder="Type your answer..." />
+          <button id="builder-send" class="btn-small">Send</button>
+        </div>
+      </div>
     </section>
 
     <section id="analysis-section" class="section hidden">
