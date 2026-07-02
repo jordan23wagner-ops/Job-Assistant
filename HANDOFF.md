@@ -1,5 +1,28 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-01 — v1.3.0: Easy Apply refinements (banking, resume, post-submit)
+
+Three fixes after v1.2.0 confirmed Easy Apply works:
+- **Bank every question + dropdown, not just AI-answered ones.** `findUnansweredCustomQuestions`
+  generalized to `findCustomQuestions(modal, includeAnswered)`; `attachAnswerCapture(modal)` is
+  now attached on every step and, on any advance/submit click (Alicia's or the human's), banks
+  the final value of ALL custom questions via `bankAllCustomAnswers` — so manually-typed answers
+  and dropdown selections are remembered too, not only the ones Alicia generated.
+- **Hidden/conditional questions ignored.** Question containers with no client rects (hidden
+  steps, conditional fields) are skipped in both `findCustomQuestions` and `autoFillEeo`.
+- **Resume step left to the user.** `isResumeOrDocControl()` excludes resume/CV/cover-letter
+  selection from the custom-question + fill logic, and the LinkedIn resume-file auto-attach was
+  removed entirely (it caused a second document to be selected → Next errored). LinkedIn
+  pre-selects the most-recent resume; Alicia no longer touches it. External-ATS resume upload
+  still lives in autofill.js.
+- **Stop after Submit.** `isPostSubmitConfirmation()` detects the "application sent" / follow-
+  company end screen (no advance/submit button present) and makes `findEasyApplyModal` return
+  null, so Alicia goes quiet and waits for a new job + Easy Apply instead of poking the
+  confirmation screen (which produced console errors and could touch the Follow prompt).
+- Harness-verified: resume step auto-advanced without selecting a 2nd resume; a manually-chosen
+  dropdown + typed answer were both banked; post-submit confirmation left untouched (Follow not
+  clicked, no advance).
+
 ## Update 2026-07-01 (latest) — v1.2.0: THE fix — pierce LinkedIn's Shadow DOM
 
 The true root cause of Easy Apply "nothing happens", confirmed by a shadow+iframe-piercing

@@ -821,6 +821,7 @@ function autoFillEeo(prefs) {
   });
   containers.forEach(function (container) {
     if (handled.indexOf(container) >= 0) return;
+    if (!container.getClientRects().length) return; // hidden step — don't fill yet
     var label = getText(container.querySelector('label, legend, .fb-dash-form-element__label')) || getText(container).slice(0, 220);
     var matcher = matchEeo(label);
     if (!matcher) return;
@@ -948,42 +949,10 @@ async function autoFillContactFields(profile) {
   return filled;
 }
 
-// ---- Resume attach (Easy Apply upload step) ----
-// LinkedIn usually preselects the last-used resume; only attach the stored file when the
-// step clearly has an empty upload with no already-selected resume card.
-function b64ToFile(rec) {
-  var bin = atob(rec.b64);
-  var bytes = new Uint8Array(bin.length);
-  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new File([bytes], rec.name || 'resume.pdf', { type: rec.type || 'application/pdf' });
-}
-
-async function maybeAttachResumeFile(modal) {
-  var fileInputs = modal.querySelectorAll('input[type="file"]');
-  if (!fileInputs.length) return 0;
-  // A resume card already selected on this step means nothing to do.
-  if (modal.querySelector('[class*="document-upload"][class*="selected"], [class*="jobs-document-upload"] input:checked')) return 0;
-  var data = await safeStorageGetAsync('resumeFile');
-  var rec = data && data.resumeFile;
-  if (!rec || !rec.b64) return 0;
-  var attached = 0;
-  for (var i = 0; i < fileInputs.length; i++) {
-    var el = fileInputs[i];
-    if (el.disabled || (el.files && el.files.length)) continue;
-    var s = normTxt([el.name, el.id, el.getAttribute('aria-label'), findLabelText(el)].filter(Boolean).join(' '));
-    if (/cover letter/.test(s)) continue;
-    if (s && !/resume|cv\b|curriculum/.test(s) && fileInputs.length > 1) continue;
-    try {
-      var dt = new DataTransfer();
-      dt.items.add(b64ToFile(rec));
-      el.files = dt.files;
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      attached++;
-    } catch (e) {}
-  }
-  if (attached) console.log('[Alicia] Attached stored resume to', attached, 'file input(s)');
-  return attached;
-}
+// NOTE: on LinkedIn the resume step is left entirely to the user — LinkedIn stores the user's
+// resumes and pre-selects the most recent, and auto-attaching/selecting here caused a second
+// document to be chosen and errored the Next step. So there is no resume-attach on LinkedIn;
+// external-ATS resume upload lives in autofill.js.
 
 // ========== Custom question answering + learning ==========
 // Questions that are neither EEO nor contact fields — "years of experience with X", "why this
@@ -991,7 +960,7 @@ async function maybeAttachResumeFile(modal) {
 // Alicia's own edits on past applications); anything left over goes to one batched AI call.
 // AI-answered questions pause auto-advance so Alicia reviews/edits before the click that
 // actually saves the (possibly-corrected) answer into the learned bank — see
-// tryAutoAdvanceEasyApply and attachLearningCapture below.
+// tryAutoAdvanceEasyApply and attachAnswerCapture below.
 
 var CUSTOM_QA_MATCH_THRESHOLD = 65;
 var CUSTOM_QA_MAX_PER_STEP = 6;
@@ -1055,8 +1024,20 @@ function applyAnswerToItem(item, answerText) {
   return fillTextInput(item.control, answerText);
 }
 
-// Question containers that are still empty and aren't EEO or contact fields.
-function findUnansweredCustomQuestions(modal) {
+// Resume / cover-letter / document selection steps must be left entirely alone: LinkedIn
+// pre-selects the user's most-recent resume, and any auto-selection here risks picking two
+// documents (which errors out on Next). Recognize these by label/module and skip them.
+function isResumeOrDocControl(label, container) {
+  if (/\bresume\b|\bcv\b|curriculum vitae|cover letter|upload (a )?(document|file)|choose (a )?(resume|file)/i.test(label || '')) return true;
+  if (container && container.closest && container.closest('[class*="jobs-document-upload"], [class*="document-upload"], [class*="resume"]')) return true;
+  return false;
+}
+
+// Every custom question on the step (neither EEO nor contact nor resume/doc). With
+// includeAnswered=false → only the empty ones (what still needs filling); with
+// includeAnswered=true → all of them, including ones already filled, so their final values can
+// be banked for future applications ("note and save every question and dropdown").
+function findCustomQuestions(modal, includeAnswered) {
   var out = [];
   var containers = Array.prototype.slice.call(modal.querySelectorAll(
     '.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, fieldset'
@@ -1071,9 +1052,11 @@ function findUnansweredCustomQuestions(modal) {
   }
   containers.forEach(function (container) {
     if (out.length >= CUSTOM_QA_MAX_PER_STEP) return;
+    if (!container.getClientRects().length) return;    // hidden step / conditional question — not active
     var label = getText(container.querySelector('label, legend, .fb-dash-form-element__label')) || getText(container).slice(0, 220);
     if (!label || label.length < 3) return;
-    if (matchEeo(label)) return; // never let AI answer demographic/EEO questions
+    if (matchEeo(label)) return;                       // demographic/EEO — never AI-answered or banked here
+    if (isResumeOrDocControl(label, container)) return; // resume/cover-letter selection — leave to LinkedIn
 
     var sel = container.querySelector('select');
     var radios = container.querySelectorAll('input[type="radio"]');
@@ -1081,18 +1064,40 @@ function findUnansweredCustomQuestions(modal) {
 
     if (isKnownContactField(normTxt(label), text)) return; // handled by autoFillContactFields
 
-    if (sel && !sel.value) {
+    if (sel) {
+      if (!includeAnswered && sel.value) return;
       var options = [];
       for (var o = 0; o < sel.options.length; o++) { if (sel.options[o].value) options.push(getText(sel.options[o]) || sel.options[o].value); }
       if (options.length) out.push({ container: container, control: sel, type: 'select', label: label, options: options });
-    } else if (radios.length && !Array.prototype.some.call(radios, function (r) { return r.checked; })) {
+    } else if (radios.length) {
+      var anyChecked = Array.prototype.some.call(radios, function (r) { return r.checked; });
+      if (!includeAnswered && anyChecked) return;
       var ropts = Array.prototype.map.call(radios, radioLabelText);
       out.push({ container: container, control: null, type: 'radio', label: label, options: ropts });
-    } else if (text && !(text.value && text.value.trim()) && text.offsetParent !== null) {
+    } else if (text && text.offsetParent !== null) {
+      if (!includeAnswered && text.value && text.value.trim()) return;
       out.push({ container: container, control: text, type: (text.tagName === 'TEXTAREA' ? 'textarea' : 'text'), label: label, options: [] });
     }
   });
   return out;
+}
+
+// Back-compat alias — the empties are what handleCustomQuestions needs to fill.
+function findUnansweredCustomQuestions(modal) {
+  return findCustomQuestions(modal, false);
+}
+
+// Bank the current value of EVERY custom question/dropdown on the step (not just ones Alicia
+// answered) so manually-filled answers and dropdown selections are remembered next time.
+function bankAllCustomAnswers(modal) {
+  findCustomQuestions(modal, true).forEach(function (item) {
+    var v = itemIsAnswered(item)
+      ? (item.type === 'select' ? item.control.value
+         : item.type === 'radio' ? (item.container.querySelector('input[type="radio"]:checked') ? radioLabelText(item.container.querySelector('input[type="radio"]:checked')) : '')
+         : (item.control && item.control.value))
+      : '';
+    if (v && String(v).trim()) upsertLearnedAnswer(item.label, String(v).trim(), item.type, item.options);
+  });
 }
 
 function parseCustomAnswersJson(raw) {
@@ -1178,7 +1183,6 @@ async function handleCustomQuestions(modal) {
 
     if (answeredAny || needHuman.length) {
       pendingReviewModal = modal;
-      attachLearningCapture(modal, remaining); // banks the final value of EVERY item on Next
       modal.__aliciaPendingMsg = needHuman.length
         ? ('New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill in and click Next. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' for next time.')
         : 'Alicia answered a question here — please review before clicking Next.';
@@ -1197,33 +1201,21 @@ function itemIsAnswered(item) {
   return !!(item.control && item.control.value && item.control.value.trim());
 }
 
-// Once Alicia clicks Next/Continue/Review herself (auto-advance won't, while pendingReviewModal
-// is set), capture whatever ended up in each AI-answered field — including any edits she made —
-// and save that as the confirmed answer. Learning is based on human-confirmed text, not the raw
-// AI guess.
-function attachLearningCapture(modal, items) {
-  // Delegated + capture-phase so it survives LinkedIn re-rendering the footer buttons
-  // between when the AI answers and when Alicia clicks Next herself.
-  if (modal.__aliciaLearnItems) {
-    modal.__aliciaLearnItems = modal.__aliciaLearnItems.concat(items);
-    return;
-  }
-  modal.__aliciaLearnItems = items;
+// Attached once per modal (delegated + capture-phase so it survives LinkedIn re-rendering the
+// footer). On any Next/Continue/Review/Submit click — whether Alicia's auto-advance clicked it
+// or the human did — bank the final value of EVERY custom question/dropdown on the step. This
+// captures answers Alicia generated, ones the human typed/corrected, AND ones LinkedIn or the
+// human filled that Alicia never flagged — so future applications recognize them all.
+function attachAnswerCapture(modal) {
+  if (modal.__aliciaCaptureAttached) return;
+  modal.__aliciaCaptureAttached = true;
   modal.addEventListener('click', function (e) {
-    var pending = modal.__aliciaLearnItems;
-    if (!pending || !pending.length) return;
     var btn = e.target && e.target.closest ? e.target.closest('button') : null;
     if (!btn) return;
     var t = normTxt((btn.getAttribute('aria-label') || '') + ' ' + (btn.innerText || btn.textContent || ''));
     var isAction = EASY_APPLY_ADVANCE_PATTERNS.concat(EASY_APPLY_SUBMIT_PATTERNS).some(function (p) { return p.test(t); });
     if (!isAction) return;
-    modal.__aliciaLearnItems = null;
-    pending.forEach(function (item) {
-      var finalValue = item.type === 'select' ? (item.control && item.control.value)
-        : item.type === 'radio' ? (item.container.querySelector('input[type="radio"]:checked') ? radioLabelText(item.container.querySelector('input[type="radio"]:checked')) : '')
-        : (item.control && item.control.value);
-      if (finalValue && finalValue.trim()) upsertLearnedAnswer(item.label, finalValue.trim(), item.type, item.options);
-    });
+    bankAllCustomAnswers(modal);
     if (pendingReviewModal === modal) pendingReviewModal = null;
   }, true);
 }
@@ -1287,7 +1279,28 @@ function findEasyApplyForm() {
 // can't reach into an unrelated LinkedIn modal (e.g. a "Save this job" confirmation) and click
 // something unintended. LinkedIn churns class names, so after the known classes fail, fall
 // back to any open dialog that announces itself as an apply flow AND contains form controls.
+// After Submit, LinkedIn shows a confirmation ("Your application was sent") often followed by a
+// "follow this company?" prompt. Alicia must stop touching the screen and wait for a new job +
+// Easy Apply. Detect that end state and treat it as "no apply form" so nothing is filled or
+// clicked until a fresh application form (with an advance/submit button) appears.
+function isPostSubmitConfirmation(modal) {
+  var txt = normTxt(getText(modal)).slice(0, 500);
+  var sent = /(application sent|your application was sent|application was submitted|application submitted|you applied|applied on|your application is on its way|done applying)/.test(txt);
+  var followPrompt = /(follow .* to stay|stay up to date|want to follow|following)/.test(txt) && !/first name|email|phone/.test(txt);
+  if (!sent && !followPrompt) return false;
+  // Only a confirmation if there is nothing left to fill/advance/submit.
+  if (findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS)) return false;
+  if (findModalButton(modal, EASY_APPLY_ADVANCE_PATTERNS)) return false;
+  return true;
+}
+
 function findEasyApplyModal() {
+  var raw = findEasyApplyModalRaw();
+  if (raw && isPostSubmitConfirmation(raw)) return null; // submitted — wait for a new application
+  return raw;
+}
+
+function findEasyApplyModalRaw() {
   var form = findEasyApplyForm();
   if (form) return form.closest('.artdeco-modal, [role="dialog"]') || form;
   var roots = easyApplySearchRoots();
@@ -1430,7 +1443,11 @@ function scheduleAutoFill() {
           if (data.profile && Object.keys(data.profile).length > 0) await autoFillContactFields(data.profile);
           var modal = findEasyApplyModal();
           if (modal) {
-            await maybeAttachResumeFile(modal);
+            attachAnswerCapture(modal); // bank every question/dropdown on this step when it advances
+            // NOTE: on LinkedIn we intentionally do NOT attach a resume file — the user's saved
+            // resumes are managed by LinkedIn (it pre-selects the most recent). Auto-attaching
+            // caused a second document to get selected and errored the Next step. External ATS
+            // resume upload is handled separately in autofill.js.
             await handleCustomQuestions(modal);
           }
         } catch (e) {
