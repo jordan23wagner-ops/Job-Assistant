@@ -410,9 +410,21 @@ function escapeOverlayHtml(s) {
 }
 
 function findMatchOverlayAnchor() {
-  return document.querySelector(
+  // Known top-card title selectors first.
+  var known = document.querySelector(
     '.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, h1.t-24.t-bold, h1.t-24, h2.top-card-layout__title'
   );
+  if (known && known.offsetParent !== null) return known;
+  // LinkedIn churns those classes — fall back to any visible <h1> that looks like a job title
+  // (the job detail pane's heading). Skip the LinkedIn global nav/search area.
+  var h1s = document.querySelectorAll('h1, h2.t-24, h2.t-bold');
+  for (var i = 0; i < h1s.length; i++) {
+    var h = h1s[i];
+    if (h.offsetParent === null) continue;
+    var t = getText(h);
+    if (t.length > 3 && t.length < 200 && !/^(jobs|linkedin|messaging|my network|notifications)$/i.test(t)) return h;
+  }
+  return null;
 }
 
 function toggleMatchOverlayDetails(badgeEl, result) {
@@ -422,7 +434,9 @@ function toggleMatchOverlayDetails(badgeEl, result) {
   var panel = document.createElement('div');
   panel.id = 'alicia-match-details';
   panel.__forBadge = badgeEl;
-  panel.style.cssText = 'margin:6px 0 10px;padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;';
+  var isFixed = badgeEl.parentNode === document.body; // floating badge → float the panel too
+  panel.style.cssText = 'padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:320px;box-shadow:0 2px 12px rgba(0,0,0,.4);'
+    + (isFixed ? 'position:fixed;top:108px;right:20px;z-index:2147483646;' : 'margin:6px 0 10px;max-width:480px;');
 
   var html = result.summary ? '<div style="margin-bottom:4px;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
   function chips(label, items, color) {
@@ -441,14 +455,26 @@ function toggleMatchOverlayDetails(badgeEl, result) {
 
 function renderMatchOverlay(state, result) {
   var anchor = findMatchOverlayAnchor();
-  if (!anchor) return;
   var el = document.getElementById('alicia-match-overlay');
+  var fixed = !anchor; // no inline anchor found — pin a floating badge so it always shows
   if (!el) {
     el = document.createElement('div');
     el.id = 'alicia-match-overlay';
+    if (anchor) anchor.insertAdjacentElement('afterend', el);
+    else document.body.appendChild(el);
+  } else if (anchor && el.parentNode === document.body) {
+    // An anchor became available after we first showed a floating badge — move it inline.
     anchor.insertAdjacentElement('afterend', el);
+    fixed = false;
+  } else if (el.parentNode === document.body) {
+    fixed = true;
   }
-  el.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin:8px 0;padding:5px 12px;border-radius:20px;font:600 12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;cursor:default;user-select:none;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);';
+
+  var base = 'display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font:600 12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;user-select:none;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);';
+  var placement = fixed
+    ? 'position:fixed;top:72px;right:20px;z-index:2147483646;'
+    : 'margin:8px 0;';
+  el.style.cssText = base + placement;
 
   if (state === 'loading') {
     el.style.background = '#4a4a68';
@@ -1501,6 +1527,12 @@ applyObserver.observe(document.body, { childList: true, subtree: true });
 setInterval(function () {
   if (!extAlive()) return;
   if (findEasyApplyModal()) scheduleAutoFill();
+  // Re-assert the match badge if LinkedIn re-rendered the top card and wiped it (uses the
+  // cached score — no extra backend calls; initial scoring stays driven by detectJob).
+  if (IS_TOP && lastDetectedJob && !document.getElementById('alicia-match-overlay')) {
+    var cached = matchScoreCache[matchJobKey(lastDetectedJob)];
+    if (cached) renderMatchOverlay('done', cached);
+  }
 }, 1200);
 
 // The form may already be fully present when this script arrives (prebuilt shadow tree / an
