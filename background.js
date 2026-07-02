@@ -62,10 +62,16 @@ function injectAtsFrames(tabId) {
   chrome.webNavigation.getAllFrames({ tabId: tabId }, function (frames) {
     if (!frames) return;
     frames.forEach(function (f) {
-      if (f.frameId === 0) return; // top frame is linkedin.com itself, handled by content.js
+      if (f.frameId === 0) return;                 // top frame is linkedin.com — content.js owns it
+      if (!/^https?:/i.test(f.url || '')) return;  // skip about:blank / data: / chrome-extension frames
       var host = '';
       try { host = new URL(f.url).hostname; } catch (e) { return; }
-      if (!ATS_HOST_RE.test(host)) return;
+      if (/(^|\.)linkedin\.com$|(^|\.)licdn\.com$/i.test(host)) return; // LinkedIn's own subframes
+      // Inject into recognized ATS domains OR any direct child frame of the top page (the
+      // embedded employer application is a direct child; nested tracking/ad frames are not).
+      // autofill.js self-guards: it does nothing on a frame with no recognized form and never
+      // clicks Submit/Apply, so injecting into a non-application frame is harmless.
+      if (!ATS_HOST_RE.test(host) && f.parentFrameId !== 0) return;
       chrome.scripting.executeScript({ target: { tabId: tabId, frameIds: [f.frameId] }, files: ['autofill.js'] }).catch(function () {});
     });
   });

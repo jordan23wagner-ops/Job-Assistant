@@ -1191,6 +1191,24 @@ function findEasyApplyModal() {
     var label = ((m.getAttribute('aria-label') || '') + ' ' + (head ? getText(head) : '')).toLowerCase();
     if (label.indexOf('apply') >= 0 && m.querySelector('form, input, select, textarea')) return m;
   }
+  // Class-independent fallback: LinkedIn has shipped apply flows that are neither
+  // .artdeco-modal nor [role="dialog"]. Find the "Apply to <company>" heading, then walk up to
+  // the smallest ancestor that actually holds the form controls + a button, and treat that as
+  // the modal. Only fires when the form lives in THIS document (not a cross-origin iframe).
+  var heads = document.querySelectorAll('h1, h2, h3, [role="heading"]');
+  for (var hI = 0; hI < heads.length; hI++) {
+    var h = heads[hI];
+    if (h.offsetParent === null) continue;
+    var ht = getText(h).toLowerCase();
+    if (!/^apply to\b|^application\b|easy apply|complete your application/.test(ht)) continue;
+    var node = h.parentElement;
+    for (var up = 0; up < 8 && node && node !== document.body; up++) {
+      if (node.querySelector('input, select, textarea') && node.querySelector('button, [role="button"]')) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+  }
   return null;
 }
 
@@ -1307,20 +1325,23 @@ function scheduleAutoFill() {
 // autofill engine directly into it. Debounced and de-duplicated by src so one modal doesn't
 // spam repeated injection requests while its iframe re-renders.
 var seenAtsIframeSrcs = {};
-var lastAtsIframeCheck = 0;
 function maybeCheckAtsIframe() {
-  var now = Date.now();
-  if (now - lastAtsIframeCheck < 3000) return;
-  var modal = document.querySelector('.artdeco-modal, [role="dialog"]');
-  if (!modal) return;
-  var iframe = modal.querySelector('iframe[src]');
-  if (!iframe) return;
-  var src = iframe.src || '';
-  if (!src || /linkedin\.com|licdn\.com/i.test(src) || seenAtsIframeSrcs[src]) return;
-  seenAtsIframeSrcs[src] = true;
-  lastAtsIframeCheck = now;
-  console.log('[Alicia] Cross-origin application iframe detected inside a modal, asking background to fill it:', src);
-  safeSendMessage({ type: 'CHECK_ATS_IFRAME' });
+  // Scan the WHOLE page (not just inside a known modal — LinkedIn's apply flows aren't always
+  // an .artdeco-modal) for a visibly-sized cross-origin iframe. That's the embedded employer
+  // ATS form (Lever/Greenhouse/etc.); this script can't reach into it across origins, so ask
+  // background.js to inject the fill engine directly into that frame. De-duplicated by src so
+  // one form isn't injected repeatedly; small tracking/ad iframes are skipped by size.
+  var iframes = document.querySelectorAll('iframe[src]');
+  for (var i = 0; i < iframes.length; i++) {
+    var f = iframes[i];
+    var src = f.src || '';
+    if (!src || /(^|\.)linkedin\.com|licdn\.com|about:blank|google|doubleclick|ads/i.test(src)) continue;
+    if (f.offsetParent === null || f.offsetWidth < 250 || f.offsetHeight < 200) continue;
+    if (seenAtsIframeSrcs[src]) continue;
+    seenAtsIframeSrcs[src] = true;
+    console.log('[Alicia] Cross-origin application iframe detected, asking background to fill it:', src);
+    safeSendMessage({ type: 'CHECK_ATS_IFRAME' });
+  }
 }
 
 var applyObserver = new MutationObserver(function () {
