@@ -803,6 +803,47 @@ function autoFillEeo(prefs) {
   safeSendMessage({ type: 'EEO_FILL_RESULT', filled: filled });
 }
 
+// Contact fields (name/email/phone/address/links) inside the Easy Apply modal — a separate
+// pass from autoFillEeo above, since LinkedIn's own step often mixes contact inputs with EEO
+// questions on the same page. Scoped strictly to the modal, same as the auto-advance buttons.
+function autoFillContactFields(profile) {
+  if (!profile || Object.keys(profile).length === 0) return 0;
+  var modal = findEasyApplyModal();
+  if (!modal) return 0;
+
+  var fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
+  var STD = [
+    { v: profile.email,     t: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
+    { v: profile.phone,     t: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
+    { v: profile.firstName, t: function (s) { return /\b(given name|first name|firstname|fname)\b/.test(s); } },
+    { v: profile.lastName,  t: function (s) { return /\b(family name|last name|lastname|surname|lname)\b/.test(s); } },
+    { v: profile.linkedin,  t: function (s) { return /linkedin/.test(s); } },
+    { v: profile.website,   t: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
+    { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
+    { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
+    { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
+    { v: fullName,          t: function (s) { return /\bfull name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
+  ];
+
+  var filled = 0;
+  var inputs = modal.querySelectorAll('input, textarea');
+  for (var i = 0; i < inputs.length; i++) {
+    var el = inputs[i];
+    var ty = (el.type || '').toLowerCase();
+    if (['hidden', 'password', 'file', 'checkbox', 'radio', 'submit', 'button', 'image', 'reset', 'search'].indexOf(ty) >= 0) continue;
+    if (el.disabled || el.readOnly) continue;
+    if (el.value && el.value.trim()) continue;
+    if (el.offsetParent === null) continue;
+    var s = normTxt([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), findLabelText(el)].filter(Boolean).join(' '));
+    if (!s) continue;
+    for (var f = 0; f < STD.length; f++) {
+      if (STD[f].v && STD[f].t(s, el)) { setNativeValue(el, STD[f].v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); filled++; break; }
+    }
+  }
+  if (filled) console.log('[Alicia] Auto-filled', filled, 'contact field(s) in Easy Apply');
+  return filled;
+}
+
 // ========== Easy Apply auto-advance ==========
 // Fills each step, then clicks "Next" / "Continue to next step" / "Review your application"
 // to move forward automatically. It STOPS the instant it sees a Submit button and never
@@ -902,8 +943,9 @@ var autofillTimer = null;
 function scheduleAutoFill() {
   if (autofillTimer) clearTimeout(autofillTimer);
   autofillTimer = setTimeout(function () {
-    safeStorageGet('eeoPrefs', function (data) {
+    safeStorageGet(['eeoPrefs', 'profile'], function (data) {
       if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
+      if (data.profile && Object.keys(data.profile).length > 0) autoFillContactFields(data.profile);
       setTimeout(tryAutoAdvanceEasyApply, 400);
     });
   }, 700);
