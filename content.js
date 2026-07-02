@@ -36,6 +36,11 @@ function safeStorageGet(keys, cb) {
   try { chrome.storage.local.get(keys, cb); } catch (e) {}
 }
 
+function safeStorageSet(obj) {
+  if (!extAlive()) return;
+  try { chrome.storage.local.set(obj); } catch (e) {}
+}
+
 function trySelectors(selectors, minLen, maxLen) {
   for (var i = 0; i < selectors.length; i++) {
     try {
@@ -289,12 +294,17 @@ function detectJob() {
 
   if (title || company) {
     var job = { title: title, company: company, location: location, description: description, url: window.location.href, detectedAt: Date.now() };
+    lastDetectedJob = job;
     safeSendMessage({ type: 'JOB_DETECTED', job: job });
     if (title && description) maybeShowMatchOverlay(job);
     return true;
   }
   return false;
 }
+
+// Kept up to date by detectJob() — the Easy Apply custom-question answerer needs the job
+// context but the modal doesn't always re-trigger detection itself.
+var lastDetectedJob = null;
 
 // ========== Match Score overlay: mirrors the side panel's "Match Score" tool, but shows
 // automatically on the job page itself (like Jobright), scored against the saved resume. ==========
@@ -323,10 +333,9 @@ function parseMatchJson(raw) {
 }
 
 // Self-contained copy of sidepanel.js's rawBackendCall — content scripts run in a separate
-// JS context and can't call into the side panel, so the NDJSON-stream client is duplicated here.
-async function callMatchBackend(job, resumeText) {
-  var sys = 'You are Alicia, a resume-to-job matching engine. Compare the candidate resume to the job posting. Respond ONLY with strict JSON, no markdown fences, no prose: {"score":<0-100 integer, overall fit>,"matched":[<up to 8 short keywords/skills from the job that the resume clearly covers>],"missing":[<up to 8 short keywords/skills the job wants that the resume does not clearly show>],"summary":"<one sentence on the overall fit>"}';
-  var user = 'Job Title: ' + (job.title || '') + '\nCompany: ' + (job.company || '') + '\n\nJob Description:\n' + (job.description || '') + '\n\nCandidate Resume:\n' + resumeText.slice(0, 6000);
+// JS context and can't call into the side panel, so the NDJSON-stream client is duplicated
+// here (shared by every AI-backed content.js feature: match score, custom-question answers).
+async function fetchBackendText(sys, user) {
   var resp = await fetch(MATCH_BACKEND_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -352,6 +361,13 @@ async function callMatchBackend(job, resumeText) {
     }
   }
   if (buffer.trim()) { try { var fin = JSON.parse(buffer.trim()); if (fin.delta) text += fin.delta; } catch (e) {} }
+  return text;
+}
+
+async function callMatchBackend(job, resumeText) {
+  var sys = 'You are Alicia, a resume-to-job matching engine. Compare the candidate resume to the job posting. Respond ONLY with strict JSON, no markdown fences, no prose: {"score":<0-100 integer, overall fit>,"matched":[<up to 8 short keywords/skills from the job that the resume clearly covers>],"missing":[<up to 8 short keywords/skills the job wants that the resume does not clearly show>],"summary":"<one sentence on the overall fit>"}';
+  var user = 'Job Title: ' + (job.title || '') + '\nCompany: ' + (job.company || '') + '\n\nJob Description:\n' + (job.description || '') + '\n\nCandidate Resume:\n' + resumeText.slice(0, 6000);
+  var text = await fetchBackendText(sys, user);
   var data = parseMatchJson(text);
   if (!data || typeof data.score !== 'number') throw new Error('Could not parse a match score from the response.');
   return data;
@@ -806,24 +822,36 @@ function autoFillEeo(prefs) {
 // Contact fields (name/email/phone/address/links) inside the Easy Apply modal — a separate
 // pass from autoFillEeo above, since LinkedIn's own step often mixes contact inputs with EEO
 // questions on the same page. Scoped strictly to the modal, same as the auto-advance buttons.
+// Shared with the custom-question detector below: any field matching one of these is a known
+// contact field, so it must never be swept into the AI-answered "custom question" pipeline
+// even when it's empty (e.g. no phone number saved) — an AI shouldn't guess contact info.
+var CONTACT_FIELD_MATCHERS = [
+  { key: 'email',     test: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
+  { key: 'phone',     test: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
+  { key: 'firstName', test: function (s) { return /\b(given name|first name|firstname|fname)\b/.test(s); } },
+  { key: 'lastName',  test: function (s) { return /\b(family name|last name|lastname|surname|lname)\b/.test(s); } },
+  { key: 'linkedin',  test: function (s) { return /linkedin/.test(s); } },
+  { key: 'website',   test: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
+  { key: 'city',      test: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
+  { key: 'state',     test: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
+  { key: 'zip',       test: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
+  { key: 'fullName',  test: function (s) { return /\bfull name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
+];
+
+function isKnownContactField(s, el) {
+  return CONTACT_FIELD_MATCHERS.some(function (m) { return m.test(s, el || {}); });
+}
+
 function autoFillContactFields(profile) {
   if (!profile || Object.keys(profile).length === 0) return 0;
   var modal = findEasyApplyModal();
   if (!modal) return 0;
 
-  var fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
-  var STD = [
-    { v: profile.email,     t: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
-    { v: profile.phone,     t: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
-    { v: profile.firstName, t: function (s) { return /\b(given name|first name|firstname|fname)\b/.test(s); } },
-    { v: profile.lastName,  t: function (s) { return /\b(family name|last name|lastname|surname|lname)\b/.test(s); } },
-    { v: profile.linkedin,  t: function (s) { return /linkedin/.test(s); } },
-    { v: profile.website,   t: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
-    { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
-    { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
-    { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
-    { v: fullName,          t: function (s) { return /\bfull name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
-  ];
+  var values = {
+    email: profile.email, phone: profile.phone, firstName: profile.firstName, lastName: profile.lastName,
+    linkedin: profile.linkedin, website: profile.website, city: profile.city, state: profile.state, zip: profile.zip,
+    fullName: [profile.firstName, profile.lastName].filter(Boolean).join(' ')
+  };
 
   var filled = 0;
   var inputs = modal.querySelectorAll('input, textarea');
@@ -836,12 +864,212 @@ function autoFillContactFields(profile) {
     if (el.offsetParent === null) continue;
     var s = normTxt([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), findLabelText(el)].filter(Boolean).join(' '));
     if (!s) continue;
-    for (var f = 0; f < STD.length; f++) {
-      if (STD[f].v && STD[f].t(s, el)) { setNativeValue(el, STD[f].v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); filled++; break; }
+    for (var f = 0; f < CONTACT_FIELD_MATCHERS.length; f++) {
+      var m = CONTACT_FIELD_MATCHERS[f];
+      if (values[m.key] && m.test(s, el)) { setNativeValue(el, values[m.key]); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); filled++; break; }
     }
   }
   if (filled) console.log('[Alicia] Auto-filled', filled, 'contact field(s) in Easy Apply');
   return filled;
+}
+
+// ========== Custom question answering + learning ==========
+// Questions that are neither EEO nor contact fields — "years of experience with X", "why this
+// role", availability, etc. First checked against previously-confirmed answers (learned from
+// Alicia's own edits on past applications); anything left over goes to one batched AI call.
+// AI-answered questions pause auto-advance so Alicia reviews/edits before the click that
+// actually saves the (possibly-corrected) answer into the learned bank — see
+// tryAutoAdvanceEasyApply and attachLearningCapture below.
+
+var CUSTOM_QA_MATCH_THRESHOLD = 65;
+var CUSTOM_QA_MAX_PER_STEP = 6;
+var pendingReviewModal = null;
+
+// Common filler words stripped before comparing questions, so "How many years of experience
+// do you have with Python?" and "Years of experience with Python?" are recognized as the same
+// question (denominator uses the SHORTER question's token count so a trimmed rephrasing still
+// scores high, rather than being penalized for being shorter).
+var QUESTION_STOPWORDS = ['a', 'an', 'the', 'is', 'are', 'do', 'you', 'your', 'of', 'with', 'for', 'to', 'in', 'on', 'and', 'have', 'has', 'this', 'that', 'what', 'how', 'many', 'will', 'would', 'can', 'could', 'please', 'describe', 'did', 'does'];
+
+function questionContentTokens(s) {
+  return normTxt(s).split(' ').filter(function (w) { return w.length > 2 && QUESTION_STOPWORDS.indexOf(w) === -1; });
+}
+
+function questionSimilarity(a, b) {
+  var na = normTxt(a), nb = normTxt(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 100;
+  if (na.indexOf(nb) >= 0 || nb.indexOf(na) >= 0) return 90; // one fully contains the other
+  var at = questionContentTokens(a), bt = questionContentTokens(b);
+  if (!at.length || !bt.length) return 0;
+  var common = 0;
+  at.forEach(function (w) { if (bt.indexOf(w) >= 0) common++; });
+  var denom = Math.min(at.length, bt.length);
+  return denom ? (common / denom) * 100 : 0;
+}
+
+function findLearnedAnswer(bank, question) {
+  var best = null, bs = 0;
+  bank.forEach(function (rec) {
+    var sc = questionSimilarity(rec.question, question);
+    if (sc > bs) { bs = sc; best = rec; }
+  });
+  return bs >= CUSTOM_QA_MATCH_THRESHOLD ? best : null;
+}
+
+function upsertLearnedAnswer(question, answer, fieldType, options) {
+  safeStorageGet('customQA', function (data) {
+    var bank = Array.isArray(data.customQA) ? data.customQA : [];
+    var existing = findLearnedAnswer(bank, question);
+    if (existing) {
+      existing.answer = answer;
+      existing.lastUsedAt = Date.now();
+    } else {
+      bank.push({
+        id: 'qa_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
+        question: question, answer: answer, fieldType: fieldType || 'text',
+        options: options || [], createdAt: Date.now(), lastUsedAt: Date.now()
+      });
+    }
+    if (bank.length > 300) bank = bank.slice(bank.length - 300); // sane cap
+    safeStorageSet({ customQA: bank });
+  });
+}
+
+function applyAnswerToItem(item, answerText) {
+  if (!answerText) return false;
+  if (item.type === 'select') return selectBestOption(item.control, answerText);
+  if (item.type === 'radio') return clickBestRadio(item.container, answerText);
+  return fillTextInput(item.control, answerText);
+}
+
+// Question containers that are still empty and aren't EEO or contact fields.
+function findUnansweredCustomQuestions(modal) {
+  var out = [];
+  var containers = modal.querySelectorAll(
+    '.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, fieldset'
+  );
+  containers.forEach(function (container) {
+    if (out.length >= CUSTOM_QA_MAX_PER_STEP) return;
+    var label = getText(container.querySelector('label, legend, .fb-dash-form-element__label')) || getText(container).slice(0, 220);
+    if (!label || label.length < 3) return;
+    if (matchEeo(label)) return; // never let AI answer demographic/EEO questions
+
+    var sel = container.querySelector('select');
+    var radios = container.querySelectorAll('input[type="radio"]');
+    var text = container.querySelector('input[type="text"], input:not([type]), input[type="search"], input[type="number"], textarea');
+
+    if (isKnownContactField(normTxt(label), text)) return; // handled by autoFillContactFields
+
+    if (sel && !sel.value) {
+      var options = [];
+      for (var o = 0; o < sel.options.length; o++) { if (sel.options[o].value) options.push(getText(sel.options[o]) || sel.options[o].value); }
+      if (options.length) out.push({ container: container, control: sel, type: 'select', label: label, options: options });
+    } else if (radios.length && !Array.prototype.some.call(radios, function (r) { return r.checked; })) {
+      var ropts = Array.prototype.map.call(radios, radioLabelText);
+      out.push({ container: container, control: null, type: 'radio', label: label, options: ropts });
+    } else if (text && !(text.value && text.value.trim()) && text.offsetParent !== null) {
+      out.push({ container: container, control: text, type: (text.tagName === 'TEXTAREA' ? 'textarea' : 'text'), label: label, options: [] });
+    }
+  });
+  return out;
+}
+
+function parseCustomAnswersJson(raw) {
+  var clean = stripThinkingTags(raw).replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+  try { var v = JSON.parse(clean); if (Array.isArray(v)) return v; } catch (e) {}
+  var m = clean.match(/\[[\s\S]*\]/);
+  if (m) { try { var v2 = JSON.parse(m[0]); if (Array.isArray(v2)) return v2; } catch (e2) {} }
+  return [];
+}
+
+async function callCustomAnswerBackend(items, job, resumeText) {
+  var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. If you cannot reasonably answer from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
+  var qLines = items.map(function (it, i) {
+    var typeLabel = (it.type === 'select' || it.type === 'radio')
+      ? ('[choose one: ' + it.options.join(' | ') + ']')
+      : (it.type === 'textarea' ? '[short paragraph]' : '[short answer]');
+    return (i + 1) + '. ' + typeLabel + ' ' + it.label;
+  }).join('\n');
+  var user = 'Job Title: ' + (job && job.title || '') + '\nCompany: ' + (job && job.company || '') +
+    '\n\nJob Description:\n' + (job && job.description || '') +
+    '\n\nCandidate Resume:\n' + (resumeText || '').slice(0, 6000) +
+    '\n\nQuestions:\n' + qLines;
+  var text = await fetchBackendText(sys, user);
+  return parseCustomAnswersJson(text);
+}
+
+function safeStorageGetAsync(keys) {
+  return new Promise(function (resolve) {
+    if (!extAlive()) { resolve({}); return; }
+    try { chrome.storage.local.get(keys, function (data) { resolve(data || {}); }); } catch (e) { resolve({}); }
+  });
+}
+
+var customQuestionsResolving = false;
+
+async function handleCustomQuestions(modal) {
+  if (customQuestionsResolving) return; // a previous call for this cycle is still in flight
+  var items = findUnansweredCustomQuestions(modal);
+  if (!items.length) return;
+
+  customQuestionsResolving = true;
+  try {
+    var data = await safeStorageGetAsync('customQA');
+    var bank = Array.isArray(data.customQA) ? data.customQA : [];
+    var remaining = [];
+    items.forEach(function (item) {
+      var learned = findLearnedAnswer(bank, item.label);
+      if (learned && applyAnswerToItem(item, learned.answer)) {
+        learned.lastUsedAt = Date.now();
+      } else {
+        remaining.push(item);
+      }
+    });
+    safeStorageSet({ customQA: bank }); // persist lastUsedAt bumps
+    if (!remaining.length) return;
+
+    var rdata = await safeStorageGetAsync('resumeText');
+    var resumeText = rdata && rdata.resumeText;
+    if (!resumeText) return; // nothing to reason from — leave these for Alicia
+
+    var answers = await callCustomAnswerBackend(remaining, lastDetectedJob, resumeText);
+    var byIndex = {};
+    answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
+    var answeredAny = false;
+    remaining.forEach(function (item, i) {
+      var answer = byIndex[i + 1];
+      if (answer && applyAnswerToItem(item, answer)) answeredAny = true;
+    });
+    if (answeredAny) {
+      pendingReviewModal = modal;
+      showEasyApplyBanner('Alicia answered a question here — please review before clicking Next.', '#e0a800');
+      attachLearningCapture(modal, remaining);
+    }
+  } catch (err) {
+    console.log('[Alicia] Custom question answer error:', err);
+  } finally {
+    customQuestionsResolving = false;
+  }
+}
+
+// Once Alicia clicks Next/Continue/Review herself (auto-advance won't, while pendingReviewModal
+// is set), capture whatever ended up in each AI-answered field — including any edits she made —
+// and save that as the confirmed answer. Learning is based on human-confirmed text, not the raw
+// AI guess.
+function attachLearningCapture(modal, items) {
+  var btn = findModalButton(modal, EASY_APPLY_ADVANCE_PATTERNS) || findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS);
+  if (!btn || btn.__aliciaLearnAttached) return;
+  btn.__aliciaLearnAttached = true;
+  btn.addEventListener('click', function captureOnce() {
+    items.forEach(function (item) {
+      var finalValue = item.type === 'select' ? (item.control && item.control.value)
+        : item.type === 'radio' ? (item.container.querySelector('input[type="radio"]:checked') ? radioLabelText(item.container.querySelector('input[type="radio"]:checked')) : '')
+        : (item.control && item.control.value);
+      if (finalValue && finalValue.trim()) upsertLearnedAnswer(item.label, finalValue.trim(), item.type, item.options);
+    });
+    if (pendingReviewModal === modal) pendingReviewModal = null;
+  }, { once: true });
 }
 
 // ========== Easy Apply auto-advance ==========
@@ -912,8 +1140,15 @@ function tryAutoAdvanceEasyApply() {
     if (data.autoAdvanceEasyApply === false) return; // opted out in the side panel
 
     var modal = findEasyApplyModal();
-    if (!modal) { autoAdvanceModal = null; autoAdvanceCount = 0; return; }
+    if (!modal) { autoAdvanceModal = null; autoAdvanceCount = 0; pendingReviewModal = null; return; }
     if (modal !== autoAdvanceModal) { autoAdvanceModal = modal; autoAdvanceCount = 0; }
+
+    // Alicia answered a custom question on this step — wait for her to review/edit and click
+    // Next herself (that click is what confirms the answer and saves it to the learned bank).
+    if (pendingReviewModal === modal) {
+      showEasyApplyBanner('Alicia answered a question here — please review before clicking Next.', '#e0a800');
+      return;
+    }
 
     // Never click this — reaching it means the application is ready for a human to submit.
     if (findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS)) {
@@ -946,7 +1181,12 @@ function scheduleAutoFill() {
     safeStorageGet(['eeoPrefs', 'profile'], function (data) {
       if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
       if (data.profile && Object.keys(data.profile).length > 0) autoFillContactFields(data.profile);
-      setTimeout(tryAutoAdvanceEasyApply, 400);
+      var modal = findEasyApplyModal();
+      // Wait for custom-question resolution (which may include an AI call) to finish before
+      // ever checking whether to auto-advance — otherwise auto-advance could click Next while
+      // an answer is still being generated for this same step.
+      var afterQuestions = modal ? handleCustomQuestions(modal) : Promise.resolve();
+      afterQuestions.then(function () { setTimeout(tryAutoAdvanceEasyApply, 400); });
     });
   }, 700);
 }

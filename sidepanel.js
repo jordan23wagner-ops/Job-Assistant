@@ -2360,6 +2360,85 @@ if (eeoToggle) {
 }
 if (eeoSave) eeoSave.addEventListener('click', saveEeoPrefs);
 
+// ========== Learned Answers (custom Easy Apply questions content.js has answered) ==========
+
+const learnedQaToggle = document.getElementById('learned-qa-toggle');
+const learnedQaBody = document.getElementById('learned-qa-body');
+const learnedQaList = document.getElementById('learned-qa-list');
+const learnedQaEmpty = document.getElementById('learned-qa-empty');
+let learnedQaBank = [];
+
+function saveLearnedQaBank() {
+  chrome.storage.local.set({ customQA: learnedQaBank });
+}
+
+function renderLearnedAnswers() {
+  if (!learnedQaList) return;
+  learnedQaList.innerHTML = '';
+  if (learnedQaEmpty) learnedQaEmpty.classList.toggle('hidden', learnedQaBank.length > 0);
+
+  learnedQaBank.slice().reverse().forEach(function (rec) {
+    var row = document.createElement('div');
+    row.className = 'tracker-row';
+
+    var top = document.createElement('div');
+    top.className = 'tracker-row-top';
+
+    var main = document.createElement('div');
+    main.className = 'tracker-row-main';
+    var q = document.createElement('div');
+    q.className = 'tracker-row-title';
+    q.title = rec.question;
+    q.textContent = rec.question;
+    main.appendChild(q);
+    top.appendChild(main);
+
+    var del = document.createElement('button');
+    del.className = 'tracker-del';
+    del.title = 'Delete this learned answer';
+    del.textContent = '✕';
+    del.addEventListener('click', function () {
+      learnedQaBank = learnedQaBank.filter(function (r) { return r.id !== rec.id; });
+      saveLearnedQaBank();
+      renderLearnedAnswers();
+    });
+    top.appendChild(del);
+    row.appendChild(top);
+
+    var answer = document.createElement('textarea');
+    answer.className = 'tracker-notes';
+    answer.value = rec.answer || '';
+    answer.placeholder = 'Answer Alicia will reuse for this question';
+    function persistAnswer() {
+      rec.answer = answer.value;
+      saveLearnedQaBank();
+    }
+    answer.addEventListener('change', persistAnswer);
+    answer.addEventListener('blur', persistAnswer);
+    row.appendChild(answer);
+
+    learnedQaList.appendChild(row);
+  });
+}
+
+function toggleLearnedQa(forceOpen) {
+  var open = forceOpen === true || learnedQaBody.classList.contains('hidden');
+  learnedQaBody.classList.toggle('hidden', !open);
+  learnedQaToggle.innerHTML = open ? '&#128218; Hide' : '&#128218; Show';
+  if (open) renderLearnedAnswers();
+}
+
+if (learnedQaToggle) learnedQaToggle.addEventListener('click', function () { toggleLearnedQa(); });
+
+// content.js writes new learned answers straight to storage while browsing LinkedIn — keep the
+// panel in sync if it's open at the same time.
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== 'local' || !changes.customQA) return;
+  learnedQaBank = Array.isArray(changes.customQA.newValue) ? changes.customQA.newValue : [];
+  if (learnedQaEmpty) learnedQaEmpty.classList.toggle('hidden', learnedQaBank.length > 0);
+  if (learnedQaBody && !learnedQaBody.classList.contains('hidden')) renderLearnedAnswers();
+});
+
 function setFillStatus(text, color) {
   if (!eeoFillStatus) return;
   eeoFillStatus.textContent = text;
@@ -2554,7 +2633,7 @@ window.aliciaPremium = {
 };
 
 // Restore theme, saved sessions, tracked jobs, usage, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile', 'autoAdvanceEasyApply'], function (data) {
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile', 'autoAdvanceEasyApply', 'customQA'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
   if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
@@ -2572,6 +2651,8 @@ chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'u
   if (data.eeoPrefs) applyEeoPrefs(data.eeoPrefs);
   if (data.profile) applyProfile(data.profile);
   if (autoAdvanceToggle) autoAdvanceToggle.checked = data.autoAdvanceEasyApply !== false;
+  learnedQaBank = Array.isArray(data.customQA) ? data.customQA : [];
+  if (learnedQaEmpty) learnedQaEmpty.classList.toggle('hidden', learnedQaBank.length > 0);
 });
 
 chatSend.addEventListener('click', sendChat);
