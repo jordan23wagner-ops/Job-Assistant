@@ -416,6 +416,16 @@ function escapeOverlayHtml(s) {
   return d.innerHTML;
 }
 
+// Normalize a matched title element to the block-level title container, so the badge inserted
+// after it lands on its OWN LINE directly below the title (consistent) — never inline after an
+// <a>/<span> on the same line as the title text (which is what made it show in a weird spot).
+function titleBlockContainer(el) {
+  if (!el) return el;
+  return el.closest('.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title')
+    || el.closest('h1, h2')
+    || el;
+}
+
 function findMatchOverlayAnchor() {
   // Same proven selector list detectJob() uses to find the job title text — reusing it means
   // the overlay attaches inline wherever job detection already successfully finds the title.
@@ -435,7 +445,7 @@ function findMatchOverlayAnchor() {
     'h2.top-card-layout__title',
     '.t-24.t-bold.inline'
   ], 3, 200);
-  if (known && known.offsetParent !== null) return known;
+  if (known && known.offsetParent !== null) return titleBlockContainer(known);
 
   // LinkedIn churns those classes — fall back to any visible <h1> that looks like a job title.
   // Skip the LinkedIn global nav/search area.
@@ -1493,6 +1503,29 @@ function showEasyApplyBanner(text, color) {
   el.hideTimer = setTimeout(function () { if (el.parentNode) el.remove(); }, 12000);
 }
 
+// Bring `el` into view by scrolling ONLY a scrollable ancestor inside `boundary` (the modal) —
+// deliberately NOT the document — so the underlying job page never scrolls. If the element is
+// already visible within that container, or there's no internal scroll container, do nothing.
+function revealWithinContainer(el, boundary) {
+  try {
+    var root = (boundary && boundary.getRootNode && boundary.getRootNode()) || document;
+    var n = el.parentElement;
+    while (n && n !== root && n !== document.body) {
+      var oy = '';
+      try { oy = getComputedStyle(n).overflowY; } catch (e) {}
+      if (/(auto|scroll)/.test(oy) && n.scrollHeight > n.clientHeight + 4) {
+        var er = el.getBoundingClientRect();
+        var cr = n.getBoundingClientRect();
+        if (er.bottom > cr.bottom - 8 || er.top < cr.top + 8) {
+          n.scrollTop = n.scrollHeight; // reveal the bottom-anchored Submit button
+        }
+        return;
+      }
+      n = n.parentElement || (n.getRootNode && n.getRootNode().host);
+    }
+  } catch (e) {}
+}
+
 function tryAutoAdvanceEasyApply() {
   if (autoAdvanceBusy) return;
   safeStorageGet('autoAdvanceEasyApply', function (data) {
@@ -1510,12 +1543,14 @@ function tryAutoAdvanceEasyApply() {
     }
 
     // Never click this — reaching it means the application is ready for a human to submit.
-    // Scroll the Submit button into view (once) so it's one click away, no manual scrolling.
+    // Scroll the Submit button into view (once) so it's one click away. IMPORTANT: scroll only
+    // the modal's OWN internal scroll container, never the page — a plain scrollIntoView drags
+    // the job page behind the modal to the bottom, which is what happened before.
     var submitBtn = findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS);
     if (submitBtn) {
       if (!modal.__aliciaScrolledToSubmit) {
         modal.__aliciaScrolledToSubmit = true;
-        try { submitBtn.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { try { submitBtn.scrollIntoView(); } catch (e2) {} }
+        revealWithinContainer(submitBtn, modal);
       }
       showEasyApplyBanner('Filled and ready — review, then click Submit yourself.', '#4caf50');
       return;
