@@ -642,6 +642,102 @@ function scrapeJobList() {
   return out;
 }
 
+// ========== Easy Apply Queue: collect Easy-Apply cards from the search results ==========
+// Like scrapeJobList, but keeps the jobId, flags whether each card is Easy Apply (vs. an
+// external "Apply on company site" job) and whether it's already applied, and — critically —
+// auto-scrolls the results pane so LinkedIn lazy-loads the full current page (~25 cards) before
+// harvesting. Respects whatever filters are already in the URL; it just reads what LinkedIn shows.
+
+// A card is Easy Apply if its footer/text says so. LinkedIn shows "Easy Apply" text on the card
+// footer for those jobs; external-apply cards don't.
+function cardIsEasyApply(card) {
+  return /easy apply/i.test(card.innerText || card.textContent || '');
+}
+// A card is already applied if it shows an "Applied" footer state.
+function cardIsApplied(card) {
+  return /\bapplied\b/i.test(card.innerText || card.textContent || '');
+}
+
+// Read every currently-rendered job card (no light-list 40-cap) with its Easy Apply / applied flags.
+function scrapeJobCardsDetailed() {
+  var nodes = document.querySelectorAll(
+    'li.scaffold-layout__list-item, li.jobs-search-results__list-item, div.job-card-container, [data-occludable-job-id], [data-job-id]'
+  );
+  var out = [];
+  var seen = {};
+  for (var i = 0; i < nodes.length; i++) {
+    var card = nodes[i];
+    var jobId = card.getAttribute('data-occludable-job-id') || card.getAttribute('data-job-id') || '';
+    var link = card.querySelector('a.job-card-container__link, a.job-card-list__title--link, a[href*="/jobs/view/"]');
+    var url = link && link.href ? link.href.split('?')[0] : '';
+    if (!jobId && url) { var m = url.match(/\/jobs\/view\/(\d+)/); if (m) jobId = m[1]; }
+    var key = jobId || url;
+    if (!key || seen[key]) continue;
+    var title = getCardText(card, [
+      '.job-card-list__title--link', '.job-card-list__title',
+      'a.job-card-container__link span[aria-hidden="true"]',
+      'a.job-card-container__link', '.artdeco-entity-lockup__title'
+    ]);
+    if (!title) continue;
+    var company = getCardText(card, [
+      '.job-card-container__primary-description', '.job-card-container__company-name',
+      '.artdeco-entity-lockup__subtitle'
+    ]);
+    var location = getCardText(card, [
+      '.job-card-container__metadata-item', '.artdeco-entity-lockup__caption'
+    ]);
+    if (!url && jobId) url = 'https://www.linkedin.com/jobs/view/' + jobId + '/';
+    seen[key] = true;
+    out.push({
+      jobId: jobId, title: title, company: company, location: location, url: url,
+      easyApply: cardIsEasyApply(card), applied: cardIsApplied(card)
+    });
+  }
+  return out;
+}
+
+// Find the scrollable results pane so we can drive lazy-loading. LinkedIn churns these classes.
+function jobsResultsPane() {
+  var sel = [
+    '.jobs-search-results-list', '.scaffold-layout__list-container', '.scaffold-layout__list',
+    '.jobs-search__results-list', 'div.jobs-search-results-list'
+  ];
+  for (var i = 0; i < sel.length; i++) {
+    var el = document.querySelector(sel[i]);
+    if (el) return el;
+  }
+  return null;
+}
+
+// Auto-scroll the current page of results to load every card, then return the pending Easy Apply
+// jobs (excludes external-apply and already-applied). Bounded passes; stops early once the count
+// stops growing. Paging to the NEXT results page is intentionally left to the user (re-build to
+// append) — a page change is a navigation that would kill this script mid-collect.
+async function collectEasyApplyQueue() {
+  var pane = jobsResultsPane();
+  var byId = {};
+  var lastCount = -1;
+  var stagnant = 0;
+  for (var pass = 0; pass < 16; pass++) {
+    scrapeJobCardsDetailed().forEach(function (c) { if (c.jobId && !byId[c.jobId]) byId[c.jobId] = c; });
+    var n = Object.keys(byId).length;
+    if (n === lastCount) { if (++stagnant >= 3) break; } else { stagnant = 0; }
+    lastCount = n;
+    // Nudge the last rendered card into view + scroll the pane to trigger lazy loading.
+    var cards = document.querySelectorAll('[data-occludable-job-id], div.job-card-container, li.scaffold-layout__list-item');
+    if (cards.length) { try { cards[cards.length - 1].scrollIntoView({ block: 'end' }); } catch (e) {} }
+    if (pane) { try { pane.scrollTop = pane.scrollHeight; } catch (e) {} }
+    await sleep(700);
+  }
+  var jobs = Object.keys(byId).map(function (k) { return byId[k]; })
+    .filter(function (c) { return c.easyApply && !c.applied; })
+    .map(function (c) {
+      return { jobId: c.jobId, title: c.title, company: c.company, location: c.location, url: c.url, status: 'pending' };
+    });
+  console.log('[Alicia] Collected', jobs.length, 'Easy Apply jobs for the queue');
+  return jobs;
+}
+
 // ========== Scrape the "Meet the hiring team" people on a job posting ==========
 
 function scrapeHiringTeam() {
@@ -722,7 +818,15 @@ if (IS_TOP) {
 chrome.runtime.onMessage.addListener(function(message) {
   // Page-level scrape/detect requests are only meaningful in the top frame; ignore them in
   // subframes so an empty subframe result can't overwrite the real one.
-  if (!IS_TOP && (message.type === 'DETECT_JOB' || message.type === 'SCAN_JOBS' || message.type === 'SCAN_PEOPLE')) return;
+  if (!IS_TOP && (message.type === 'DETECT_JOB' || message.type === 'SCAN_JOBS' || message.type === 'SCAN_PEOPLE' || message.type === 'COLLECT_QUEUE')) return;
+  if (message.type === 'COLLECT_QUEUE') {
+    console.log('[Alicia] Collect Easy Apply queue triggered');
+    collectEasyApplyQueue().then(function (jobs) {
+      safeSendMessage({ type: 'QUEUE_COLLECTED', jobs: jobs });
+    }).catch(function () {
+      safeSendMessage({ type: 'QUEUE_COLLECTED', jobs: [] });
+    });
+  }
   if (message.type === 'DETECT_JOB') {
     console.log('[Alicia] Manual detect triggered');
     expandJobDescription();
@@ -1633,12 +1737,150 @@ var applyObserver = new MutationObserver(function () {
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });
 
+// ===== Easy Apply Queue (batch apply) — page-side driver =====
+// The queue is orchestrated by background.js (which navigates the tab job-to-job, since a
+// navigation kills this script). This script's job on each page is: if the queue is active and
+// this page is the current queued job, open its Easy Apply application (paced, human-like), let
+// the existing autofill/auto-advance engine fill and stop at Submit, and — after the HUMAN clicks
+// Submit — signal background to advance to the next job. It never clicks Submit itself.
+//
+// Pacing (cautious profile, per Jordon): the account-risk actions are opening an application and
+// moving between jobs. We space application-opens 8–20s apart with an occasional longer "reading"
+// pause. Because this delay runs in the page (not the service worker, which MV3 can suspend), the
+// timing is reliable. Between-job navigation adds no extra delay of its own — the next page's
+// open-delay already provides human-scale spacing between meaningful actions.
+var QUEUE = { active: false, paused: false, autoOpen: true, jobs: [], index: 0 };
+// Per-page state (reset naturally because this script re-initializes on every navigation).
+var queueDelayUntil = 0;
+var queueOpenClickedAt = 0;
+var queueOpenAttempts = 0;
+var queuePageDeadline = 0;
+var queueSubmitReported = false;
+var queueSkipReported = false;
+
+function refreshQueueState(cb) {
+  safeStorageGet(['queueActive', 'queuePaused', 'queueAutoOpen', 'applyQueue', 'queueIndex'], function (d) {
+    QUEUE.active = !!d.queueActive;
+    QUEUE.paused = !!d.queuePaused;
+    QUEUE.autoOpen = d.queueAutoOpen !== false;
+    QUEUE.jobs = d.applyQueue || [];
+    QUEUE.index = d.queueIndex || 0;
+    if (cb) cb();
+  });
+}
+try {
+  chrome.storage.onChanged.addListener(function (changes, area) {
+    if (area !== 'local') return;
+    if (changes.queueActive || changes.queuePaused || changes.queueAutoOpen || changes.applyQueue || changes.queueIndex) {
+      refreshQueueState();
+    }
+  });
+} catch (e) {}
+refreshQueueState();
+
+function queueActionDelay() {
+  var base = 8000 + Math.floor(Math.random() * 12000);          // 8–20s
+  if (Math.random() < 0.2) base += 10000 + Math.floor(Math.random() * 20000); // ~1 in 5: +10–30s reading pause
+  return base;
+}
+
+// The current job the queue expects THIS page to be — only if the page URL matches its jobId.
+function currentQueueJob() {
+  if (!QUEUE.active || QUEUE.paused) return null;
+  var job = QUEUE.jobs[QUEUE.index];
+  if (!job || job.status !== 'pending') return null;
+  if (job.jobId && location.href.indexOf(job.jobId) < 0) return null; // navigation not settled / user wandered off
+  return job;
+}
+
+// The blue "Easy Apply" button on the job posting (NOT inside a modal). Must say "Easy Apply"
+// (an external "Apply" button opens the employer site and is skipped), be visible and enabled.
+function findEasyApplyOpenButton() {
+  var candidates = document.querySelectorAll(
+    'button.jobs-apply-button, .jobs-apply-button--top-card button, button[aria-label*="Easy Apply" i], button[aria-label*="apply" i]'
+  );
+  for (var i = 0; i < candidates.length; i++) {
+    var b = candidates[i];
+    if (b.disabled || b.offsetParent === null) continue;
+    var t = normTxt((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || b.textContent || ''));
+    if (/easy apply/.test(t)) return b;
+  }
+  return null;
+}
+
+function jobPageAlreadyApplied() {
+  var main = document.querySelector('.jobs-details, .job-view-layout, .jobs-search__job-details, main') || document.body;
+  var t = normTxt((main.innerText || '').slice(0, 4000));
+  return /you (have )?applied|applied \d+ (day|hour|week|minute|month)|application submitted|applied to this job/.test(t);
+}
+
+function reportQueueSkip(jobId, reason) {
+  if (queueSkipReported) return;
+  queueSkipReported = true;
+  console.log('[Alicia] Queue skip:', jobId, reason);
+  safeSendMessage({ type: 'QUEUE_ITEM_SKIP', jobId: jobId, reason: reason });
+}
+
+// Open the current queued job's application (paced), or skip if it isn't a fillable Easy Apply.
+function driveQueueJobPage() {
+  if (!IS_TOP) return;
+  var job = currentQueueJob();
+  if (!job) return;
+  if (!queuePageDeadline) queuePageDeadline = Date.now() + 45000; // give the page time to render/settle
+  if (findEasyApplyModalRaw()) return; // modal is open — the autofill/advance engine owns it now
+
+  if (!QUEUE.autoOpen) {
+    showEasyApplyBanner('Queue: open "Easy Apply" on this job when ready — Alicia fills the rest.', '#3a7afe');
+    return;
+  }
+
+  var btn = findEasyApplyOpenButton();
+  if (btn) {
+    var now = Date.now();
+    if (!queueDelayUntil) {                 // first sighting — schedule a human-like delay
+      queueDelayUntil = now + queueActionDelay();
+      showEasyApplyBanner('Queue: opening this application shortly…', '#3a7afe');
+      return;
+    }
+    if (now < queueDelayUntil) return;      // still waiting out the pace delay
+    // Click once; if the modal hasn't opened a few seconds later, retry (up to 3 total).
+    if (!queueOpenClickedAt || (now - queueOpenClickedAt > 6000 && queueOpenAttempts < 3 && !findEasyApplyModalRaw())) {
+      queueOpenClickedAt = now;
+      queueOpenAttempts++;
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    }
+    return;
+  }
+
+  // No Easy Apply button: already applied, or it's an external-apply job → skip and move on.
+  if (jobPageAlreadyApplied()) { reportQueueSkip(job.jobId, 'already-applied'); return; }
+  if (queueOpenAttempts >= 3 && Date.now() - queueOpenClickedAt > 6000) { reportQueueSkip(job.jobId, 'modal-failed'); return; }
+  if (Date.now() > queuePageDeadline) reportQueueSkip(job.jobId, 'no-easy-apply');
+}
+
+// After the HUMAN clicks Submit, the modal becomes the post-submit "application sent" screen.
+// That's our signal to mark this item done and let background pull up the next job.
+function checkQueueSubmitted() {
+  if (!QUEUE.active || QUEUE.paused || queueSubmitReported) return;
+  var job = QUEUE.jobs[QUEUE.index];
+  if (!job || job.status !== 'pending') return;
+  if (job.jobId && location.href.indexOf(job.jobId) < 0) return;
+  var raw = findEasyApplyModalRaw();
+  if (raw && isPostSubmitConfirmation(raw)) {
+    queueSubmitReported = true;
+    showEasyApplyBanner('Application sent ✓ — moving to the next job…', '#4caf50');
+    // Brief pause so the confirmation is visible before we navigate away.
+    setTimeout(function () { safeSendMessage({ type: 'QUEUE_ITEM_SUBMITTED', jobId: job.jobId }); }, 2500);
+  }
+}
+
 // The Easy Apply modal lives in a SHADOW ROOT, and mutations inside a shadow tree are NOT seen
 // by a MutationObserver on the light DOM — so the observer above never fires when the modal
 // opens or changes steps. Poll as the reliable trigger. Cheap: findEasyApplyModal short-circuits
 // on the known host, and scheduleAutoFill is debounced + guarded against overlapping passes.
 setInterval(function () {
   if (!extAlive()) return;
+  if (IS_TOP && QUEUE.active) { driveQueueJobPage(); checkQueueSubmitted(); }
   if (findEasyApplyModal()) scheduleAutoFill();
   // Re-assert the match badge if LinkedIn re-rendered the top card and wiped it (uses the
   // cached score — no extra backend calls; initial scoring stays driven by detectJob).

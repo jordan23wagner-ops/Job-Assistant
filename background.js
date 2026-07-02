@@ -152,6 +152,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
   }
+  if (message.type === 'COLLECT_QUEUE') {
+    // Relay to the active tab's content script (a side-panel runtime.sendMessage does NOT reach
+    // content scripts), re-injecting content.js once if it isn't there yet — same pattern as SCAN_JOBS.
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'COLLECT_QUEUE' }, (response) => {
+          if (chrome.runtime.lastError) {
+            chrome.scripting.executeScript({
+              target: { tabId: tabs[0].id },
+              files: ['content.js']
+            }).then(() => {
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tabs[0].id, { type: 'COLLECT_QUEUE' }).catch(() => {});
+              }, 600);
+            }).catch(() => {});
+          }
+        });
+      }
+    });
+  }
   if (message.type === 'SCAN_PEOPLE') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
@@ -188,4 +208,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
   }
+});
+
+// ===== Easy Apply Queue orchestration =====
+// A navigation kills the content script, so the queue's job-to-job stepping has to live here in
+// the (event-driven, storage-backed) service worker. content.js opens+fills each job and, after
+// the human clicks Submit, messages QUEUE_ITEM_SUBMITTED; a non-fillable job messages
+// QUEUE_ITEM_SKIP. We mark the item, enforce the per-session cap, and navigate the queue tab to
+// the next pending job. All pacing lives in content.js (page context) so an MV3 worker suspend
+// can't drop a timer mid-wait. The human always clicks the final Submit — nothing here submits.
+var QUEUE_SESSION_CAP = 20;
+
+function queueOpenNext() {
+  chrome.storage.local.get(['applyQueue', 'queueActive', 'queueTabId'], function (d) {
+    if (!d.queueActive) return;
+    var q = d.applyQueue || [];
+    var idx = -1;
+    for (var i = 0; i < q.length; i++) { if (q[i].status === 'pending') { idx = i; break; } }
+    if (idx < 0) { // nothing left
+      chrome.storage.local.set({ queueActive: false, queuePaused: false, queueStatusMsg: 'Queue complete — every job has been processed.' });
+      return;
+    }
+    if (!d.queueTabId) return;
+    chrome.storage.local.set({ queueIndex: idx }, function () {
+      chrome.tabs.update(d.queueTabId, { url: q[idx].url }).catch(function () {});
+    });
+  });
+}
+
+function queueMarkAndAdvance(jobId, newStatus, incrementSession) {
+  chrome.storage.local.get(['applyQueue', 'queueSessionCount', 'queueActive'], function (d) {
+    if (!d.queueActive) return;
+    var q = d.applyQueue || [];
+    for (var i = 0; i < q.length; i++) {
+      if (q[i].jobId === jobId && q[i].status === 'pending') { q[i].status = newStatus; break; }
+    }
+    var count = d.queueSessionCount || 0;
+    if (incrementSession) count++;
+    var updates = { applyQueue: q, queueSessionCount: count };
+    if (incrementSession && count >= QUEUE_SESSION_CAP) {
+      updates.queueActive = false;
+      updates.queuePaused = false;
+      updates.queueStatusMsg = 'Nice work — ' + count + ' applications this session. Pausing here to keep the account safe. Press Start when you want to continue.';
+      chrome.storage.local.set(updates);
+      return;
+    }
+    chrome.storage.local.set(updates, function () { queueOpenNext(); });
+  });
+}
+
+chrome.runtime.onMessage.addListener(function (message, sender) {
+  if (!message) return;
+  if (message.type === 'QUEUE_START') {
+    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+      var tabId = (tabs && tabs[0]) ? tabs[0].id : (sender.tab ? sender.tab.id : null);
+      chrome.storage.local.set({
+        queueActive: true, queuePaused: false, queueSessionCount: 0, queueStatusMsg: '', queueTabId: tabId
+      }, function () { queueOpenNext(); });
+    });
+  }
+  if (message.type === 'QUEUE_ITEM_SUBMITTED') queueMarkAndAdvance(message.jobId, 'done', true);
+  if (message.type === 'QUEUE_ITEM_SKIP') queueMarkAndAdvance(message.jobId, 'skipped', false);
 });

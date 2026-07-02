@@ -48,7 +48,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v1.3.6</p>
+      <p class="subtitle">Job Assistant v1.4.0</p>
       <div id="theme-picker" class="theme-picker">
         <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
         <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
@@ -162,6 +162,27 @@
           <label class="search-check" style="margin-top:8px;"><input type="checkbox" id="auto-advance-toggle" checked> Auto-advance through Easy Apply steps (stops at the final review — never auto-submits)</label>
           <button id="eeo-save" class="btn-small" style="width:100%;margin-top:6px;">Save Auto-Fill Answers</button>
           <span id="eeo-status" class="resume-status"></span>
+        </div>
+      </section>
+
+      <section id="queue-section" class="section">
+        <div class="section-header">
+          <h2>Easy Apply Queue</h2>
+          <button id="queue-toggle" class="btn-icon" title="Show/hide the batch-apply queue">&#128203; Show</button>
+        </div>
+        <p class="chat-mode-hint">On a LinkedIn <strong>Jobs search results</strong> page, build a queue of Easy Apply jobs. Alicia opens each one, fills it, and <strong>stops at Submit &mdash; you always click Submit yourself.</strong> Paced and human-in-the-loop to protect the account; it takes a break after 20 per run.</p>
+        <div id="queue-body" class="hidden">
+          <button id="queue-build-btn" class="tool-btn" style="width:100%;">&#128269; Build queue from this search</button>
+          <label class="search-check" style="margin-top:8px;"><input type="checkbox" id="queue-autoopen-toggle" checked> Auto-open &ldquo;Easy Apply&rdquo; on each job (never auto-submits)</label>
+          <div id="queue-status" class="queue-status"></div>
+          <div id="queue-controls" class="queue-controls hidden">
+            <button id="queue-start-btn" class="btn-small">&#9654; Start</button>
+            <button id="queue-pause-btn" class="btn-small hidden">&#9208; Pause</button>
+            <button id="queue-stop-btn" class="btn-small">&#9632; Stop</button>
+            <button id="queue-clear-btn" class="btn-small">Clear</button>
+          </div>
+          <div id="queue-list" class="queue-list"></div>
+          <p id="queue-empty" class="placeholder">No queue yet &mdash; open a LinkedIn Jobs search results page, then build the queue.</p>
         </div>
       </section>
 

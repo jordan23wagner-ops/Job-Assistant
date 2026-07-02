@@ -1320,3 +1320,76 @@ header h1 {
 .tab-panel.active {
   display: block;
 }
+
+/* ===== Easy Apply Queue ===== */
+.queue-status {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 8px 0 4px;
+  min-height: 14px;
+  line-height: 1.4;
+}
+.queue-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+.queue-controls .btn-small { flex: 1 1 auto; }
+.queue-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin: 4px 0 8px;
+}
+.queue-list { display: flex; flex-direction: column; gap: 6px; }
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.queue-item-info { flex: 1 1 auto; min-width: 0; }
+.queue-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-item-meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.queue-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  background: var(--border);
+  color: var(--text-dim);
+}
+.queue-done .queue-badge { background: #244a2c; color: #a6e6b4; }
+.queue-skipped { opacity: .6; }
+.queue-skipped .queue-badge { background: #4a3a24; color: #e6cfa6; }
+.queue-current { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.queue-skip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.queue-skip:hover { border-color: var(--accent); color: var(--text-strong); }

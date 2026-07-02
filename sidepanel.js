@@ -2304,6 +2304,184 @@ chrome.runtime.onMessage.addListener(function (message) {
   if (message.type === 'PEOPLE_FOUND') handlePeopleFound(message.people);
 });
 
+// ========== Easy Apply Queue (batch apply) ==========
+// Collect Easy Apply jobs from the current LinkedIn search page into a persistent queue, then
+// let background.js step through them (open → fill → the human clicks Submit → next). This panel
+// owns the queue UI and controls; the queue state lives in chrome.storage.local so it survives
+// navigations and the side panel closing. Nothing here ever submits an application.
+const queueToggle = document.getElementById('queue-toggle');
+const queueBody = document.getElementById('queue-body');
+const queueBuildBtn = document.getElementById('queue-build-btn');
+const queueAutoOpenToggle = document.getElementById('queue-autoopen-toggle');
+const queueStatusEl = document.getElementById('queue-status');
+const queueControls = document.getElementById('queue-controls');
+const queueStartBtn = document.getElementById('queue-start-btn');
+const queuePauseBtn = document.getElementById('queue-pause-btn');
+const queueStopBtn = document.getElementById('queue-stop-btn');
+const queueClearBtn = document.getElementById('queue-clear-btn');
+const queueListEl = document.getElementById('queue-list');
+const queueEmptyEl = document.getElementById('queue-empty');
+let queueBuilding = false;
+let queueBuildTimeout = null;
+
+function setQueueStatus(msg) { if (queueStatusEl) queueStatusEl.textContent = msg || ''; }
+
+if (queueToggle && queueBody) {
+  queueToggle.addEventListener('click', function () {
+    queueBody.classList.toggle('hidden');
+    queueToggle.innerHTML = queueBody.classList.contains('hidden') ? '&#128203; Show' : '&#128203; Hide';
+    if (!queueBody.classList.contains('hidden')) renderQueue();
+  });
+}
+
+if (queueAutoOpenToggle) {
+  chrome.storage.local.get('queueAutoOpen', function (d) { queueAutoOpenToggle.checked = d.queueAutoOpen !== false; });
+  queueAutoOpenToggle.addEventListener('change', function () {
+    chrome.storage.local.set({ queueAutoOpen: queueAutoOpenToggle.checked });
+  });
+}
+
+function startBuildQueue() {
+  if (queueBuilding) return;
+  queueBuilding = true;
+  if (queueBuildBtn) queueBuildBtn.disabled = true;
+  setQueueStatus('Scanning this search for Easy Apply jobs… (scrolling to load them all)');
+  queueBuildTimeout = setTimeout(function () {
+    if (queueBuilding) {
+      queueBuilding = false;
+      if (queueBuildBtn) queueBuildBtn.disabled = false;
+      setQueueStatus('No jobs found. Open a LinkedIn Jobs search results page, then build the queue.');
+    }
+  }, 25000);
+  chrome.runtime.sendMessage({ type: 'COLLECT_QUEUE' }).catch(function () {});
+}
+
+function handleQueueCollected(jobs) {
+  if (!queueBuilding) return;
+  clearTimeout(queueBuildTimeout);
+  queueBuilding = false;
+  if (queueBuildBtn) queueBuildBtn.disabled = false;
+  chrome.storage.local.get('applyQueue', function (d) {
+    var existing = d.applyQueue || [];
+    var seen = {};
+    existing.forEach(function (j) { if (j.jobId) seen[j.jobId] = true; });
+    var added = 0;
+    (jobs || []).forEach(function (j) {
+      if (!j.jobId || seen[j.jobId]) return;
+      seen[j.jobId] = true;
+      existing.push({ jobId: j.jobId, title: j.title, company: j.company, location: j.location, url: j.url, status: 'pending' });
+      added++;
+    });
+    chrome.storage.local.set({ applyQueue: existing }, function () {
+      renderQueue();
+      setQueueStatus(added
+        ? ('Added ' + added + ' Easy Apply job' + (added === 1 ? '' : 's') + ' to the queue.')
+        : 'No new Easy Apply jobs found on this page. (External-apply and already-applied jobs are skipped.)');
+    });
+  });
+}
+
+function queueStatusLabel(s) { return s === 'done' ? '✓ Sent' : s === 'skipped' ? 'Skipped' : 'Pending'; }
+
+function renderQueue() {
+  if (!queueListEl) return;
+  chrome.storage.local.get(['applyQueue', 'queueActive', 'queuePaused', 'queueIndex', 'queueStatusMsg', 'queueSessionCount'], function (d) {
+    var q = d.applyQueue || [];
+    if (d.queueStatusMsg) setQueueStatus(d.queueStatusMsg);
+    var done = q.filter(function (j) { return j.status === 'done'; }).length;
+    var skipped = q.filter(function (j) { return j.status === 'skipped'; }).length;
+
+    if (queueEmptyEl) queueEmptyEl.style.display = q.length ? 'none' : '';
+    if (queueControls) queueControls.classList.toggle('hidden', !q.length);
+
+    if (queueStartBtn && queuePauseBtn) {
+      var running = d.queueActive && !d.queuePaused;
+      queueStartBtn.innerHTML = (d.queueActive && d.queuePaused) ? '&#9654; Resume' : '&#9654; Start';
+      queueStartBtn.classList.toggle('hidden', running);
+      queuePauseBtn.classList.toggle('hidden', !running);
+    }
+
+    queueListEl.innerHTML = '';
+    if (q.length) {
+      var count = document.createElement('div');
+      count.className = 'queue-count';
+      count.textContent = done + ' of ' + q.length + ' done'
+        + (skipped ? ' · ' + skipped + ' skipped' : '')
+        + (d.queueActive ? ' · ' + (d.queueSessionCount || 0) + '/20 this run' : '');
+      queueListEl.appendChild(count);
+    }
+    q.forEach(function (j, i) {
+      var row = document.createElement('div');
+      row.className = 'queue-item queue-' + j.status;
+      if (d.queueActive && !d.queuePaused && i === d.queueIndex && j.status === 'pending') row.className += ' queue-current';
+      var info = document.createElement('div'); info.className = 'queue-item-info';
+      var t = document.createElement('div'); t.className = 'queue-item-title'; t.textContent = j.title; info.appendChild(t);
+      var m = document.createElement('div'); m.className = 'queue-item-meta';
+      m.textContent = [j.company, j.location].filter(Boolean).join(' · '); info.appendChild(m);
+      row.appendChild(info);
+      var badge = document.createElement('span'); badge.className = 'queue-badge'; badge.textContent = queueStatusLabel(j.status);
+      row.appendChild(badge);
+      if (j.status === 'pending') {
+        var skip = document.createElement('button'); skip.className = 'queue-skip'; skip.textContent = 'Skip'; skip.title = 'Remove this job from the queue';
+        skip.addEventListener('click', function () { skipQueueItem(j.jobId); });
+        row.appendChild(skip);
+      }
+      queueListEl.appendChild(row);
+    });
+  });
+}
+
+function skipQueueItem(jobId) {
+  chrome.storage.local.get(['applyQueue', 'queueActive', 'queueIndex'], function (d) {
+    var q = d.applyQueue || [];
+    var wasCurrent = false;
+    for (var i = 0; i < q.length; i++) {
+      if (q[i].jobId === jobId && q[i].status === 'pending') { q[i].status = 'skipped'; if (i === d.queueIndex) wasCurrent = true; break; }
+    }
+    chrome.storage.local.set({ applyQueue: q }, function () {
+      renderQueue();
+      // If we skipped the job the queue is actively on, tell background to advance now.
+      if (d.queueActive && wasCurrent) chrome.runtime.sendMessage({ type: 'QUEUE_ITEM_SKIP', jobId: jobId }).catch(function () {});
+    });
+  });
+}
+
+if (queueBuildBtn) queueBuildBtn.addEventListener('click', startBuildQueue);
+if (queueStartBtn) queueStartBtn.addEventListener('click', function () {
+  chrome.storage.local.get(['queueActive', 'queuePaused', 'applyQueue'], function (d) {
+    if (d.queueActive && d.queuePaused) {           // Resume — don't reset the session count
+      chrome.storage.local.set({ queuePaused: false }, function () { setQueueStatus('Resumed.'); renderQueue(); });
+      return;
+    }
+    var q = d.applyQueue || [];
+    if (!q.some(function (j) { return j.status === 'pending'; })) { setQueueStatus('No pending jobs. Build a queue first.'); return; }
+    setQueueStatus('Starting… opening the first job. Keep this tab on LinkedIn while the queue runs.');
+    chrome.runtime.sendMessage({ type: 'QUEUE_START' }).catch(function () {});
+  });
+});
+if (queuePauseBtn) queuePauseBtn.addEventListener('click', function () {
+  chrome.storage.local.set({ queuePaused: true }, function () { setQueueStatus('Paused. Press Resume to continue.'); renderQueue(); });
+});
+if (queueStopBtn) queueStopBtn.addEventListener('click', function () {
+  chrome.storage.local.set({ queueActive: false, queuePaused: false }, function () { setQueueStatus('Stopped. The queue is kept — press Start to run it again.'); renderQueue(); });
+});
+if (queueClearBtn) queueClearBtn.addEventListener('click', function () {
+  chrome.storage.local.set({ applyQueue: [], queueActive: false, queuePaused: false, queueIndex: 0, queueStatusMsg: '' }, function () {
+    setQueueStatus('Queue cleared.'); renderQueue();
+  });
+});
+
+chrome.runtime.onMessage.addListener(function (message) {
+  if (message.type === 'QUEUE_COLLECTED') handleQueueCollected(message.jobs);
+});
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== 'local') return;
+  if (changes.applyQueue || changes.queueActive || changes.queuePaused || changes.queueIndex || changes.queueStatusMsg || changes.queueSessionCount) {
+    if (queueBody && !queueBody.classList.contains('hidden')) renderQueue();
+  }
+});
+renderQueue();
+
 // ========== EEO Auto-Fill ==========
 
 const eeoToggle = document.getElementById('eeo-toggle');
