@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Alicia AI - Job Assistant",
-  "version": "1.6.4",
+  "version": "1.6.5",
   "description": "AI-powered job search assistant for LinkedIn",
   "permissions": ["sidePanel", "activeTab", "storage", "unlimitedStorage", "tabs", "scripting", "webNavigation"],
   "host_permissions": ["<all_urls>"],

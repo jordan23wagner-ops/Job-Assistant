@@ -1818,21 +1818,23 @@ var queueOpenAttempts = 0;
 var queuePageDeadline = 0;
 var queueSubmitReported = false;
 var queueSkipReported = false;
+var autoFillEnabled = true; // cached master "Auto-fill applications" toggle (gates post-apply dismiss)
 
 function refreshQueueState(cb) {
-  safeStorageGet(['queueActive', 'queuePaused', 'queueAutoOpen', 'applyQueue', 'queueIndex'], function (d) {
+  safeStorageGet(['queueActive', 'queuePaused', 'queueAutoOpen', 'applyQueue', 'queueIndex', 'autoFillEasyApply'], function (d) {
     QUEUE.active = !!d.queueActive;
     QUEUE.paused = !!d.queuePaused;
     QUEUE.autoOpen = d.queueAutoOpen !== false;
     QUEUE.jobs = d.applyQueue || [];
     QUEUE.index = d.queueIndex || 0;
+    autoFillEnabled = d.autoFillEasyApply !== false;
     if (cb) cb();
   });
 }
 try {
   chrome.storage.onChanged.addListener(function (changes, area) {
     if (area !== 'local') return;
-    if (changes.queueActive || changes.queuePaused || changes.queueAutoOpen || changes.applyQueue || changes.queueIndex) {
+    if (changes.queueActive || changes.queuePaused || changes.queueAutoOpen || changes.applyQueue || changes.queueIndex || changes.autoFillEasyApply) {
       refreshQueueState();
     }
   });
@@ -1939,15 +1941,75 @@ function driveQueueJobPage() {
   if (Date.now() > queuePageDeadline) reportQueueSkip(job.jobId, 'no-easy-apply');
 }
 
-// After the HUMAN clicks Submit, the modal becomes the post-submit "application sent" screen.
-// That's our signal to mark this item done and let background pull up the next job.
+// Buttons that safely DISMISS a post-apply upsell — never an affirmative action like "Update
+// profile", "Add skills", "Save". Preferred = the explicit decline ("Not now"); fallback = the ✕.
+var POST_APPLY_DISMISS_PREFERRED = [/^not now$/, /^no thanks$/, /^maybe later$/, /^skip$/, /^done$/];
+var POST_APPLY_DISMISS_FALLBACK = [/^dismiss$/, /^close$/];
+
+// After Submit, LinkedIn pops upsell modals ("Your application was sent!", "Turn your resume into
+// a profile", next-best-action). Auto-click the decline button ("Not now" / the ✕) so the user
+// isn't left clicking it on every application, and the queue can move on cleanly. Only touches a
+// modal that looks like a post-apply confirmation/upsell and has NO fillable fields — so it can
+// never interfere with an actual application form, and it never clicks an affirmative button.
+function dismissPostApplyModals() {
+  var roots = easyApplySearchRoots();
+  for (var r = 0; r < roots.length; r++) {
+    var dialogs = roots[r].querySelectorAll('.artdeco-modal, [role="dialog"]');
+    for (var d = 0; d < dialogs.length; d++) {
+      var m = dialogs[d];
+      if (!m.getClientRects().length) continue;
+      var txt = normTxt(getText(m)).slice(0, 500);
+      if (!/(application was sent|your application was sent|application sent|turn your resume into a profile|recruiters notice|next best action|top choice|premium)/.test(txt)) continue;
+      if (m.querySelector('input:not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea')) continue; // not an upsell — leave it
+      // Prefer the explicit "Not now" decline; fall back to the ✕ only if no decline button exists.
+      var btns = m.querySelectorAll('button, [role="button"]');
+      var fallbackBtn = null, fallbackTxt = '';
+      for (var b = 0; b < btns.length; b++) {
+        var bt = btns[b];
+        if (bt.disabled || !bt.getClientRects().length) continue;
+        var t = normTxt((bt.getAttribute('aria-label') || '') + ' ' + (bt.innerText || bt.textContent || ''));
+        if (POST_APPLY_DISMISS_PREFERRED.some(function (p) { return p.test(t); })) {
+          console.log('[Alicia] Dismissing post-apply upsell via:', t);
+          try { bt.click(); } catch (e) { bt.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+          return true;
+        }
+        if (!fallbackBtn && POST_APPLY_DISMISS_FALLBACK.some(function (p) { return p.test(t); })) { fallbackBtn = bt; fallbackTxt = t; }
+      }
+      if (fallbackBtn) {
+        console.log('[Alicia] Dismissing post-apply upsell via:', fallbackTxt);
+        try { fallbackBtn.click(); } catch (e) { fallbackBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// True once an application has been submitted — covers all three shapes LinkedIn uses: the
+// in-modal "application sent" screen, a standalone confirmation modal, and the /post-apply/
+// next-best-action page it sometimes navigates to (which killed the old in-modal-only check).
+function isApplicationSentState() {
+  if (/\/post-apply\//.test(location.href)) return true;
+  var roots = easyApplySearchRoots();
+  for (var r = 0; r < roots.length; r++) {
+    var dialogs = roots[r].querySelectorAll('.artdeco-modal, [role="dialog"]');
+    for (var d = 0; d < dialogs.length; d++) {
+      var m = dialogs[d];
+      if (!m.getClientRects().length) continue;
+      if (/(application was sent|your application was sent|application sent|you applied|application submitted)/.test(normTxt(getText(m)).slice(0, 400))) return true;
+    }
+  }
+  var raw = findEasyApplyModalRaw();
+  return !!(raw && isPostSubmitConfirmation(raw));
+}
+
+// After the HUMAN clicks Submit, detect the "application sent" state and tell background to advance.
 function checkQueueSubmitted() {
   if (!QUEUE.active || QUEUE.paused || queueSubmitReported) return;
   var job = QUEUE.jobs[QUEUE.index];
   if (!job || job.status !== 'pending') return;
   if (job.jobId && location.href.indexOf(job.jobId) < 0) return;
-  var raw = findEasyApplyModalRaw();
-  if (raw && isPostSubmitConfirmation(raw)) {
+  if (isApplicationSentState()) {
     queueSubmitReported = true;
     showEasyApplyBanner('Application sent ✓ — moving to the next job…', '#4caf50');
     // Brief pause so the confirmation is visible before we navigate away.
@@ -1961,7 +2023,10 @@ function checkQueueSubmitted() {
 // on the known host, and scheduleAutoFill is debounced + guarded against overlapping passes.
 setInterval(function () {
   if (!extAlive()) return;
+  // Detect the "application sent" state BEFORE dismissing the upsell, so clicking "Not now" (which
+  // closes that modal) can't erase the signal the queue needs to advance.
   if (IS_TOP && QUEUE.active) { driveQueueJobPage(); checkQueueSubmitted(); }
+  if (IS_TOP && autoFillEnabled) dismissPostApplyModals(); // click "Not now" on post-apply upsells
   if (findEasyApplyModal()) scheduleAutoFill();
   // Re-assert the match badge if LinkedIn re-rendered the top card and wiped it (uses the
   // cached score — no extra backend calls; initial scoring stays driven by detectJob).
