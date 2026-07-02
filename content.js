@@ -478,9 +478,9 @@ function toggleMatchOverlayDetails(badgeEl, result) {
 
   var panel = document.createElement('div');
   panel.id = 'alicia-match-details';
-  var isFixed = badgeEl.parentNode === document.body; // floating badge → float the panel too
-  panel.style.cssText = 'padding:10px 12px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:320px;box-shadow:0 2px 12px rgba(0,0,0,.4);position:relative;'
-    + (isFixed ? 'position:fixed;bottom:96px;right:20px;z-index:2147483646;' : 'margin:6px 0 10px;max-width:480px;');
+  var isFixed = !!(badgeEl.parentNode && badgeEl.parentNode.id === 'alicia-stack'); // floating badge → panel joins the stack too
+  panel.style.cssText = 'padding:10px 12px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);position:relative;'
+    + (isFixed ? 'order:1;pointer-events:auto;max-width:320px;' : 'margin:6px 0 10px;max-width:480px;');
 
   var close = document.createElement('button');
   close.textContent = '✕';
@@ -504,7 +504,8 @@ function toggleMatchOverlayDetails(badgeEl, result) {
 
   panel.appendChild(close);
   panel.appendChild(body);
-  badgeEl.insertAdjacentElement('afterend', panel);
+  if (isFixed) aliciaStack().appendChild(panel); // stacked above the badge (order:1)
+  else badgeEl.insertAdjacentElement('afterend', panel);
 
   // Click anywhere outside the badge/panel closes it. Added after this click settles so it
   // doesn't immediately fire on the same click that opened the panel.
@@ -518,27 +519,25 @@ function toggleMatchOverlayDetails(badgeEl, result) {
 function renderMatchOverlay(state, result) {
   var anchor = findMatchOverlayAnchor();
   var el = document.getElementById('alicia-match-overlay');
-  var fixed = !anchor; // no inline anchor found — pin a floating badge so it always shows
+  var inStack = function (n) { return !!(n && n.parentNode && n.parentNode.id === 'alicia-stack'); };
+  var fixed = !anchor; // no inline anchor found — float the badge in the shared stack
   if (!el) {
     el = document.createElement('div');
     el.id = 'alicia-match-overlay';
     if (anchor) anchor.insertAdjacentElement('afterend', el);
-    else document.body.appendChild(el);
-  } else if (anchor && el.parentNode === document.body) {
-    // An anchor became available after we first showed a floating badge — move it inline.
+    else aliciaStack().appendChild(el);
+  } else if (anchor && inStack(el)) {
+    // An anchor became available after we first floated the badge — move it inline.
     anchor.insertAdjacentElement('afterend', el);
     fixed = false;
-  } else if (el.parentNode === document.body) {
+  } else if (inStack(el)) {
     fixed = true;
   }
 
   var base = 'display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font:600 12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;user-select:none;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);';
-  // Bottom-right, same corner already used by the Easy Apply review banner (proven to never
-  // sit on top of LinkedIn's own nav/filter/toolbar controls) — offset above it so the two
-  // never overlap on the rare page where both are showing at once.
-  var placement = fixed
-    ? 'position:fixed;bottom:56px;right:20px;z-index:2147483646;'
-    : 'margin:8px 0;';
+  // In the shared bottom-right stack the flexbox handles spacing, so the floating badge just
+  // needs its order (above the banner, below the details panel); inline it's a normal element.
+  var placement = fixed ? 'order:2;pointer-events:auto;' : 'margin:8px 0;';
   el.style.cssText = base + placement;
 
   if (state === 'loading') {
@@ -1463,15 +1462,30 @@ function hasVisibleValidationError(modal) {
   return false;
 }
 
+// Single bottom-right column that ALL of Alicia's floating pieces live in (the review banner,
+// the floating match badge, the match details panel). A flex stack means they can never
+// overlap each other no matter how many are showing — CSS `order` fixes their top-to-bottom
+// arrangement regardless of the order they happen to be created in.
+function aliciaStack() {
+  var s = document.getElementById('alicia-stack');
+  if (!s) {
+    s = document.createElement('div');
+    s.id = 'alicia-stack';
+    s.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none;max-width:360px;';
+    document.body.appendChild(s);
+  }
+  return s;
+}
+
 function showEasyApplyBanner(text, color) {
   var el = document.getElementById('alicia-apply-banner');
   if (!el) {
     el = document.createElement('div');
     el.id = 'alicia-apply-banner';
-    el.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;padding:10px 16px;border-radius:8px;color:#fff;font:600 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:320px;cursor:pointer;';
+    el.style.cssText = 'order:3;pointer-events:auto;padding:10px 16px;border-radius:8px;color:#fff;font:600 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:340px;cursor:pointer;';
     el.title = 'Click to dismiss';
     el.onclick = function () { el.remove(); };
-    document.body.appendChild(el);
+    aliciaStack().appendChild(el);
   }
   el.style.background = color;
   el.textContent = text;
@@ -1496,7 +1510,13 @@ function tryAutoAdvanceEasyApply() {
     }
 
     // Never click this — reaching it means the application is ready for a human to submit.
-    if (findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS)) {
+    // Scroll the Submit button into view (once) so it's one click away, no manual scrolling.
+    var submitBtn = findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS);
+    if (submitBtn) {
+      if (!modal.__aliciaScrolledToSubmit) {
+        modal.__aliciaScrolledToSubmit = true;
+        try { submitBtn.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) { try { submitBtn.scrollIntoView(); } catch (e2) {} }
+      }
       showEasyApplyBanner('Filled and ready — review, then click Submit yourself.', '#4caf50');
       return;
     }
