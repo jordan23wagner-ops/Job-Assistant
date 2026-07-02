@@ -52,6 +52,10 @@ function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 // application form gets filled.
 var IS_TOP = (function () { try { return window.top === window.self; } catch (e) { return false; } })();
 
+// One-time marker so we can confirm from the console whether the script is injected into a
+// given frame (especially LinkedIn's same-origin linkedin.com/preload apply iframe).
+console.log('[Alicia] content script loaded in frame — IS_TOP=' + IS_TOP + ' url=' + location.href);
+
 function trySelectors(selectors, minLen, maxLen) {
   for (var i = 0; i < selectors.length; i++) {
     try {
@@ -1221,6 +1225,20 @@ function findEasyApplyModal() {
         return node;
       }
       node = node.parentElement;
+    }
+  }
+  // Subframe fallback: LinkedIn hosts ATS-powered application forms in a same-origin
+  // linkedin.com/preload iframe where the "Apply to <company>" heading lives in the PARENT
+  // frame and only the fields live here — so no heading match above. If this frame isn't the
+  // top frame, its text reads like an application, and it holds fillable fields, treat the whole
+  // document as the modal. Text gate keeps this off unrelated same-origin frames (chat, ads).
+  if (!IS_TOP && document.body) {
+    var docText = (document.body.innerText || '').toLowerCase();
+    var looksApply = /application|apply to|submit application|contact info|resume|cover letter|work authoriz|eeo|voluntary self/.test(docText);
+    var fields = document.querySelectorAll('input:not([type="hidden"]):not([type="search"]):not([type="submit"]):not([type="button"]), select, textarea');
+    if (looksApply && fields.length >= 2) {
+      console.log('[Alicia] Treating subframe document as the application form (', fields.length, 'fields )');
+      return document.body;
     }
   }
   return null;
