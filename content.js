@@ -471,35 +471,31 @@ function findMatchOverlayAnchor() {
   return null;
 }
 
-var matchOutsideClickHandler = null;
-function closeMatchDetails() {
-  var existing = document.getElementById('alicia-match-details');
-  if (existing) existing.remove();
-  if (matchOutsideClickHandler) {
-    document.removeEventListener('click', matchOutsideClickHandler, true);
-    matchOutsideClickHandler = null;
-  }
+// The match details show as a HOVER TOOLTIP: hovering the badge reveals matched/missing
+// keywords + summary; moving the mouse away hides it (with a small grace delay so you can move
+// onto the panel to read it without it vanishing).
+var matchHideTimer = null;
+
+function hideMatchDetails() {
+  clearTimeout(matchHideTimer);
+  matchHideTimer = setTimeout(function () {
+    var p = document.getElementById('alicia-match-details');
+    if (p) p.remove();
+  }, 180);
 }
 
-function toggleMatchOverlayDetails(badgeEl, result) {
-  // Presence toggle (identity-independent — the badge element can be recreated by the poll):
-  // if the panel is open, any click on the badge closes it.
-  if (document.getElementById('alicia-match-details')) { closeMatchDetails(); return; }
+function showMatchDetails(badgeEl, result) {
+  clearTimeout(matchHideTimer);
+  if (document.getElementById('alicia-match-details')) return; // already showing
+  if (!result) return;
 
   var panel = document.createElement('div');
   panel.id = 'alicia-match-details';
   var isFixed = !!(badgeEl.parentNode && badgeEl.parentNode.id === 'alicia-stack'); // floating badge → panel joins the stack too
-  panel.style.cssText = 'padding:10px 12px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);position:relative;'
+  panel.style.cssText = 'padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);'
     + (isFixed ? 'order:1;pointer-events:auto;max-width:320px;' : 'margin:6px 0 10px;max-width:480px;');
 
-  var close = document.createElement('button');
-  close.textContent = '✕';
-  close.title = 'Close';
-  close.style.cssText = 'position:absolute;top:4px;right:6px;background:none;border:none;color:#9a9ab0;font-size:14px;cursor:pointer;padding:2px 4px;line-height:1;';
-  close.onclick = function (e) { e.stopPropagation(); closeMatchDetails(); };
-
-  var body = document.createElement('div');
-  var html = result.summary ? '<div style="margin:0 14px 4px 0;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
+  var html = result.summary ? '<div style="margin-bottom:4px;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
   function chips(label, items, color) {
     if (!items || !items.length) return '';
     var s = '<div style="margin-top:6px;"><strong>' + label + ':</strong><br>';
@@ -510,20 +506,14 @@ function toggleMatchOverlayDetails(badgeEl, result) {
   }
   html += chips('Matched', result.matched, '#4caf50');
   html += chips('Missing', result.missing, '#e0a800');
-  body.innerHTML = html;
+  panel.innerHTML = html;
 
-  panel.appendChild(close);
-  panel.appendChild(body);
+  // Keep it open while the mouse is over the panel itself; hide when it leaves.
+  panel.addEventListener('mouseenter', function () { clearTimeout(matchHideTimer); });
+  panel.addEventListener('mouseleave', hideMatchDetails);
+
   if (isFixed) aliciaStack().appendChild(panel); // stacked above the badge (order:1)
   else badgeEl.insertAdjacentElement('afterend', panel);
-
-  // Click anywhere outside the badge/panel closes it. Added after this click settles so it
-  // doesn't immediately fire on the same click that opened the panel.
-  matchOutsideClickHandler = function (e) {
-    if (panel.contains(e.target) || badgeEl.contains(e.target) || e.target === badgeEl) return;
-    closeMatchDetails();
-  };
-  setTimeout(function () { document.addEventListener('click', matchOutsideClickHandler, true); }, 0);
 }
 
 function renderMatchOverlay(state, result) {
@@ -554,17 +544,18 @@ function renderMatchOverlay(state, result) {
     el.style.background = '#4a4a68';
     el.style.cursor = 'default';
     el.textContent = '⚡ Alicia is scoring your fit…';
-    el.onclick = null;
+    el.onmouseenter = el.onmouseleave = null;
   } else if (state === 'error') {
     el.style.background = '#6a4a4a';
     el.style.cursor = 'default';
     el.textContent = 'Could not score this job right now.';
-    el.onclick = null;
+    el.onmouseenter = el.onmouseleave = null;
   } else if (state === 'done') {
     el.style.background = matchScoreColor(result.score);
-    el.style.cursor = 'pointer';
-    el.textContent = '🎯 ' + result.score + '% match — tap for details';
-    el.onclick = function () { toggleMatchOverlayDetails(el, result); };
+    el.style.cursor = 'help';
+    el.textContent = '🎯 ' + result.score + '% match — hover for details';
+    el.onmouseenter = function () { showMatchDetails(el, result); };
+    el.onmouseleave = hideMatchDetails;
   }
 }
 
