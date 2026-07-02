@@ -1818,6 +1818,7 @@ var queueOpenAttempts = 0;
 var queuePageDeadline = 0;
 var queueSubmitReported = false;
 var queueSkipReported = false;
+var queueLimitReported = false;
 var autoFillEnabled = true; // cached master "Auto-fill applications" toggle (gates post-apply dismiss)
 
 function refreshQueueState(cb) {
@@ -1898,11 +1899,29 @@ function reportQueueSkip(jobId, reason) {
   safeSendMessage({ type: 'QUEUE_ITEM_SKIP', jobId: jobId, reason: reason });
 }
 
+// LinkedIn's own daily Easy Apply cap: it shows a banner ("We limit daily submissions to maintain
+// quality and prevent bots… apply tomorrow") and disables the Easy Apply button. When we hit it we
+// must STOP the queue (not skip every remaining job) and keep the rest pending for tomorrow.
+function linkedInDailyLimitReached() {
+  var scope = document.querySelector('.jobs-search__job-details, .scaffold-layout__detail, .job-view-layout, .jobs-details') || document.body;
+  var t = normTxt((scope.innerText || '').slice(0, 6000));
+  return /we limit daily submissions|limit daily submissions to maintain|reached the daily (easy apply|application) limit|you.?ve reached your daily|daily submission limit/.test(t);
+}
+
+function reportQueueDailyLimit() {
+  if (queueLimitReported) return;
+  queueLimitReported = true;
+  console.log('[Alicia] LinkedIn daily submission limit reached — stopping the queue.');
+  showEasyApplyBanner("LinkedIn's daily application limit reached — stopping. Your remaining jobs are saved for tomorrow.", '#e0a800');
+  safeSendMessage({ type: 'QUEUE_DAILY_LIMIT' });
+}
+
 // Open the current queued job's application (paced), or skip if it isn't a fillable Easy Apply.
 function driveQueueJobPage() {
   if (!IS_TOP) return;
   var job = currentQueueJob();
   if (!job) return;
+  if (linkedInDailyLimitReached()) { reportQueueDailyLimit(); return; } // LinkedIn daily cap — stop, don't skip
   if (!queuePageDeadline) queuePageDeadline = Date.now() + 45000; // give the page time to render/settle
   if (findEasyApplyModalRaw()) return; // modal is open — the autofill/advance engine owns it now
 

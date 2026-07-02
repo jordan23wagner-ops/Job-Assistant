@@ -270,6 +270,15 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
   if (message.type === 'QUEUE_ITEM_SUBMITTED') queueMarkAndAdvance(message.jobId, 'done', true);
   if (message.type === 'QUEUE_ITEM_SKIP') queueMarkAndAdvance(message.jobId, 'skipped', false);
 
+  // LinkedIn's daily submission cap: stop the queue but leave remaining jobs PENDING (not skipped)
+  // so the user can resume tomorrow with Start.
+  if (message.type === 'QUEUE_DAILY_LIMIT') {
+    chrome.storage.local.set({
+      queueActive: false, queuePaused: false,
+      queueStatusMsg: "LinkedIn's daily application limit was reached — the queue stopped and your remaining jobs are kept. Press Start tomorrow to continue."
+    });
+  }
+
   // Best-effort: open the side panel when the user clicks "Tailor my resume" on the in-page match
   // badge. sidePanel.open() wants a user gesture and messaging can break that chain, so if it's
   // rejected the pendingTailorJob fallback still fires when the user opens the panel themselves.
