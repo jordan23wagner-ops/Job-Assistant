@@ -2439,6 +2439,105 @@ chrome.storage.onChanged.addListener(function (changes, area) {
   if (learnedQaBody && !learnedQaBody.classList.contains('hidden')) renderLearnedAnswers();
 });
 
+// ========== Site Passwords (accounts runUniversalAutofill created on external ATS sites) ==========
+
+const sitePasswordsToggle = document.getElementById('site-passwords-toggle');
+const sitePasswordsBody = document.getElementById('site-passwords-body');
+const sitePasswordsList = document.getElementById('site-passwords-list');
+const sitePasswordsEmpty = document.getElementById('site-passwords-empty');
+let siteCredentialsBank = {};
+
+function renderSitePasswords() {
+  if (!sitePasswordsList) return;
+  sitePasswordsList.innerHTML = '';
+  var hosts = Object.keys(siteCredentialsBank).sort(function (a, b) {
+    return (siteCredentialsBank[b].createdAt || 0) - (siteCredentialsBank[a].createdAt || 0);
+  });
+  if (sitePasswordsEmpty) sitePasswordsEmpty.classList.toggle('hidden', hosts.length > 0);
+
+  hosts.forEach(function (host) {
+    var cred = siteCredentialsBank[host];
+    var row = document.createElement('div');
+    row.className = 'tracker-row';
+
+    var top = document.createElement('div');
+    top.className = 'tracker-row-top';
+
+    var main = document.createElement('div');
+    main.className = 'tracker-row-main';
+    var h = document.createElement('div');
+    h.className = 'tracker-row-title';
+    h.textContent = host;
+    main.appendChild(h);
+    var e = document.createElement('div');
+    e.className = 'tracker-row-company';
+    e.textContent = cred.email || '';
+    main.appendChild(e);
+    top.appendChild(main);
+
+    var del = document.createElement('button');
+    del.className = 'tracker-del';
+    del.title = 'Delete this saved password';
+    del.textContent = '✕';
+    del.addEventListener('click', function () {
+      delete siteCredentialsBank[host];
+      chrome.storage.local.set({ siteCredentials: siteCredentialsBank });
+      renderSitePasswords();
+    });
+    top.appendChild(del);
+    row.appendChild(top);
+
+    var pwRow = document.createElement('div');
+    pwRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:6px;';
+    var pwField = document.createElement('input');
+    pwField.type = 'password';
+    pwField.readOnly = true;
+    pwField.value = cred.password || '';
+    pwField.className = 'pf-input';
+    pwField.style.flex = '1';
+    pwRow.appendChild(pwField);
+
+    var reveal = document.createElement('button');
+    reveal.className = 'btn-small';
+    reveal.textContent = 'Show';
+    reveal.addEventListener('click', function () {
+      var showing = pwField.type === 'text';
+      pwField.type = showing ? 'password' : 'text';
+      reveal.textContent = showing ? 'Show' : 'Hide';
+    });
+    pwRow.appendChild(reveal);
+
+    var copy = document.createElement('button');
+    copy.className = 'btn-small';
+    copy.textContent = 'Copy';
+    copy.addEventListener('click', function () {
+      navigator.clipboard.writeText(cred.password || '').then(function () {
+        copy.textContent = 'Copied!'; setTimeout(function () { copy.textContent = 'Copy'; }, 1500);
+      }).catch(function () {});
+    });
+    pwRow.appendChild(copy);
+
+    row.appendChild(pwRow);
+    sitePasswordsList.appendChild(row);
+  });
+}
+
+function toggleSitePasswords(forceOpen) {
+  var open = forceOpen === true || sitePasswordsBody.classList.contains('hidden');
+  sitePasswordsBody.classList.toggle('hidden', !open);
+  sitePasswordsToggle.innerHTML = open ? '&#128273; Hide' : '&#128273; Show';
+  if (open) renderSitePasswords();
+}
+
+if (sitePasswordsToggle) sitePasswordsToggle.addEventListener('click', function () { toggleSitePasswords(); });
+
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area !== 'local' || !changes.siteCredentials) return;
+  siteCredentialsBank = changes.siteCredentials.newValue || {};
+  if (sitePasswordsEmpty) sitePasswordsEmpty.classList.toggle('hidden', Object.keys(siteCredentialsBank).length > 0);
+  if (sitePasswordsBody && !sitePasswordsBody.classList.contains('hidden')) renderSitePasswords();
+});
+
 function setFillStatus(text, color) {
   if (!eeoFillStatus) return;
   eeoFillStatus.textContent = text;
@@ -2593,30 +2692,277 @@ async function runAutofill(profile, eeo) {
   return filled;
 }
 
+// Self-contained, INJECTED into the active tab (like runAutofill above, but for external ATS
+// flows — Workday/Greenhouse/Lever/iCIMS/Ashby/Workable/custom portals — which are typically
+// multi-step client-side wizards rather than a single page). Fills contact/EEO fields the same
+// way runAutofill does, additionally fills account-creation password fields with a per-domain
+// generated credential, then loops: find a safe "advance" button, click it, wait, re-fill —
+// stopping the moment a Submit/Apply/Create Account-style button appears (never clicked; a
+// human always makes that call) or a validation error is visible. No outer references — if the
+// site does a real page navigation between steps (uncommon for these wizards) this execution
+// context ends with the page, and re-clicking "Auto-Fill Open Application" on the next page
+// picks up where it left off.
+async function runUniversalAutofill(profile, eeo, siteCredentials) {
+  profile = profile || {}; eeo = eeo || {}; siteCredentials = siteCredentials || {};
+  function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim(); }
+  function fire(el) { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function setNativeValue(el, value) {
+    var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    var d = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (d && d.set) d.set.call(el, value); else el.value = value;
+  }
+  function labelText(el) {
+    var t = '';
+    try { if (el.id) { var l = document.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(el.id) : el.id) + '"]'); if (l) t = l.innerText || l.textContent || ''; } } catch (e) {}
+    if (!t) {
+      var lbAttr = el.getAttribute('aria-labelledby');
+      if (lbAttr) { var lb = document.getElementById(lbAttr.split(' ')[0]); if (lb) t = lb.innerText || lb.textContent || ''; }
+    }
+    if (!t) { var p = el.closest('label'); if (p) t = p.innerText || p.textContent || ''; }
+    if (!t) { var c = el.closest('.form-group,fieldset,div,section'); if (c) { var li = c.querySelector('label,legend'); if (li) t = li.innerText || li.textContent || ''; } }
+    return t;
+  }
+  function signals(el) {
+    return norm([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), labelText(el)].filter(Boolean).join(' '));
+  }
+  function canon(s) { var n = norm(s); if (/(decline|prefer not|do not wish|dont wish|not to answer|wish not|not to disclose)/.test(n)) return 'declined'; return n; }
+  function score(a, b) {
+    a = canon(a); b = canon(b); if (!a || !b) return 0;
+    if (a === b) return 100; if (a.indexOf(b) >= 0 || b.indexOf(a) >= 0) return 80;
+    var at = a.split(' '), bt = b.split(' '), c = 0;
+    for (var i = 0; i < bt.length; i++) { if (bt[i].length > 2 && at.indexOf(bt[i]) >= 0) c++; }
+    return bt.length ? (c / bt.length) * 60 : 0;
+  }
+  function generatePassword() {
+    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+    var arr = new Uint32Array(16);
+    crypto.getRandomValues(arr);
+    var pw = '';
+    for (var i = 0; i < arr.length; i++) pw += chars[arr[i] % chars.length];
+    return pw;
+  }
+
+  var fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
+  var STD = [
+    { v: profile.email,     t: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
+    { v: profile.phone,     t: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
+    { v: profile.firstName, t: function (s) { return /\b(given name|first name|firstname|fname)\b/.test(s); } },
+    { v: profile.lastName,  t: function (s) { return /\b(family name|last name|lastname|surname|lname)\b/.test(s); } },
+    { v: profile.linkedin,  t: function (s) { return /linkedin/.test(s); } },
+    { v: profile.website,   t: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
+    { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
+    { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
+    { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
+    { v: fullName,          t: function (s) { return /\bfull name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
+  ];
+  var EEO = [
+    { key: 'eeo-sponsorship',  pats: [/sponsor/, /visa status/] },
+    { key: 'eeo-authorization', pats: [/authoriz/, /legally (authorized|eligible|entitled)/, /right to work/, /eligible to work/] },
+    { key: 'eeo-gender',       pats: [/\bgender\b/, /\bsex\b/] },
+    { key: 'eeo-race',         pats: [/\brace\b/, /ethnic/] },
+    { key: 'eeo-veteran',      pats: [/veteran/] },
+    { key: 'eeo-disability',   pats: [/disabilit/, /\bdisabled\b/] }
+  ];
+  function eeoKey(s) { for (var i = 0; i < EEO.length; i++) { for (var p = 0; p < EEO[i].pats.length; p++) { if (EEO[i].pats[p].test(s)) return EEO[i].key; } } return null; }
+
+  var generatedCredential = null;
+
+  function fillOnePass() {
+    var filled = 0;
+
+    var inputs = document.querySelectorAll('input, textarea');
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      var ty = (el.type || '').toLowerCase();
+      if (['hidden', 'password', 'file', 'checkbox', 'radio', 'submit', 'button', 'image', 'reset', 'search'].indexOf(ty) >= 0) continue;
+      if (el.disabled || el.readOnly) continue;
+      if (el.value && el.value.trim()) continue;
+      if (el.offsetParent === null) continue;
+      var s = signals(el);
+      if (!s) continue;
+      for (var f = 0; f < STD.length; f++) {
+        if (STD[f].v && STD[f].t(s, el)) { setNativeValue(el, STD[f].v); fire(el); filled++; break; }
+      }
+    }
+
+    // ----- Account creation: any empty password field means this step wants a login set up -----
+    var pwFields = Array.prototype.filter.call(document.querySelectorAll('input[type="password"]'), function (p) {
+      return p.offsetParent !== null && !p.value;
+    });
+    if (pwFields.length) {
+      var host = location.hostname;
+      var cred = siteCredentials[host];
+      if (!cred) {
+        cred = { email: profile.email || '', password: generatePassword() };
+        generatedCredential = { hostname: host, email: cred.email, password: cred.password };
+      }
+      pwFields.forEach(function (pf) { setNativeValue(pf, cred.password); fire(pf); filled++; });
+    }
+
+    var selects = document.querySelectorAll('select');
+    for (var si = 0; si < selects.length; si++) {
+      var sel = selects[si];
+      var cur = (sel.value || '').toLowerCase();
+      if (cur && !/select|choose|--|^$/.test(cur)) continue;
+      var key = eeoKey(signals(sel)); if (!key || !eeo[key]) continue;
+      var best = null, bs = 0;
+      for (var o = 0; o < sel.options.length; o++) {
+        var op = sel.options[o]; if (!op.value) continue;
+        var sc = Math.max(score(op.textContent, eeo[key]), score(op.value, eeo[key]));
+        if (sc > bs) { bs = sc; best = op; }
+      }
+      if (best && bs >= 45) { sel.value = best.value; fire(sel); filled++; }
+    }
+
+    function radioLabel(r) { var w = r.closest('label'); if (w) return w.innerText || w.textContent || ''; if (r.id) { var l = document.querySelector('label[for="' + r.id + '"]'); if (l) return l.innerText || l.textContent || ''; } return r.value || ''; }
+    var radios = document.querySelectorAll('input[type="radio"]');
+    var groups = {};
+    for (var ri = 0; ri < radios.length; ri++) { var r = radios[ri]; var nm = r.name || ('__' + ri); (groups[nm] = groups[nm] || []).push(r); }
+    Object.keys(groups).forEach(function (nm) {
+      var rs = groups[nm];
+      if (rs.some(function (x) { return x.checked; })) return;
+      var cont = rs[0].closest('fieldset, .form-group, div');
+      var qlabel = '';
+      if (cont) { var lg = cont.querySelector('legend, label'); qlabel = norm((lg ? (lg.innerText || lg.textContent) : '') || cont.textContent.slice(0, 200)); }
+      var key = eeoKey(qlabel); if (!key || !eeo[key]) return;
+      var best = null, bs = 0;
+      rs.forEach(function (x) { var sc = score(radioLabel(x), eeo[key]); if (sc > bs) { bs = sc; best = x; } });
+      if (best && bs >= 45) { if (!best.checked) { best.checked = true; best.dispatchEvent(new Event('click', { bubbles: true })); best.dispatchEvent(new Event('change', { bubbles: true })); } filled++; }
+    });
+
+    return filled;
+  }
+
+  function hasRecognizedForm() {
+    if (document.querySelector('input[type="password"], input[type="file"]')) return true;
+    return document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input:not([type]), select, textarea').length >= 3;
+  }
+
+  function hasVisibleError() {
+    var errs = document.querySelectorAll('[role="alert"], .error, [aria-invalid="true"]');
+    for (var i = 0; i < errs.length; i++) { if (errs[i].offsetParent !== null) return true; }
+    return false;
+  }
+
+  // Allowlist only — an unrecognized button label is left alone rather than guessed at. Stop
+  // patterns are checked first every pass, so even if a label matched both lists (it can't,
+  // they're disjoint) the never-click rule wins.
+  // norm() strips punctuation like "&", so "Save & Continue" becomes "save continue" — the
+  // middle word must be optional, not a literal "and"/"&" alternative, or it would never match.
+  var ADVANCE_PATTERNS = [/^next$/, /^continue$/, /save (and )?continue/, /continue application/, /next step/, /^proceed$/];
+  var STOP_PATTERNS = [/submit application/, /submit your application/, /^submit$/, /create (my |your )?(account|profile)/, /^sign up$/, /^register$/, /finish application/, /complete application/, /^apply$/, /^apply now$/];
+
+  function findButton(patterns) {
+    var els = document.querySelectorAll('button, input[type="submit"], input[type="button"], a[role="button"], [role="button"]');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.disabled || el.offsetParent === null) continue;
+      var t = norm((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || el.value || el.textContent || ''));
+      for (var p = 0; p < patterns.length; p++) { if (patterns[p].test(t)) return el; }
+    }
+    return null;
+  }
+
+  var totalFilled = fillOnePass();
+
+  if (!hasRecognizedForm()) {
+    // A bare landing page with no application fields yet — its only button is often
+    // indistinguishable from a final Apply/Submit action, so nothing gets auto-clicked here.
+    return { filled: totalFilled, generatedPassword: generatedCredential, status: 'no_fields_found', readyButtonText: null };
+  }
+
+  var status = 'done_no_more_fields';
+  var readyButtonText = null;
+  var MAX_STEPS = 20;
+
+  for (var step = 0; step < MAX_STEPS; step++) {
+    var stopBtn = findButton(STOP_PATTERNS);
+    if (stopBtn) { status = 'ready_to_submit'; readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim(); break; }
+
+    if (hasVisibleError()) { status = 'stopped_needs_input'; break; }
+
+    var nextBtn = findButton(ADVANCE_PATTERNS);
+    if (!nextBtn) { status = 'done_no_more_fields'; break; }
+
+    nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await sleep(900); // let the SPA render the next step
+    totalFilled += fillOnePass();
+
+    if (!hasRecognizedForm()) { status = 'done_no_more_fields'; break; }
+    if (step === MAX_STEPS - 1) status = 'stopped_step_cap';
+  }
+
+  return { filled: totalFilled, generatedPassword: generatedCredential, status: status, readyButtonText: readyButtonText };
+}
+
+var UNIVERSAL_STATUS_MESSAGES = {
+  no_fields_found: { text: 'No application fields found on this page.', color: '#ff9955' },
+  stopped_needs_input: { text: 'Filled what it could — this step needs your input before Alicia can continue.', color: '#e0a800' },
+  stopped_step_cap: { text: 'Filled and advanced several steps — check the page, there may be more to do.', color: '#e0a800' },
+  done_no_more_fields: { text: 'Filled the application. Review before submitting.', color: '#4caf50' }
+};
+
 if (eeoFillNow) {
   eeoFillNow.addEventListener('click', function () {
-    chrome.storage.local.get(['eeoPrefs', 'profile'], function (data) {
+    chrome.storage.local.get(['eeoPrefs', 'profile', 'siteCredentials'], function (data) {
       var prefs = data.eeoPrefs || {};
       var profile = data.profile || {};
+      var siteCredentials = data.siteCredentials || {};
       if (Object.keys(prefs).length === 0 && Object.keys(profile).length === 0) {
         setFillStatus('Add your info first (tap Edit), then Save.', '#ff9955');
         return;
       }
       chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
         if (!tabs[0]) { setFillStatus('No active tab to fill.', '#ff9955'); return; }
+        var isLinkedIn = /linkedin\.com/i.test(tabs[0].url || '');
         setFillStatus('Filling the open application…', '#4caf50');
+
+        if (isLinkedIn) {
+          chrome.scripting.executeScript(
+            { target: { tabId: tabs[0].id }, func: runAutofill, args: [profile, prefs] },
+            function (results) {
+              if (chrome.runtime.lastError) {
+                setFillStatus('Could not fill this page. Open the application form and try again.', '#ff9955');
+                return;
+              }
+              var n = results && results[0] ? results[0].result : 0;
+              setFillStatus(
+                n > 0 ? ('Filled ' + n + ' field' + (n === 1 ? '' : 's') + '. Review before submitting.') : 'No matching fields found on this page.',
+                n > 0 ? '#4caf50' : '#ff9955'
+              );
+            }
+          );
+          return;
+        }
+
         chrome.scripting.executeScript(
-          { target: { tabId: tabs[0].id }, func: runAutofill, args: [profile, prefs] },
+          { target: { tabId: tabs[0].id }, func: runUniversalAutofill, args: [profile, prefs, siteCredentials] },
           function (results) {
             if (chrome.runtime.lastError) {
               setFillStatus('Could not fill this page. Open the application form and try again.', '#ff9955');
               return;
             }
-            var n = results && results[0] ? results[0].result : 0;
-            setFillStatus(
-              n > 0 ? ('Filled ' + n + ' field' + (n === 1 ? '' : 's') + '. Review before submitting.') : 'No matching fields found on this page.',
-              n > 0 ? '#4caf50' : '#ff9955'
-            );
+            var r = results && results[0] ? results[0].result : null;
+            if (!r) { setFillStatus('Could not fill this page.', '#ff9955'); return; }
+
+            if (r.generatedPassword) {
+              siteCredentials[r.generatedPassword.hostname] = {
+                email: r.generatedPassword.email, password: r.generatedPassword.password, createdAt: Date.now()
+              };
+              chrome.storage.local.set({ siteCredentials: siteCredentials });
+              renderSitePasswords();
+            }
+
+            var m = UNIVERSAL_STATUS_MESSAGES[r.status] || UNIVERSAL_STATUS_MESSAGES.done_no_more_fields;
+            var text = m.text;
+            if (r.status === 'ready_to_submit') {
+              text = 'Filled and advanced — ready for you to click "' + (r.readyButtonText || 'Submit') + '" yourself.';
+            }
+            if (r.generatedPassword) {
+              text += ' Created a new password for ' + r.generatedPassword.hostname + ' — saved to Site Passwords.';
+            }
+            setFillStatus(text, r.status === 'ready_to_submit' ? '#4caf50' : m.color);
           }
         );
       });
@@ -2633,7 +2979,7 @@ window.aliciaPremium = {
 };
 
 // Restore theme, saved sessions, tracked jobs, usage, and the live conversation on startup.
-chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile', 'autoAdvanceEasyApply', 'customQA'], function (data) {
+chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'usage', 'isPremium', 'searchPrefs', 'eeoPrefs', 'profile', 'autoAdvanceEasyApply', 'customQA', 'siteCredentials'], function (data) {
   applyTheme(data.theme || 'midnight');
   if (Array.isArray(data.chatSessions)) chatSessions = data.chatSessions;
   if (Array.isArray(data.trackedJobs)) trackedJobs = data.trackedJobs;
@@ -2653,6 +2999,8 @@ chrome.storage.local.get(['theme', 'chatSessions', 'liveChat', 'trackedJobs', 'u
   if (autoAdvanceToggle) autoAdvanceToggle.checked = data.autoAdvanceEasyApply !== false;
   learnedQaBank = Array.isArray(data.customQA) ? data.customQA : [];
   if (learnedQaEmpty) learnedQaEmpty.classList.toggle('hidden', learnedQaBank.length > 0);
+  siteCredentialsBank = data.siteCredentials || {};
+  if (sitePasswordsEmpty) sitePasswordsEmpty.classList.toggle('hidden', Object.keys(siteCredentialsBank).length > 0);
 });
 
 chatSend.addEventListener('click', sendChat);
