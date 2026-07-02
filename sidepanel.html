@@ -48,7 +48,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v0.9.0</p>
+      <p class="subtitle">Job Assistant v1.0.0</p>
       <div id="theme-picker" class="theme-picker">
         <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
         <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
@@ -57,334 +57,357 @@
       </div>
     </header>
 
-    <section id="job-section" class="section">
-      <div class="section-header">
-        <h2>Current Job</h2>
-        <button id="detect-btn" class="btn-small">Detect Job</button>
-      </div>
-      <div id="job-info" class="card">
-        <p class="placeholder">Navigate to a LinkedIn job posting to get started.</p>
-      </div>
-      <button id="save-job-btn" class="btn-small save-job-btn hidden">&#43; Save to Tracker</button>
-      <button id="find-people-btn" class="tool-btn hidden" style="width:100%;margin-top:6px;">&#129309; Find People to Reach Out To</button>
-      <div id="people-results" class="people-results"></div>
-    </section>
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="apply">&#9889; Apply</button>
+      <button class="tab-btn" data-tab="search">&#128269; Search</button>
+      <button class="tab-btn" data-tab="tracker">&#128202; Tracker</button>
+      <button class="tab-btn" data-tab="tools">&#128736;&#65039; Tools</button>
+      <button class="tab-btn" data-tab="chat">&#128172; Chat</button>
+    </nav>
 
-    <section id="tracker-section" class="section">
-      <div class="section-header">
-        <h2>My Applications</h2>
-        <button id="tracker-toggle" class="btn-icon" title="Show/hide tracker">&#128202; Show</button>
-      </div>
-      <div id="tracker-stats" class="tracker-stats"></div>
-      <div id="tracker-body" class="tracker-body hidden">
-        <div id="tracker-list" class="tracker-list"></div>
-        <p id="tracker-empty" class="placeholder">No saved jobs yet. Detect a LinkedIn job and tap "Save to Tracker".</p>
-      </div>
-    </section>
+    <!-- ============ APPLY ============ -->
+    <div id="tab-apply" class="tab-panel active">
+      <section id="job-section" class="section">
+        <div class="section-header">
+          <h2>Current Job</h2>
+          <button id="detect-btn" class="btn-small">Detect Job</button>
+        </div>
+        <div id="job-info" class="card">
+          <p class="placeholder">Navigate to a LinkedIn job posting to get started.</p>
+        </div>
+        <button id="save-job-btn" class="btn-small save-job-btn hidden">&#43; Save to Tracker</button>
+        <button id="find-people-btn" class="tool-btn hidden" style="width:100%;margin-top:6px;">&#129309; Find People to Reach Out To</button>
+        <div id="people-results" class="people-results"></div>
+      </section>
 
-    <section id="search-section" class="section">
-      <div class="section-header">
-        <h2>Job Search</h2>
-        <button id="search-prefs-toggle" class="btn-icon" title="Show/hide preferences">&#9881; Filters</button>
-      </div>
-      <div id="search-prefs" class="search-prefs hidden">
-        <div class="search-group">
-          <label class="search-label">Roles</label>
-          <div class="search-checks" id="search-roles">
-            <label class="search-check"><input type="checkbox" value="Project Manager" checked> Project Manager</label>
-            <label class="search-check"><input type="checkbox" value="Senior Project Manager"> Sr. Project Manager</label>
-            <label class="search-check"><input type="checkbox" value="Principal Project Manager"> Principal PM</label>
-            <label class="search-check"><input type="checkbox" value="Program Manager" checked> Program Manager</label>
-            <label class="search-check"><input type="checkbox" value="Senior Program Manager"> Sr. Program Manager</label>
-            <label class="search-check"><input type="checkbox" value="Principal Program Manager"> Principal PgM</label>
-            <label class="search-check"><input type="checkbox" value="Business Analyst" checked> Business Analyst</label>
-            <label class="search-check"><input type="checkbox" value="Senior Business Analyst"> Sr. Business Analyst</label>
-            <label class="search-check"><input type="checkbox" value="Principal Business Analyst"> Principal BA</label>
-            <label class="search-check"><input type="checkbox" value="Data Analyst" checked> Data Analyst</label>
-            <label class="search-check"><input type="checkbox" value="Senior Data Analyst"> Sr. Data Analyst</label>
-            <label class="search-check"><input type="checkbox" value="Principal Data Analyst"> Principal DA</label>
+      <section id="eeo-section" class="section">
+        <div class="section-header">
+          <h2>Application Auto-Fill</h2>
+          <button id="eeo-toggle" class="btn-icon" title="Set up auto-fill for EEO questions">&#9998; Edit</button>
+        </div>
+        <p class="eeo-hint">Save your answers to common application questions. Alicia auto-fills them when an application opens — or tap the button below to fill the form on screen now.</p>
+        <button id="eeo-fill-now" class="tool-btn" style="width:100%;">&#9889; Auto-Fill Open Application</button>
+        <span id="eeo-fill-status" class="resume-status"></span>
+        <div id="eeo-form" class="eeo-form hidden">
+          <div class="eeo-group">
+            <label class="search-label">Your contact info</label>
+            <input type="text" id="pf-firstName" class="pf-input" placeholder="First name" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-lastName" class="pf-input" placeholder="Last name" autocomplete="off" spellcheck="false">
+            <input type="email" id="pf-email" class="pf-input" placeholder="Email" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-phone" class="pf-input" placeholder="Phone" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-city" class="pf-input" placeholder="City" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-state" class="pf-input" placeholder="State / Province" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-zip" class="pf-input" placeholder="ZIP / Postal code" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-linkedin" class="pf-input" placeholder="LinkedIn URL" autocomplete="off" spellcheck="false">
+            <input type="text" id="pf-website" class="pf-input" placeholder="Website / Portfolio (optional)" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="eeo-group">
+            <label class="search-label">Gender</label>
+            <select id="eeo-gender" class="search-select">
+              <option value="">-- Skip --</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Non-binary">Non-binary</option>
+              <option value="Decline to self-identify">Prefer not to say</option>
+            </select>
+          </div>
+          <div class="eeo-group">
+            <label class="search-label">Race / Ethnicity</label>
+            <select id="eeo-race" class="search-select">
+              <option value="">-- Skip --</option>
+              <option value="Hispanic or Latino">Hispanic or Latino</option>
+              <option value="White">White (Not Hispanic or Latino)</option>
+              <option value="Black or African American">Black or African American</option>
+              <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian / Pacific Islander</option>
+              <option value="Asian">Asian</option>
+              <option value="American Indian or Alaska Native">American Indian / Alaska Native</option>
+              <option value="Two or More Races">Two or More Races</option>
+              <option value="Decline to self-identify">Prefer not to say</option>
+            </select>
+          </div>
+          <div class="eeo-group">
+            <label class="search-label">Veteran Status</label>
+            <select id="eeo-veteran" class="search-select">
+              <option value="">-- Skip --</option>
+              <option value="I am not a protected veteran">Not a protected veteran</option>
+              <option value="I identify as one or more of the classifications of a protected veteran">Protected veteran</option>
+              <option value="I don't wish to answer">Prefer not to say</option>
+            </select>
+          </div>
+          <div class="eeo-group">
+            <label class="search-label">Disability Status</label>
+            <select id="eeo-disability" class="search-select">
+              <option value="">-- Skip --</option>
+              <option value="No, I do not have a disability">No, I don't have a disability</option>
+              <option value="Yes, I have a disability">Yes, I have a disability</option>
+              <option value="I don't wish to answer">Prefer not to say</option>
+            </select>
+          </div>
+          <div class="eeo-group">
+            <label class="search-label">Work Authorization</label>
+            <select id="eeo-authorization" class="search-select">
+              <option value="">-- Skip --</option>
+              <option value="Yes">Authorized to work in the US</option>
+              <option value="No">Not authorized</option>
+            </select>
+          </div>
+          <div class="eeo-group">
+            <label class="search-label">Sponsorship Required</label>
+            <select id="eeo-sponsorship" class="search-select">
+              <option value="">-- Skip --</option>
+              <option value="No">No</option>
+              <option value="Yes">Yes</option>
+            </select>
+          </div>
+          <label class="search-check" style="margin-top:8px;"><input type="checkbox" id="auto-advance-toggle" checked> Auto-advance through Easy Apply steps (stops at the final review — never auto-submits)</label>
+          <button id="eeo-save" class="btn-small" style="width:100%;margin-top:6px;">Save Auto-Fill Answers</button>
+          <span id="eeo-status" class="resume-status"></span>
+        </div>
+      </section>
+
+      <section id="learned-qa-section" class="section">
+        <div class="section-header">
+          <h2>Learned Answers</h2>
+          <button id="learned-qa-toggle" class="btn-icon" title="Show/hide learned answers">&#128218; Show</button>
+        </div>
+        <p class="chat-mode-hint">Custom application questions Alicia has answered before, so future applications with the same question fill in automatically. Edit or delete any answer below.</p>
+        <div id="learned-qa-body" class="hidden">
+          <div id="learned-qa-list" class="tracker-body"></div>
+          <p id="learned-qa-empty" class="placeholder">No learned answers yet — they'll show up here after Alicia answers a custom question on an application.</p>
+        </div>
+      </section>
+
+      <section id="site-passwords-section" class="section">
+        <div class="section-header">
+          <h2>Site Passwords</h2>
+          <button id="site-passwords-toggle" class="btn-icon" title="Show/hide site passwords">&#128273; Show</button>
+        </div>
+        <p class="chat-mode-hint">A unique password Alicia generates for each job site that requires creating an account — never reused across sites. Reveal, copy, or delete below.</p>
+        <div id="site-passwords-body" class="hidden">
+          <div id="site-passwords-list" class="tracker-body"></div>
+          <p id="site-passwords-empty" class="placeholder">No saved site passwords yet — they'll show up here after Alicia creates an account on an application.</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ SEARCH ============ -->
+    <div id="tab-search" class="tab-panel">
+      <section id="search-section" class="section">
+        <div class="section-header">
+          <h2>Job Search</h2>
+          <button id="search-prefs-toggle" class="btn-icon" title="Show/hide preferences">&#9881; Filters</button>
+        </div>
+        <div id="search-prefs" class="search-prefs hidden">
+          <div class="search-group">
+            <label class="search-label">Roles</label>
+            <div class="search-checks" id="search-roles">
+              <label class="search-check"><input type="checkbox" value="Project Manager" checked> Project Manager</label>
+              <label class="search-check"><input type="checkbox" value="Senior Project Manager"> Sr. Project Manager</label>
+              <label class="search-check"><input type="checkbox" value="Principal Project Manager"> Principal PM</label>
+              <label class="search-check"><input type="checkbox" value="Program Manager" checked> Program Manager</label>
+              <label class="search-check"><input type="checkbox" value="Senior Program Manager"> Sr. Program Manager</label>
+              <label class="search-check"><input type="checkbox" value="Principal Program Manager"> Principal PgM</label>
+              <label class="search-check"><input type="checkbox" value="Business Analyst" checked> Business Analyst</label>
+              <label class="search-check"><input type="checkbox" value="Senior Business Analyst"> Sr. Business Analyst</label>
+              <label class="search-check"><input type="checkbox" value="Principal Business Analyst"> Principal BA</label>
+              <label class="search-check"><input type="checkbox" value="Data Analyst" checked> Data Analyst</label>
+              <label class="search-check"><input type="checkbox" value="Senior Data Analyst"> Sr. Data Analyst</label>
+              <label class="search-check"><input type="checkbox" value="Principal Data Analyst"> Principal DA</label>
+            </div>
+          </div>
+          <div class="search-group">
+            <label class="search-label">Work Type</label>
+            <div class="search-checks" id="search-worktype">
+              <label class="search-check"><input type="checkbox" value="2" checked> Remote</label>
+              <label class="search-check"><input type="checkbox" value="3"> Hybrid</label>
+              <label class="search-check"><input type="checkbox" value="1"> On-site</label>
+            </div>
+          </div>
+          <div class="search-group">
+            <label class="search-check"><input type="checkbox" id="search-easy-apply" checked> Easy Apply only</label>
+          </div>
+          <div class="search-group">
+            <label class="search-label">Contract Type</label>
+            <div class="search-checks" id="search-contract">
+              <label class="search-check"><input type="checkbox" value="W2" checked> W2</label>
+              <label class="search-check"><input type="checkbox" value="C2C"> C2C</label>
+              <label class="search-check"><input type="checkbox" value="1099"> 1099</label>
+            </div>
+          </div>
+          <div class="search-group">
+            <label class="search-label">Min. Salary</label>
+            <select id="search-salary" class="search-select">
+              <option value="">Any</option>
+              <option value="40000">$40,000+</option>
+              <option value="60000">$60,000+</option>
+              <option value="80000" selected>$80,000+</option>
+              <option value="100000">$100,000+</option>
+              <option value="120000">$120,000+</option>
+              <option value="140000">$140,000+</option>
+              <option value="160000">$160,000+</option>
+              <option value="200000">$200,000+</option>
+            </select>
+          </div>
+          <button id="search-save-prefs" class="btn-small" style="width:100%;margin-top:6px;">Save Preferences</button>
+        </div>
+        <button id="search-run" class="tool-btn" style="width:100%;margin-top:8px;">&#128269; Search LinkedIn Jobs</button>
+        <button id="scan-rank-btn" class="tool-btn" style="width:100%;margin-top:6px;">&#9889; Scan &amp; Rank These Jobs</button>
+        <div id="search-results-info" class="search-results-info"></div>
+        <div id="scan-results" class="scan-results"></div>
+      </section>
+    </div>
+
+    <!-- ============ TRACKER ============ -->
+    <div id="tab-tracker" class="tab-panel">
+      <section id="tracker-section" class="section">
+        <div class="section-header">
+          <h2>My Applications</h2>
+          <button id="tracker-toggle" class="btn-icon" title="Show/hide tracker">&#128202; Show</button>
+        </div>
+        <div id="tracker-stats" class="tracker-stats"></div>
+        <div id="tracker-body" class="tracker-body hidden">
+          <div id="tracker-list" class="tracker-list"></div>
+          <p id="tracker-empty" class="placeholder">No saved jobs yet. Detect a LinkedIn job and tap "Save to Tracker".</p>
+        </div>
+      </section>
+    </div>
+
+    <!-- ============ TOOLS ============ -->
+    <div id="tab-tools" class="tab-panel">
+      <section id="tools-section" class="section">
+        <h2>Tools</h2>
+        <div class="tools-grid">
+          <button id="analyze-btn" class="tool-btn" disabled>Analyze Job</button>
+          <button id="tailor-btn" class="tool-btn" disabled>Tailor Resume</button>
+          <button id="cover-btn" class="tool-btn" disabled>Cover Letter</button>
+          <button id="interview-btn" class="tool-btn" disabled>Interview Prep</button>
+          <button id="match-score-btn" class="tool-btn tool-btn-wide" disabled>&#128202; Match Score</button>
+        </div>
+        <div class="upload-area">
+          <input type="file" id="resume-upload" accept=".txt,.pdf,.docx">
+        </div>
+        <div class="paste-area">
+          <span id="paste-toggle" class="upload-label">or paste resume text</span>
+          <div id="paste-box" class="hidden">
+            <textarea id="resume-paste" placeholder="Paste your resume text here (works with any format - copy from your resume and paste)..."></textarea>
+            <button id="resume-paste-save" class="btn-small">Save resume text</button>
           </div>
         </div>
-        <div class="search-group">
-          <label class="search-label">Work Type</label>
-          <div class="search-checks" id="search-worktype">
-            <label class="search-check"><input type="checkbox" value="2" checked> Remote</label>
-            <label class="search-check"><input type="checkbox" value="3"> Hybrid</label>
-            <label class="search-check"><input type="checkbox" value="1"> On-site</label>
+        <span id="resume-status" class="resume-status"></span>
+        <button id="build-resume-btn" class="btn-small" style="width:100%;margin-top:6px;">&#9997;&#65039; Build a Resume from Scratch</button>
+      </section>
+
+      <section id="builder-section" class="section hidden">
+        <div class="section-header">
+          <h2>Build a Resume</h2>
+          <button id="close-builder" class="btn-small">Close</button>
+        </div>
+        <div id="builder-conversation" class="card tailoring-card"></div>
+        <div id="builder-input-area" class="tailoring-input-area">
+          <div id="builder-options" class="tailoring-options"></div>
+          <div class="tailoring-text-input">
+            <input type="text" id="builder-input" placeholder="Type your answer..." />
+            <button id="builder-send" class="btn-small">Send</button>
           </div>
         </div>
-        <div class="search-group">
-          <label class="search-check"><input type="checkbox" id="search-easy-apply" checked> Easy Apply only</label>
+      </section>
+
+      <section id="analysis-section" class="section hidden">
+        <div class="section-header">
+          <h2 id="analysis-title">Analysis</h2>
+          <button id="close-analysis" class="btn-small">Close</button>
         </div>
-        <div class="search-group">
-          <label class="search-label">Contract Type</label>
-          <div class="search-checks" id="search-contract">
-            <label class="search-check"><input type="checkbox" value="W2" checked> W2</label>
-            <label class="search-check"><input type="checkbox" value="C2C"> C2C</label>
-            <label class="search-check"><input type="checkbox" value="1099"> 1099</label>
+        <div id="analysis-content" class="card analysis-card"></div>
+      </section>
+
+      <section id="tailoring-section" class="section hidden">
+        <div class="section-header">
+          <h2>Interactive Resume Tailoring</h2>
+          <button id="close-tailoring" class="btn-small">Close</button>
+        </div>
+        <div id="tailoring-conversation" class="card tailoring-card"></div>
+        <div id="tailoring-input-area" class="tailoring-input-area">
+          <div id="tailoring-options" class="tailoring-options"></div>
+          <div class="tailoring-text-input">
+            <input type="text" id="tailoring-input" placeholder="Type your answer..." />
+            <button id="tailoring-send" class="btn-small">Send</button>
           </div>
         </div>
-        <div class="search-group">
-          <label class="search-label">Min. Salary</label>
-          <select id="search-salary" class="search-select">
-            <option value="">Any</option>
-            <option value="40000">$40,000+</option>
-            <option value="60000">$60,000+</option>
-            <option value="80000" selected>$80,000+</option>
-            <option value="100000">$100,000+</option>
-            <option value="120000">$120,000+</option>
-            <option value="140000">$140,000+</option>
-            <option value="160000">$160,000+</option>
-            <option value="200000">$200,000+</option>
-          </select>
-        </div>
-        <button id="search-save-prefs" class="btn-small" style="width:100%;margin-top:6px;">Save Preferences</button>
-      </div>
-      <button id="search-run" class="tool-btn" style="width:100%;margin-top:8px;">&#128269; Search LinkedIn Jobs</button>
-      <button id="scan-rank-btn" class="tool-btn" style="width:100%;margin-top:6px;">&#9889; Scan &amp; Rank These Jobs</button>
-      <div id="search-results-info" class="search-results-info"></div>
-      <div id="scan-results" class="scan-results"></div>
-    </section>
+      </section>
 
-    <section id="eeo-section" class="section">
-      <div class="section-header">
-        <h2>Application Auto-Fill</h2>
-        <button id="eeo-toggle" class="btn-icon" title="Set up auto-fill for EEO questions">&#9998; Edit</button>
-      </div>
-      <p class="eeo-hint">Save your answers to common application questions. Alicia auto-fills them when an application opens — or tap the button below to fill the form on screen now.</p>
-      <button id="eeo-fill-now" class="tool-btn" style="width:100%;">&#9889; Auto-Fill Open Application</button>
-      <span id="eeo-fill-status" class="resume-status"></span>
-      <div id="eeo-form" class="eeo-form hidden">
-        <div class="eeo-group">
-          <label class="search-label">Your contact info</label>
-          <input type="text" id="pf-firstName" class="pf-input" placeholder="First name" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-lastName" class="pf-input" placeholder="Last name" autocomplete="off" spellcheck="false">
-          <input type="email" id="pf-email" class="pf-input" placeholder="Email" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-phone" class="pf-input" placeholder="Phone" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-city" class="pf-input" placeholder="City" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-state" class="pf-input" placeholder="State / Province" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-zip" class="pf-input" placeholder="ZIP / Postal code" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-linkedin" class="pf-input" placeholder="LinkedIn URL" autocomplete="off" spellcheck="false">
-          <input type="text" id="pf-website" class="pf-input" placeholder="Website / Portfolio (optional)" autocomplete="off" spellcheck="false">
+      <section id="interview-section" class="section hidden">
+        <div class="section-header">
+          <h2>Interview Prep</h2>
+          <button id="close-interview" class="btn-small">Close</button>
         </div>
-        <div class="eeo-group">
-          <label class="search-label">Gender</label>
-          <select id="eeo-gender" class="search-select">
-            <option value="">-- Skip --</option>
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-            <option value="Non-binary">Non-binary</option>
-            <option value="Decline to self-identify">Prefer not to say</option>
-          </select>
+        <div class="interview-tabs">
+          <button class="interview-tab active" data-tab="questions">Questions</button>
+          <button class="interview-tab" data-tab="company">Company</button>
+          <button class="interview-tab" data-tab="star">STAR Builder</button>
+          <button class="interview-tab" data-tab="practice">Practice</button>
         </div>
-        <div class="eeo-group">
-          <label class="search-label">Race / Ethnicity</label>
-          <select id="eeo-race" class="search-select">
-            <option value="">-- Skip --</option>
-            <option value="Hispanic or Latino">Hispanic or Latino</option>
-            <option value="White">White (Not Hispanic or Latino)</option>
-            <option value="Black or African American">Black or African American</option>
-            <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian / Pacific Islander</option>
-            <option value="Asian">Asian</option>
-            <option value="American Indian or Alaska Native">American Indian / Alaska Native</option>
-            <option value="Two or More Races">Two or More Races</option>
-            <option value="Decline to self-identify">Prefer not to say</option>
-          </select>
-        </div>
-        <div class="eeo-group">
-          <label class="search-label">Veteran Status</label>
-          <select id="eeo-veteran" class="search-select">
-            <option value="">-- Skip --</option>
-            <option value="I am not a protected veteran">Not a protected veteran</option>
-            <option value="I identify as one or more of the classifications of a protected veteran">Protected veteran</option>
-            <option value="I don't wish to answer">Prefer not to say</option>
-          </select>
-        </div>
-        <div class="eeo-group">
-          <label class="search-label">Disability Status</label>
-          <select id="eeo-disability" class="search-select">
-            <option value="">-- Skip --</option>
-            <option value="No, I do not have a disability">No, I don't have a disability</option>
-            <option value="Yes, I have a disability">Yes, I have a disability</option>
-            <option value="I don't wish to answer">Prefer not to say</option>
-          </select>
-        </div>
-        <div class="eeo-group">
-          <label class="search-label">Work Authorization</label>
-          <select id="eeo-authorization" class="search-select">
-            <option value="">-- Skip --</option>
-            <option value="Yes">Authorized to work in the US</option>
-            <option value="No">Not authorized</option>
-          </select>
-        </div>
-        <div class="eeo-group">
-          <label class="search-label">Sponsorship Required</label>
-          <select id="eeo-sponsorship" class="search-select">
-            <option value="">-- Skip --</option>
-            <option value="No">No</option>
-            <option value="Yes">Yes</option>
-          </select>
-        </div>
-        <label class="search-check" style="margin-top:8px;"><input type="checkbox" id="auto-advance-toggle" checked> Auto-advance through Easy Apply steps (stops at the final review — never auto-submits)</label>
-        <button id="eeo-save" class="btn-small" style="width:100%;margin-top:6px;">Save Auto-Fill Answers</button>
-        <span id="eeo-status" class="resume-status"></span>
-      </div>
-    </section>
 
-    <section id="learned-qa-section" class="section">
-      <div class="section-header">
-        <h2>Learned Answers</h2>
-        <button id="learned-qa-toggle" class="btn-icon" title="Show/hide learned answers">&#128218; Show</button>
-      </div>
-      <p class="chat-mode-hint">Custom application questions Alicia has answered before, so future applications with the same question fill in automatically. Edit or delete any answer below.</p>
-      <div id="learned-qa-body" class="hidden">
-        <div id="learned-qa-list" class="tracker-body"></div>
-        <p id="learned-qa-empty" class="placeholder">No learned answers yet — they'll show up here after Alicia answers a custom question on an application.</p>
-      </div>
-    </section>
-
-    <section id="site-passwords-section" class="section">
-      <div class="section-header">
-        <h2>Site Passwords</h2>
-        <button id="site-passwords-toggle" class="btn-icon" title="Show/hide site passwords">&#128273; Show</button>
-      </div>
-      <p class="chat-mode-hint">A unique password Alicia generates for each job site that requires creating an account — never reused across sites. Reveal, copy, or delete below.</p>
-      <div id="site-passwords-body" class="hidden">
-        <div id="site-passwords-list" class="tracker-body"></div>
-        <p id="site-passwords-empty" class="placeholder">No saved site passwords yet — they'll show up here after Alicia creates an account on an application.</p>
-      </div>
-    </section>
-
-    <section id="tools-section" class="section">
-      <h2>Tools</h2>
-      <div class="tools-grid">
-        <button id="analyze-btn" class="tool-btn" disabled>Analyze Job</button>
-        <button id="tailor-btn" class="tool-btn" disabled>Tailor Resume</button>
-        <button id="cover-btn" class="tool-btn" disabled>Cover Letter</button>
-        <button id="interview-btn" class="tool-btn" disabled>Interview Prep</button>
-        <button id="match-score-btn" class="tool-btn tool-btn-wide" disabled>&#128202; Match Score</button>
-      </div>
-      <div class="upload-area">
-        <input type="file" id="resume-upload" accept=".txt,.pdf,.docx">
-      </div>
-      <div class="paste-area">
-        <span id="paste-toggle" class="upload-label">or paste resume text</span>
-        <div id="paste-box" class="hidden">
-          <textarea id="resume-paste" placeholder="Paste your resume text here (works with any format - copy from your resume and paste)..."></textarea>
-          <button id="resume-paste-save" class="btn-small">Save resume text</button>
+        <div id="iv-tab-questions" class="interview-pane">
+          <p class="iv-hint">Likely interview questions tailored to this role and your resume.</p>
+          <button id="iv-gen-questions" class="btn-small">Generate Questions</button>
+          <div id="iv-questions-content" class="card analysis-card iv-content"></div>
         </div>
-      </div>
-      <span id="resume-status" class="resume-status"></span>
-      <button id="build-resume-btn" class="btn-small" style="width:100%;margin-top:6px;">&#9997;&#65039; Build a Resume from Scratch</button>
-    </section>
 
-    <section id="builder-section" class="section hidden">
-      <div class="section-header">
-        <h2>Build a Resume</h2>
-        <button id="close-builder" class="btn-small">Close</button>
-      </div>
-      <div id="builder-conversation" class="card tailoring-card"></div>
-      <div id="builder-input-area" class="tailoring-input-area">
-        <div id="builder-options" class="tailoring-options"></div>
-        <div class="tailoring-text-input">
-          <input type="text" id="builder-input" placeholder="Type your answer..." />
-          <button id="builder-send" class="btn-small">Send</button>
+        <div id="iv-tab-company" class="interview-pane hidden">
+          <p class="iv-hint">A research brief on the company to help you ask sharp questions and show you've done your homework.</p>
+          <button id="iv-gen-company" class="btn-small">Research Company</button>
+          <div id="iv-company-content" class="card analysis-card iv-content"></div>
         </div>
-      </div>
-    </section>
 
-    <section id="analysis-section" class="section hidden">
-      <div class="section-header">
-        <h2 id="analysis-title">Analysis</h2>
-        <button id="close-analysis" class="btn-small">Close</button>
-      </div>
-      <div id="analysis-content" class="card analysis-card"></div>
-    </section>
-
-    <section id="tailoring-section" class="section hidden">
-      <div class="section-header">
-        <h2>Interactive Resume Tailoring</h2>
-        <button id="close-tailoring" class="btn-small">Close</button>
-      </div>
-      <div id="tailoring-conversation" class="card tailoring-card"></div>
-      <div id="tailoring-input-area" class="tailoring-input-area">
-        <div id="tailoring-options" class="tailoring-options"></div>
-        <div class="tailoring-text-input">
-          <input type="text" id="tailoring-input" placeholder="Type your answer..." />
-          <button id="tailoring-send" class="btn-small">Send</button>
+        <div id="iv-tab-star" class="interview-pane hidden">
+          <p class="iv-hint">Turn a rough story into a polished STAR answer (Situation, Task, Action, Result).</p>
+          <input type="text" id="iv-star-question" class="iv-input" placeholder="The behavioral question (e.g. Tell me about a conflict you resolved)" />
+          <textarea id="iv-star-notes" class="iv-textarea" placeholder="Your rough notes: what happened, what you did, how it turned out..."></textarea>
+          <button id="iv-gen-star" class="btn-small">Build STAR Answer</button>
+          <div id="iv-star-content" class="card analysis-card iv-content"></div>
         </div>
-      </div>
-    </section>
 
-    <section id="interview-section" class="section hidden">
-      <div class="section-header">
-        <h2>Interview Prep</h2>
-        <button id="close-interview" class="btn-small">Close</button>
-      </div>
-      <div class="interview-tabs">
-        <button class="interview-tab active" data-tab="questions">Questions</button>
-        <button class="interview-tab" data-tab="company">Company</button>
-        <button class="interview-tab" data-tab="star">STAR Builder</button>
-        <button class="interview-tab" data-tab="practice">Practice</button>
-      </div>
-
-      <div id="iv-tab-questions" class="interview-pane">
-        <p class="iv-hint">Likely interview questions tailored to this role and your resume.</p>
-        <button id="iv-gen-questions" class="btn-small">Generate Questions</button>
-        <div id="iv-questions-content" class="card analysis-card iv-content"></div>
-      </div>
-
-      <div id="iv-tab-company" class="interview-pane hidden">
-        <p class="iv-hint">A research brief on the company to help you ask sharp questions and show you've done your homework.</p>
-        <button id="iv-gen-company" class="btn-small">Research Company</button>
-        <div id="iv-company-content" class="card analysis-card iv-content"></div>
-      </div>
-
-      <div id="iv-tab-star" class="interview-pane hidden">
-        <p class="iv-hint">Turn a rough story into a polished STAR answer (Situation, Task, Action, Result).</p>
-        <input type="text" id="iv-star-question" class="iv-input" placeholder="The behavioral question (e.g. Tell me about a conflict you resolved)" />
-        <textarea id="iv-star-notes" class="iv-textarea" placeholder="Your rough notes: what happened, what you did, how it turned out..."></textarea>
-        <button id="iv-gen-star" class="btn-small">Build STAR Answer</button>
-        <div id="iv-star-content" class="card analysis-card iv-content"></div>
-      </div>
-
-      <div id="iv-tab-practice" class="interview-pane hidden">
-        <p class="iv-hint">Mock interview: Alicia asks, you answer, she gives feedback and asks the next one.</p>
-        <div id="iv-practice-conversation" class="card tailoring-card"></div>
-        <div class="iv-practice-controls">
-          <button id="iv-practice-start" class="btn-small">Start Mock Interview</button>
+        <div id="iv-tab-practice" class="interview-pane hidden">
+          <p class="iv-hint">Mock interview: Alicia asks, you answer, she gives feedback and asks the next one.</p>
+          <div id="iv-practice-conversation" class="card tailoring-card"></div>
+          <div class="iv-practice-controls">
+            <button id="iv-practice-start" class="btn-small">Start Mock Interview</button>
+          </div>
+          <div id="iv-practice-input-area" class="tailoring-text-input hidden">
+            <input type="text" id="iv-practice-input" placeholder="Type your answer..." />
+            <button id="iv-practice-send" class="btn-small">Send</button>
+          </div>
         </div>
-        <div id="iv-practice-input-area" class="tailoring-text-input hidden">
-          <input type="text" id="iv-practice-input" placeholder="Type your answer..." />
-          <button id="iv-practice-send" class="btn-small">Send</button>
-        </div>
-      </div>
-    </section>
+      </section>
+    </div>
 
-    <section id="chat-section" class="section">
-      <div class="section-header">
-        <h2>Chat with Alicia</h2>
-        <div class="chat-header-actions">
-          <button id="chat-history-btn" class="btn-icon" title="Saved chats">&#128339; History</button>
-          <button id="chat-clear-btn" class="btn-icon" title="Clear &amp; save this chat">&#129529; Clear</button>
+    <!-- ============ CHAT ============ -->
+    <div id="tab-chat" class="tab-panel">
+      <section id="chat-section" class="section">
+        <div class="section-header">
+          <h2>Chat with Alicia</h2>
+          <div class="chat-header-actions">
+            <button id="chat-history-btn" class="btn-icon" title="Saved chats">&#128339; History</button>
+            <button id="chat-clear-btn" class="btn-icon" title="Clear &amp; save this chat">&#129529; Clear</button>
+          </div>
         </div>
-      </div>
-      <div class="chat-mode-toggle chat-mode-row">
-        <button id="mode-job" class="chat-mode-btn active">Job Coach</button>
-        <button id="mode-general" class="chat-mode-btn">General</button>
-      </div>
-      <p id="chat-mode-hint" class="chat-mode-hint">Ask about this job, your resume, or your search.</p>
-      <div id="chat-notice" class="chat-notice hidden"></div>
-      <div id="chat-history-panel" class="chat-history-panel hidden"></div>
-      <div id="chat-messages" class="chat-messages"></div>
-      <div id="chat-attachment" class="chat-attachment hidden"></div>
-      <div class="chat-input-area">
-        <button id="chat-attach" class="chat-attach-btn hidden" title="Attach an image">&#128247;</button>
-        <input type="text" id="chat-input" placeholder="Ask Alicia anything..." />
-        <button id="chat-send" class="btn-small">Send</button>
-      </div>
-      <input type="file" id="chat-image-input" accept="image/*" class="hidden" />
-    </section>
+        <div class="chat-mode-toggle chat-mode-row">
+          <button id="mode-job" class="chat-mode-btn active">Job Coach</button>
+          <button id="mode-general" class="chat-mode-btn">General</button>
+        </div>
+        <p id="chat-mode-hint" class="chat-mode-hint">Ask about this job, your resume, or your search.</p>
+        <div id="chat-notice" class="chat-notice hidden"></div>
+        <div id="chat-history-panel" class="chat-history-panel hidden"></div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div id="chat-attachment" class="chat-attachment hidden"></div>
+        <div class="chat-input-area">
+          <button id="chat-attach" class="chat-attach-btn hidden" title="Attach an image">&#128247;</button>
+          <input type="text" id="chat-input" placeholder="Ask Alicia anything..." />
+          <button id="chat-send" class="btn-small">Send</button>
+        </div>
+        <input type="file" id="chat-image-input" accept="image/*" class="hidden" />
+      </section>
+    </div>
   </div>
   <script src="parsers.js"></script>
   <script src="sidepanel.js"></script>

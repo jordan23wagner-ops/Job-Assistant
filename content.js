@@ -41,6 +41,8 @@ function safeStorageSet(obj) {
   try { chrome.storage.local.set(obj); } catch (e) {}
 }
 
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
 function trySelectors(selectors, minLen, maxLen) {
   for (var i = 0; i < selectors.length; i++) {
     try {
@@ -842,7 +844,35 @@ function isKnownContactField(s, el) {
   return CONTACT_FIELD_MATCHERS.some(function (m) { return m.test(s, el || {}); });
 }
 
-function autoFillContactFields(profile) {
+// LinkedIn typeaheads (e.g. "City") reject plain typed text — a suggestion from the dropdown
+// must be picked or validation fails on Next. After typing, wait for the listbox and click
+// the best-matching visible option.
+function isTypeaheadInput(el) {
+  return el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete') === 'list';
+}
+
+async function resolveTypeaheadSelection(desired) {
+  await sleep(900);
+  var opts = [];
+  document.querySelectorAll('[role="listbox"] [role="option"], .basic-typeahead__selectable, .search-basic-typeahead__option').forEach(function (o) {
+    if (o.offsetParent !== null) opts.push(o);
+  });
+  if (!opts.length) return false;
+  var want = normTxt(desired);
+  var best = opts[0], bs = -1;
+  opts.forEach(function (o) {
+    var t = normTxt(getText(o));
+    var sc = t.indexOf(want) === 0 ? 2 : (t.indexOf(want) >= 0 ? 1 : 0);
+    if (sc > bs) { bs = sc; best = o; }
+  });
+  ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(function (t) {
+    best.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true }));
+  });
+  await sleep(250);
+  return true;
+}
+
+async function autoFillContactFields(profile) {
   if (!profile || Object.keys(profile).length === 0) return 0;
   var modal = findEasyApplyModal();
   if (!modal) return 0;
@@ -866,11 +896,55 @@ function autoFillContactFields(profile) {
     if (!s) continue;
     for (var f = 0; f < CONTACT_FIELD_MATCHERS.length; f++) {
       var m = CONTACT_FIELD_MATCHERS[f];
-      if (values[m.key] && m.test(s, el)) { setNativeValue(el, values[m.key]); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); filled++; break; }
+      if (values[m.key] && m.test(s, el)) {
+        setNativeValue(el, values[m.key]);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (isTypeaheadInput(el)) await resolveTypeaheadSelection(values[m.key]);
+        filled++;
+        break;
+      }
     }
   }
   if (filled) console.log('[Alicia] Auto-filled', filled, 'contact field(s) in Easy Apply');
   return filled;
+}
+
+// ---- Resume attach (Easy Apply upload step) ----
+// LinkedIn usually preselects the last-used resume; only attach the stored file when the
+// step clearly has an empty upload with no already-selected resume card.
+function b64ToFile(rec) {
+  var bin = atob(rec.b64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new File([bytes], rec.name || 'resume.pdf', { type: rec.type || 'application/pdf' });
+}
+
+async function maybeAttachResumeFile(modal) {
+  var fileInputs = modal.querySelectorAll('input[type="file"]');
+  if (!fileInputs.length) return 0;
+  // A resume card already selected on this step means nothing to do.
+  if (modal.querySelector('[class*="document-upload"][class*="selected"], [class*="jobs-document-upload"] input:checked')) return 0;
+  var data = await safeStorageGetAsync('resumeFile');
+  var rec = data && data.resumeFile;
+  if (!rec || !rec.b64) return 0;
+  var attached = 0;
+  for (var i = 0; i < fileInputs.length; i++) {
+    var el = fileInputs[i];
+    if (el.disabled || (el.files && el.files.length)) continue;
+    var s = normTxt([el.name, el.id, el.getAttribute('aria-label'), findLabelText(el)].filter(Boolean).join(' '));
+    if (/cover letter/.test(s)) continue;
+    if (s && !/resume|cv\b|curriculum/.test(s) && fileInputs.length > 1) continue;
+    try {
+      var dt = new DataTransfer();
+      dt.items.add(b64ToFile(rec));
+      el.files = dt.files;
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      attached++;
+    } catch (e) {}
+  }
+  if (attached) console.log('[Alicia] Attached stored resume to', attached, 'file input(s)');
+  return attached;
 }
 
 // ========== Custom question answering + learning ==========
@@ -1058,18 +1132,30 @@ async function handleCustomQuestions(modal) {
 // and save that as the confirmed answer. Learning is based on human-confirmed text, not the raw
 // AI guess.
 function attachLearningCapture(modal, items) {
-  var btn = findModalButton(modal, EASY_APPLY_ADVANCE_PATTERNS) || findModalButton(modal, EASY_APPLY_SUBMIT_PATTERNS);
-  if (!btn || btn.__aliciaLearnAttached) return;
-  btn.__aliciaLearnAttached = true;
-  btn.addEventListener('click', function captureOnce() {
-    items.forEach(function (item) {
+  // Delegated + capture-phase so it survives LinkedIn re-rendering the footer buttons
+  // between when the AI answers and when Alicia clicks Next herself.
+  if (modal.__aliciaLearnItems) {
+    modal.__aliciaLearnItems = modal.__aliciaLearnItems.concat(items);
+    return;
+  }
+  modal.__aliciaLearnItems = items;
+  modal.addEventListener('click', function (e) {
+    var pending = modal.__aliciaLearnItems;
+    if (!pending || !pending.length) return;
+    var btn = e.target && e.target.closest ? e.target.closest('button') : null;
+    if (!btn) return;
+    var t = normTxt((btn.getAttribute('aria-label') || '') + ' ' + (btn.innerText || btn.textContent || ''));
+    var isAction = EASY_APPLY_ADVANCE_PATTERNS.concat(EASY_APPLY_SUBMIT_PATTERNS).some(function (p) { return p.test(t); });
+    if (!isAction) return;
+    modal.__aliciaLearnItems = null;
+    pending.forEach(function (item) {
       var finalValue = item.type === 'select' ? (item.control && item.control.value)
         : item.type === 'radio' ? (item.container.querySelector('input[type="radio"]:checked') ? radioLabelText(item.container.querySelector('input[type="radio"]:checked')) : '')
         : (item.control && item.control.value);
       if (finalValue && finalValue.trim()) upsertLearnedAnswer(item.label, finalValue.trim(), item.type, item.options);
     });
     if (pendingReviewModal === modal) pendingReviewModal = null;
-  }, { once: true });
+  }, true);
 }
 
 // ========== Easy Apply auto-advance ==========
@@ -1079,7 +1165,7 @@ function attachLearningCapture(modal, items) {
 // an allowlist (only recognized advance-button text is clicked), not a denylist that tries to
 // exclude "submit" — if LinkedIn shows button text we don't recognize, we do nothing rather
 // than risk clicking it.
-var EASY_APPLY_ADVANCE_PATTERNS = [/^next$/, /continue to next step/, /review your application/, /save and continue/];
+var EASY_APPLY_ADVANCE_PATTERNS = [/^next$/, /^review$/, /continue to next step/, /review your application/, /save and continue/];
 var EASY_APPLY_SUBMIT_PATTERNS = [/submit application/, /submit your application/];
 var MAX_AUTO_ADVANCES = 15;
 var autoAdvanceModal = null;
@@ -1087,16 +1173,25 @@ var autoAdvanceCount = 0;
 var autoAdvanceBusy = false;
 
 function findEasyApplyForm() {
-  return document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, form.jobs-easy-apply-form');
+  return document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, form.jobs-easy-apply-form, .jobs-easy-apply-modal form, div[data-test-modal-id*="easy-apply"] form');
 }
 
 // Scope button search to the Easy Apply modal itself — never the whole document — so this
 // can't reach into an unrelated LinkedIn modal (e.g. a "Save this job" confirmation) and click
-// something unintended.
+// something unintended. LinkedIn churns class names, so after the known classes fail, fall
+// back to any open dialog that announces itself as an apply flow AND contains form controls.
 function findEasyApplyModal() {
   var form = findEasyApplyForm();
-  if (!form) return null;
-  return form.closest('.artdeco-modal') || form;
+  if (form) return form.closest('.artdeco-modal, [role="dialog"]') || form;
+  var modals = document.querySelectorAll('.artdeco-modal, div[role="dialog"]');
+  for (var i = 0; i < modals.length; i++) {
+    var m = modals[i];
+    if (m.offsetParent === null) continue;
+    var head = m.querySelector('h1, h2, h3');
+    var label = ((m.getAttribute('aria-label') || '') + ' ' + (head ? getText(head) : '')).toLowerCase();
+    if (label.indexOf('apply') >= 0 && m.querySelector('form, input, select, textarea')) return m;
+  }
+  return null;
 }
 
 function findModalButton(modal, patterns) {
@@ -1175,25 +1270,38 @@ function tryAutoAdvanceEasyApply() {
 
 // Auto-fill whenever an application form / modal appears, debounced so step changes re-fill.
 var autofillTimer = null;
+var autofillPassRunning = false;
 function scheduleAutoFill() {
   if (autofillTimer) clearTimeout(autofillTimer);
   autofillTimer = setTimeout(function () {
+    if (autofillPassRunning) { scheduleAutoFill(); return; } // don't overlap passes
+    autofillPassRunning = true;
     safeStorageGet(['eeoPrefs', 'profile'], function (data) {
-      if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
-      if (data.profile && Object.keys(data.profile).length > 0) autoFillContactFields(data.profile);
-      var modal = findEasyApplyModal();
-      // Wait for custom-question resolution (which may include an AI call) to finish before
-      // ever checking whether to auto-advance — otherwise auto-advance could click Next while
-      // an answer is still being generated for this same step.
-      var afterQuestions = modal ? handleCustomQuestions(modal) : Promise.resolve();
-      afterQuestions.then(function () { setTimeout(tryAutoAdvanceEasyApply, 400); });
+      // Strictly sequential: fill everything (including async typeahead picks and any AI
+      // custom-question call) BEFORE ever checking whether to auto-advance — otherwise
+      // Next could be clicked while a fill on this same step is still resolving.
+      (async function () {
+        try {
+          if (data.eeoPrefs && Object.keys(data.eeoPrefs).length > 0) autoFillEeo(data.eeoPrefs);
+          if (data.profile && Object.keys(data.profile).length > 0) await autoFillContactFields(data.profile);
+          var modal = findEasyApplyModal();
+          if (modal) {
+            await maybeAttachResumeFile(modal);
+            await handleCustomQuestions(modal);
+          }
+        } catch (e) {
+          console.log('[Alicia] Autofill pass error:', e);
+        } finally {
+          autofillPassRunning = false;
+          setTimeout(tryAutoAdvanceEasyApply, 400);
+        }
+      })();
     });
   }, 700);
 }
 
 var applyObserver = new MutationObserver(function () {
   if (!extAlive()) { applyObserver.disconnect(); return; }
-  var form = document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, .artdeco-modal form, form.jobs-easy-apply-form');
-  if (form) scheduleAutoFill();
+  if (findEasyApplyModal()) scheduleAutoFill();
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });
