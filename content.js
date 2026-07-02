@@ -508,6 +508,26 @@ function showMatchDetails(badgeEl, result) {
   html += chips('Missing', result.missing, '#e0a800');
   panel.innerHTML = html;
 
+  // "Tailor my resume for this job": hands the current job + the badge's missing keywords to the
+  // side panel's tailoring flow (which re-emphasizes real experience toward those keywords — it
+  // never invents any). Stored in `pendingTailorJob` too, so it still works if the panel is closed
+  // and the user opens it a moment later.
+  var tailorBtn = document.createElement('button');
+  tailorBtn.textContent = '✨ Tailor my resume for this job';
+  tailorBtn.style.cssText = 'display:block;width:100%;margin-top:10px;padding:8px 10px;border:none;border-radius:8px;background:#7c83ff;color:#fff;font:600 12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;';
+  tailorBtn.onmouseenter = function () { clearTimeout(matchHideTimer); };
+  tailorBtn.addEventListener('click', function () {
+    var job = lastDetectedJob || currentJobForMatch();
+    var missing = result.missing || [];
+    safeStorageSet({ pendingTailorJob: { job: job, missing: missing, ts: Date.now() } });
+    safeSendMessage({ type: 'TAILOR_FOR_JOB', job: job, missing: missing });
+    safeSendMessage({ type: 'OPEN_SIDE_PANEL' });
+    tailorBtn.textContent = '✨ Sent to the side panel — opening…';
+    tailorBtn.disabled = true;
+    tailorBtn.style.opacity = '0.8';
+  });
+  panel.appendChild(tailorBtn);
+
   // Keep it open while the mouse is over the panel itself; hide when it leaves.
   panel.addEventListener('mouseenter', function () { clearTimeout(matchHideTimer); });
   panel.addEventListener('mouseleave', hideMatchDetails);

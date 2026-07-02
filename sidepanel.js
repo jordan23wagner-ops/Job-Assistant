@@ -2,6 +2,9 @@ let currentJob = null;
 let resumeText = null;
 let groqApiKey = null;
 let tailoringState = null;
+// Set when tailoring is launched from the match badge — the badge's "missing" keywords, so the
+// tailor prompts can re-emphasize real experience toward them (never fabricate). Cleared each run.
+let tailorMissingKeywords = null;
 
 // Chat: two independent conversations — 'job' (career coach) and 'general' (everyday assistant)
 let chatMode = 'job';
@@ -440,6 +443,10 @@ chrome.runtime.onMessage.addListener(function(message) {
   if (message.type === 'JOB_DETECTED' && message.job) {
     displayJob(message.job);
   }
+  if (message.type === 'TAILOR_FOR_JOB' && message.job) {
+    chrome.storage.local.remove('pendingTailorJob'); // handled live — don't re-fire on next open
+    beginTailorForJob(message.job, message.missing);
+  }
   if (message.type === 'EEO_FILL_RESULT') {
     var status = document.getElementById('eeo-fill-status');
     if (status) {
@@ -590,6 +597,17 @@ chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
   }
   // No API key needed any more — Alicia runs on the free Wagner-GPT backend, so the
   // onboarding key screen is no longer shown on load.
+
+  // If the user clicked "Tailor my resume for this job" on the in-page match badge while the panel
+  // was closed, pick that request up now (resumeText is loaded above, so tailoring can run).
+  chrome.storage.local.get('pendingTailorJob', function (pd) {
+    var p = pd && pd.pendingTailorJob;
+    if (!p) return;
+    chrome.storage.local.remove('pendingTailorJob');
+    if (p.job && (Date.now() - (p.ts || 0) < 120000)) {
+      setTimeout(function () { beginTailorForJob(p.job, p.missing); }, 300);
+    }
+  });
 });
 
 analyzeBtn.addEventListener('click', async function() {
@@ -701,6 +719,39 @@ function addTailoringQuickOptions(options) {
 
 var RESUME_GEN_SYSTEM = 'You are Alicia, an expert resume writer. Write a complete, tailored resume for the candidate targeting the specified role.\n\nRules:\n- Keep all information truthful — reword, reorder, and emphasize but never fabricate\n- Write a targeted professional summary (2-3 sentences)\n- Prioritize and reorder experience bullets to highlight what matters for THIS role\n- Weave in ATS-friendly keywords from the job description naturally\n- Keep the same jobs, titles, dates, and education — do not invent new ones\n- Use strong action verbs and quantified achievements\n- Include ALL roles from the original resume (full detail for recent/relevant, condensed for older ones)\n\nFormat the resume in markdown using these exact patterns:\n# [Candidate Name]\n[Contact info on one line, separated by |]\n\n## Summary\n[2-3 sentence tailored summary]\n\n## Technical Skills\n- **[Category]:** [comma-separated skills]\n- **[Category]:** [comma-separated skills]\n\n## Experience\n### [Job Title] | [Company]\n*[Date range]*\n- [achievement bullet]\n- [achievement bullet]\n\n## Education\n**[School]**\n[Degree/program] | [Dates]';
 
+// Entry point for "Tailor my resume for this job" clicked on the in-page match badge. Loads the
+// job + missing keywords into the tailoring flow, switches to the Tools tab, and starts tailoring.
+function beginTailorForJob(job, missing) {
+  if (!job) return;
+  currentJob = job;
+  tailorMissingKeywords = (missing && missing.length) ? missing : null;
+  displayJob(job); // keep the Apply tab's Current Job card in sync too
+  switchTab('tools');
+  if (!resumeText) {
+    if (tailoringSection) {
+      tailoringSection.classList.remove('hidden');
+      tailoringConversation.innerHTML = '';
+      clearTailoringOptions();
+      addTailoringMessage('Add your resume first (in the Resume section below) so I can tailor it for **' + escapeHtml(job.title || 'this job') + '**.', 'ai');
+      tailoringSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    return;
+  }
+  startTailoring();
+  if (tailoringSection && tailoringSection.scrollIntoView) {
+    setTimeout(function () { tailoringSection.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 100);
+  }
+}
+
+// Guardrail-preserving clause appended to the tailor prompts: emphasize real experience toward the
+// job's missing keywords, never invent. Empty when tailoring wasn't launched from the badge.
+function missingKeywordsClause() {
+  if (!tailorMissingKeywords || !tailorMissingKeywords.length) return '';
+  return '\n\nThe match analysis flagged these job keywords as missing or under-emphasized in the current resume: '
+    + tailorMissingKeywords.join(', ')
+    + '. Where the candidate has genuinely relevant experience, surface and emphasize it to cover these keywords; if the resume shows no basis for one, leave it out — never fabricate experience.';
+}
+
 async function startTailoring() {
   tailoringSection.classList.remove('hidden');
   tailoringConversation.innerHTML = '';
@@ -708,6 +759,9 @@ async function startTailoring() {
   tailoringInput.value = '';
   tailoringState = { mode: null, deepDiveAnswers: [], tailoredResume: null, generating: false };
   addTailoringMessage('How would you like to tailor your resume for **' + escapeHtml(currentJob.title) + '** at **' + escapeHtml(currentJob.company) + '**?', 'ai');
+  if (tailorMissingKeywords && tailorMissingKeywords.length) {
+    addTailoringMessage('From the match score, this job is looking for: **' + tailorMissingKeywords.map(escapeHtml).join('**, **') + '**. I\'ll emphasize these where your background genuinely supports them — I won\'t invent anything.', 'ai');
+  }
   addTailoringMessage('**Quick Tailor** — I\'ll reshape your current resume to target this role. Fast, one step.\n\n**Deep Dive** — I\'ll ask about skills and experience from the job description that aren\'t obvious in your resume, then build a stronger tailored version.', 'ai');
   addTailoringQuickOptions(['Quick Tailor', 'Deep Dive']);
 }
@@ -725,7 +779,7 @@ async function runQuickTailor() {
   try {
     var msgs = [
       { role: 'system', content: RESUME_GEN_SYSTEM },
-      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCurrent Resume:\n' + resumeText }
+      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCurrent Resume:\n' + resumeText + missingKeywordsClause() }
     ];
     var result = await callGroq(msgs, 0.4, 4096);
     removeLoadingMessage('Tailoring');
@@ -770,7 +824,7 @@ async function generateTailoredResume() {
 
     var msgs = [
       { role: 'system', content: RESUME_GEN_SYSTEM },
-      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCurrent Resume:\n' + resumeText + extraContext }
+      { role: 'user', content: 'Target Role: ' + currentJob.title + ' at ' + currentJob.company + '\n\nJob Description:\n' + currentJob.description + '\n\nCurrent Resume:\n' + resumeText + extraContext + missingKeywordsClause() }
     ];
     var result = await callGroq(msgs, 0.4, 4096);
     removeLoadingMessage('Building');

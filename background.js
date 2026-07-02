@@ -269,4 +269,14 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
   }
   if (message.type === 'QUEUE_ITEM_SUBMITTED') queueMarkAndAdvance(message.jobId, 'done', true);
   if (message.type === 'QUEUE_ITEM_SKIP') queueMarkAndAdvance(message.jobId, 'skipped', false);
+
+  // Best-effort: open the side panel when the user clicks "Tailor my resume" on the in-page match
+  // badge. sidePanel.open() wants a user gesture and messaging can break that chain, so if it's
+  // rejected the pendingTailorJob fallback still fires when the user opens the panel themselves.
+  if (message.type === 'OPEN_SIDE_PANEL' && sender.tab) {
+    try {
+      var p = chrome.sidePanel.open({ tabId: sender.tab.id });
+      if (p && p.catch) p.catch(function () {});
+    } catch (e) {}
+  }
 });
