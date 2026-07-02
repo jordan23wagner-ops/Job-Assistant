@@ -1,5 +1,33 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-01 (latest) — v1.2.0: THE fix — pierce LinkedIn's Shadow DOM
+
+The true root cause of Easy Apply "nothing happens", confirmed by a shadow+iframe-piercing
+console diagnostic on the live Serverfarm modal: **the entire Easy Apply modal (fields AND its
+Next button) is rendered inside a Shadow DOM** attached to `<div id="interop-outlet">`. Shadow
+trees are sealed from `document.querySelector`, so every prior content.js — which queried the
+light DOM — was searching a tree that does not contain the form. (The `linkedin.com/preload`
+iframe was a red herring: it's a hidden full copy of the page chrome, not the modal.)
+
+Diagnostic proof: `firstName.path = " >> shadow(div#interop-outlet)"`, and the modal's real
+"Next" also at that shadow path (the light-DOM "Next" is just job-list pagination).
+
+Fix (content.js):
+- `collectShadowRoots()` / `easyApplySearchRoots()` — gather the light document + every shadow
+  root (fast path for the known `#interop-outlet` host). `findEasyApplyForm`,
+  `findEasyApplyModal`, and `autoFillEeo` now search across all roots; once the modal element
+  (inside the shadow root) is found, `.querySelectorAll` on it works normally within that tree.
+- `ownerRoot(el)` — label[for=…] lookups resolve within the element's own shadow root instead
+  of failing against the light document.
+- **Polling trigger** (1.2s) added: MutationObservers on the light DOM never see shadow-tree
+  mutations, so the observer alone never fired when the modal opened/changed steps. Poll +
+  debounced scheduleAutoFill is the reliable driver; plus a load-time kick.
+- Verified end-to-end in a browser harness that mirrors the real structure (modal inside a
+  `#interop-outlet` shadow root, decoy light-DOM "Next"): auto-advanced the pre-filled contact
+  step, filled an EEO select + AI-answered a question inside the shadow root, paused on an
+  unknown question, banked BOTH the AI answer and the human's typed answer on the Continue
+  click, advanced to the review step, never clicked Submit, never clicked the decoy Next.
+
 ## Update 2026-07-01 (late) — v1.1.0: self-healing injection + learn-from-human
 
 Root cause of "Easy Apply does nothing" on ATS-powered postings (e.g. Lever "Apply to

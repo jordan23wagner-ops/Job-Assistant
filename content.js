@@ -714,10 +714,17 @@ function matchScore(optText, desired) {
   return bt.length ? (common / bt.length) * 60 : 0;
 }
 
+// getRootNode() returns the shadow root when the element lives in a shadow tree, so label[for]
+// lookups resolve within the same tree instead of failing against the light document.
+function ownerRoot(el) {
+  var r = el.getRootNode ? el.getRootNode() : document;
+  return (r && r.querySelector) ? r : document;
+}
+
 function findLabelText(el) {
   var label = '';
   if (el.id) {
-    var lbl = document.querySelector('label[for="' + el.id + '"]');
+    var lbl = ownerRoot(el).querySelector('label[for="' + el.id + '"]');
     if (lbl) label = getText(lbl);
   }
   if (!label) {
@@ -755,7 +762,7 @@ function radioLabelText(radio) {
   var wrap = radio.closest('label');
   if (wrap) label = getText(wrap);
   if (!label && radio.id) {
-    var lblEl = document.querySelector('label[for="' + radio.id + '"]');
+    var lblEl = ownerRoot(radio).querySelector('label[for="' + radio.id + '"]');
     if (lblEl) label = getText(lblEl);
   }
   if (!label) label = radio.value || '';
@@ -807,9 +814,11 @@ function autoFillEeo(prefs) {
   var handled = [];
 
   // Process each question container so we can pick the right control type per question.
-  var containers = document.querySelectorAll(
-    '.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, fieldset'
-  );
+  // Search light DOM + shadow roots (the Easy Apply modal lives in a shadow tree).
+  var containers = [];
+  easyApplySearchRoots().forEach(function (root) {
+    root.querySelectorAll('.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, fieldset').forEach(function (c) { containers.push(c); });
+  });
   containers.forEach(function (container) {
     if (handled.indexOf(container) >= 0) return;
     var label = getText(container.querySelector('label, legend, .fb-dash-form-element__label')) || getText(container).slice(0, 220);
@@ -835,13 +844,15 @@ function autoFillEeo(prefs) {
     }
   });
 
-  // Fallback: any stray <select> not inside a recognized container.
-  document.querySelectorAll('select').forEach(function (sel) {
-    if (handled.some(function (c) { return c.contains(sel); })) return;
-    var matcher = matchEeo(findLabelText(sel));
-    if (!matcher) return;
-    var value = prefs[matcher.prefKey];
-    if (value && selectBestOption(sel, value)) { filled++; console.log('[Alicia] Filled stray select'); }
+  // Fallback: any stray <select> not inside a recognized container (across all roots).
+  easyApplySearchRoots().forEach(function (root) {
+    root.querySelectorAll('select').forEach(function (sel) {
+      if (handled.some(function (c) { return c.contains(sel); })) return;
+      var matcher = matchEeo(findLabelText(sel));
+      if (!matcher) return;
+      var value = prefs[matcher.prefKey];
+      if (value && selectBestOption(sel, value)) { filled++; console.log('[Alicia] Filled stray select'); }
+    });
   });
 
   console.log('[Alicia] Auto-fill complete, filled', filled, 'field(s)');
@@ -1231,8 +1242,45 @@ var autoAdvanceModal = null;
 var autoAdvanceCount = 0;
 var autoAdvanceBusy = false;
 
+// LinkedIn now renders the Easy Apply modal inside a SHADOW DOM attached to a host element
+// (observed: <div id="interop-outlet">). Shadow trees are invisible to document.querySelector,
+// which is why every field/button lookup used to come up empty. These helpers collect the
+// searchable roots (the light document + every shadow root) so the rest of the code can find
+// and drive the modal wherever LinkedIn puts it. Fast path first for the known host; otherwise
+// a bounded walk discovers any shadow roots (LinkedIn currently has just one).
+function collectShadowRoots() {
+  var roots = [];
+  var known = document.getElementById('interop-outlet');
+  if (known && known.shadowRoot) roots.push(known.shadowRoot);
+  try {
+    var all = document.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var sr = all[i].shadowRoot;
+      if (sr && roots.indexOf(sr) === -1) {
+        roots.push(sr);
+        // one level of nesting is plenty for LinkedIn; guard cost on huge pages
+        var inner = sr.querySelectorAll('*');
+        for (var j = 0; j < inner.length; j++) {
+          if (inner[j].shadowRoot && roots.indexOf(inner[j].shadowRoot) === -1) roots.push(inner[j].shadowRoot);
+        }
+      }
+    }
+  } catch (e) {}
+  return roots;
+}
+
+// All roots to search for the Easy Apply UI: the light DOM plus any shadow roots.
+function easyApplySearchRoots() {
+  return [document].concat(collectShadowRoots());
+}
+
 function findEasyApplyForm() {
-  return document.querySelector('.jobs-easy-apply-content, .jobs-apply-form, form.jobs-easy-apply-form, .jobs-easy-apply-modal form, div[data-test-modal-id*="easy-apply"] form');
+  var roots = easyApplySearchRoots();
+  for (var i = 0; i < roots.length; i++) {
+    var form = roots[i].querySelector('.jobs-easy-apply-content, .jobs-apply-form, form.jobs-easy-apply-form, .jobs-easy-apply-modal form, div[data-test-modal-id*="easy-apply"] form');
+    if (form) return form;
+  }
+  return null;
 }
 
 // Scope button search to the Easy Apply modal itself — never the whole document — so this
@@ -1242,30 +1290,35 @@ function findEasyApplyForm() {
 function findEasyApplyModal() {
   var form = findEasyApplyForm();
   if (form) return form.closest('.artdeco-modal, [role="dialog"]') || form;
-  var modals = document.querySelectorAll('.artdeco-modal, div[role="dialog"]');
-  for (var i = 0; i < modals.length; i++) {
-    var m = modals[i];
-    if (m.offsetParent === null) continue;
-    var head = m.querySelector('h1, h2, h3');
-    var label = ((m.getAttribute('aria-label') || '') + ' ' + (head ? getText(head) : '')).toLowerCase();
-    if (label.indexOf('apply') >= 0 && m.querySelector('form, input, select, textarea')) return m;
+  var roots = easyApplySearchRoots();
+  for (var r = 0; r < roots.length; r++) {
+    var root = roots[r];
+    var modals = root.querySelectorAll('.artdeco-modal, div[role="dialog"]');
+    for (var i = 0; i < modals.length; i++) {
+      var m = modals[i];
+      if (m.offsetParent === null) continue;
+      var head = m.querySelector('h1, h2, h3');
+      var label = ((m.getAttribute('aria-label') || '') + ' ' + (head ? getText(head) : '')).toLowerCase();
+      if (label.indexOf('apply') >= 0 && m.querySelector('form, input, select, textarea')) return m;
+    }
   }
-  // Class-independent fallback: LinkedIn has shipped apply flows that are neither
-  // .artdeco-modal nor [role="dialog"]. Find the "Apply to <company>" heading, then walk up to
-  // the smallest ancestor that actually holds the form controls + a button, and treat that as
-  // the modal. Only fires when the form lives in THIS document (not a cross-origin iframe).
-  var heads = document.querySelectorAll('h1, h2, h3, [role="heading"]');
-  for (var hI = 0; hI < heads.length; hI++) {
-    var h = heads[hI];
-    if (h.offsetParent === null) continue;
-    var ht = getText(h).toLowerCase();
-    if (!/^apply to\b|^application\b|easy apply|complete your application/.test(ht)) continue;
-    var node = h.parentElement;
-    for (var up = 0; up < 8 && node && node !== document.body; up++) {
-      if (node.querySelector('input, select, textarea') && node.querySelector('button, [role="button"]')) {
-        return node;
+  // Class-independent fallback: find the "Apply to <company>" heading, then walk up to the
+  // smallest ancestor that actually holds the form controls + a button, and treat that as the
+  // modal. Searched across shadow roots too.
+  for (var r2 = 0; r2 < roots.length; r2++) {
+    var heads = roots[r2].querySelectorAll('h1, h2, h3, [role="heading"]');
+    for (var hI = 0; hI < heads.length; hI++) {
+      var h = heads[hI];
+      if (h.offsetParent === null) continue;
+      var ht = getText(h).toLowerCase();
+      if (!/^apply to\b|^application\b|easy apply|complete your application/.test(ht)) continue;
+      var node = h.parentElement;
+      for (var up = 0; up < 8 && node && node.nodeType === 1; up++) {
+        if (node.querySelector('input, select, textarea') && node.querySelector('button, [role="button"]')) {
+          return node;
+        }
+        node = node.parentElement;
       }
-      node = node.parentElement;
     }
   }
   // Subframe fallback: LinkedIn hosts ATS-powered application forms in a same-origin
@@ -1424,8 +1477,17 @@ var applyObserver = new MutationObserver(function () {
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });
 
-// A subframe (e.g. LinkedIn's /preload apply iframe) may already contain the full form when
-// this script arrives — mutations alone would never fire. Kick one fill pass on load.
-if (!IS_TOP) setTimeout(function () { if (findEasyApplyModal()) scheduleAutoFill(); }, 800);
+// The Easy Apply modal lives in a SHADOW ROOT, and mutations inside a shadow tree are NOT seen
+// by a MutationObserver on the light DOM — so the observer above never fires when the modal
+// opens or changes steps. Poll as the reliable trigger. Cheap: findEasyApplyModal short-circuits
+// on the known host, and scheduleAutoFill is debounced + guarded against overlapping passes.
+setInterval(function () {
+  if (!extAlive()) return;
+  if (findEasyApplyModal()) scheduleAutoFill();
+}, 1200);
+
+// The form may already be fully present when this script arrives (prebuilt shadow tree / an
+// iframe that never mutates) — kick one pass on load.
+setTimeout(function () { if (findEasyApplyModal()) scheduleAutoFill(); }, 800);
 
 })();
