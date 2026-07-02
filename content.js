@@ -491,9 +491,13 @@ function showMatchDetails(badgeEl, result) {
 
   var panel = document.createElement('div');
   panel.id = 'alicia-match-details';
-  var isFixed = !!(badgeEl.parentNode && badgeEl.parentNode.id === 'alicia-stack'); // floating badge → panel joins the stack too
-  panel.style.cssText = 'padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);'
-    + (isFixed ? 'order:1;pointer-events:auto;max-width:320px;' : 'margin:6px 0 10px;max-width:480px;');
+  // The details panel always FLOATS — it is never inserted into the job's DOM flow — so it can't
+  // shift the posting's text/layout. When the badge is in the bottom-right stack it joins that
+  // stack; otherwise it's a position:fixed overlay anchored just below the badge. It disappears on
+  // mouse-out, so being detached from the badge is fine.
+  var isFixed = !!(badgeEl.parentNode && badgeEl.parentNode.id === 'alicia-stack');
+  panel.style.cssText = 'padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 12px rgba(0,0,0,.4);max-width:340px;'
+    + (isFixed ? 'order:1;pointer-events:auto;' : '');
 
   var html = result.summary ? '<div style="margin-bottom:4px;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
   function chips(label, items, color) {
@@ -532,8 +536,25 @@ function showMatchDetails(badgeEl, result) {
   panel.addEventListener('mouseenter', function () { clearTimeout(matchHideTimer); });
   panel.addEventListener('mouseleave', hideMatchDetails);
 
-  if (isFixed) aliciaStack().appendChild(panel); // stacked above the badge (order:1)
-  else badgeEl.insertAdjacentElement('afterend', panel);
+  if (isFixed) {
+    aliciaStack().appendChild(panel); // stacked above the badge (order:1)
+  } else {
+    // Float as a fixed overlay anchored to the badge — appended to <body>, never into the job card,
+    // so the posting's text never reflows. Clamp to the viewport; flip above the badge if there's
+    // no room below.
+    panel.style.position = 'fixed';
+    panel.style.zIndex = '2147483647';
+    panel.style.pointerEvents = 'auto';
+    document.body.appendChild(panel);
+    var rect = badgeEl.getBoundingClientRect();
+    var pw = panel.offsetWidth || 340, ph = panel.offsetHeight || 0;
+    var left = Math.min(rect.left, window.innerWidth - pw - 12);
+    if (left < 8) left = 8;
+    var top = rect.bottom + 6;
+    if (top + ph > window.innerHeight - 8) top = Math.max(8, rect.top - ph - 6);
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+  }
 }
 
 function renderMatchOverlay(state, result) {
@@ -1863,11 +1884,16 @@ function driveQueueJobPage() {
       return;
     }
     if (now < queueDelayUntil) return;      // still waiting out the pace delay
-    // Click once; if the modal hasn't opened a few seconds later, retry (up to 3 total).
-    if (!queueOpenClickedAt || (now - queueOpenClickedAt > 6000 && queueOpenAttempts < 3 && !findEasyApplyModalRaw())) {
+    // Click once; if the modal hasn't opened a few seconds later, retry (up to 4 total).
+    if (!queueOpenClickedAt || (now - queueOpenClickedAt > 6000 && queueOpenAttempts < 4 && !findEasyApplyModalRaw())) {
       queueOpenClickedAt = now;
       queueOpenAttempts++;
-      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      console.log('[Alicia] Queue: auto-clicking Easy Apply (attempt ' + queueOpenAttempts + ')');
+      try { btn.scrollIntoView({ block: 'center' }); } catch (e) {}
+      try { btn.focus(); } catch (e) {}
+      // Native .click() dispatches a full click that LinkedIn's React handler reliably picks up — a
+      // bare synthetic MouseEvent sometimes didn't open the modal. Keep the synthetic as a fallback.
+      try { btn.click(); } catch (e) { btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); }
     }
     return;
   }
