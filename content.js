@@ -461,18 +461,35 @@ function findMatchOverlayAnchor() {
   return null;
 }
 
-function toggleMatchOverlayDetails(badgeEl, result) {
+var matchOutsideClickHandler = null;
+function closeMatchDetails() {
   var existing = document.getElementById('alicia-match-details');
-  if (existing) { existing.remove(); if (existing.__forBadge === badgeEl) return; }
+  if (existing) existing.remove();
+  if (matchOutsideClickHandler) {
+    document.removeEventListener('click', matchOutsideClickHandler, true);
+    matchOutsideClickHandler = null;
+  }
+}
+
+function toggleMatchOverlayDetails(badgeEl, result) {
+  // Presence toggle (identity-independent — the badge element can be recreated by the poll):
+  // if the panel is open, any click on the badge closes it.
+  if (document.getElementById('alicia-match-details')) { closeMatchDetails(); return; }
 
   var panel = document.createElement('div');
   panel.id = 'alicia-match-details';
-  panel.__forBadge = badgeEl;
   var isFixed = badgeEl.parentNode === document.body; // floating badge → float the panel too
-  panel.style.cssText = 'padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:320px;box-shadow:0 2px 12px rgba(0,0,0,.4);'
+  panel.style.cssText = 'padding:10px 12px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:320px;box-shadow:0 2px 12px rgba(0,0,0,.4);position:relative;'
     + (isFixed ? 'position:fixed;bottom:96px;right:20px;z-index:2147483646;' : 'margin:6px 0 10px;max-width:480px;');
 
-  var html = result.summary ? '<div style="margin-bottom:4px;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
+  var close = document.createElement('button');
+  close.textContent = '✕';
+  close.title = 'Close';
+  close.style.cssText = 'position:absolute;top:4px;right:6px;background:none;border:none;color:#9a9ab0;font-size:14px;cursor:pointer;padding:2px 4px;line-height:1;';
+  close.onclick = function (e) { e.stopPropagation(); closeMatchDetails(); };
+
+  var body = document.createElement('div');
+  var html = result.summary ? '<div style="margin:0 14px 4px 0;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
   function chips(label, items, color) {
     if (!items || !items.length) return '';
     var s = '<div style="margin-top:6px;"><strong>' + label + ':</strong><br>';
@@ -483,8 +500,19 @@ function toggleMatchOverlayDetails(badgeEl, result) {
   }
   html += chips('Matched', result.matched, '#4caf50');
   html += chips('Missing', result.missing, '#e0a800');
-  panel.innerHTML = html;
+  body.innerHTML = html;
+
+  panel.appendChild(close);
+  panel.appendChild(body);
   badgeEl.insertAdjacentElement('afterend', panel);
+
+  // Click anywhere outside the badge/panel closes it. Added after this click settles so it
+  // doesn't immediately fire on the same click that opened the panel.
+  matchOutsideClickHandler = function (e) {
+    if (panel.contains(e.target) || badgeEl.contains(e.target) || e.target === badgeEl) return;
+    closeMatchDetails();
+  };
+  setTimeout(function () { document.addEventListener('click', matchOutsideClickHandler, true); }, 0);
 }
 
 function renderMatchOverlay(state, result) {
@@ -1239,17 +1267,19 @@ async function handleCustomQuestions(modal) {
       }
     }
 
-    // Anything still empty is a question Alicia has never seen and couldn't answer — the
-    // Jobright loop: STOP auto-advance, ask the human to fill it in, and bank whatever they
-    // typed the moment they click Next, so next time it fills automatically.
+    // The Jobright loop: only STOP for questions Alicia genuinely couldn't answer (never seen,
+    // not derivable from the resume) — the human fills those, and their answer is banked on the
+    // advance click for next time. If learned answers + the AI covered everything, DON'T pause:
+    // keep auto-advancing autonomously (banking still happens via attachAnswerCapture on the
+    // advance click). This is what the user wants — stop only when it can't proceed.
     var needHuman = remaining.filter(function (item) { return !itemIsAnswered(item); });
 
-    if (answeredAny || needHuman.length) {
+    if (needHuman.length) {
       pendingReviewModal = modal;
-      modal.__aliciaPendingMsg = needHuman.length
-        ? ('New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill in and click Next. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' for next time.')
-        : 'Alicia answered a question here — please review before clicking Next.';
+      modal.__aliciaPendingMsg = 'New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill it in to continue. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' for next time.';
       showEasyApplyBanner(modal.__aliciaPendingMsg, '#e0a800');
+    } else if (answeredAny) {
+      showEasyApplyBanner('Alicia filled this step — continuing…', '#4caf50');
     }
   } catch (err) {
     console.log('[Alicia] Custom question answer error:', err);
