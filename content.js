@@ -66,12 +66,19 @@ var IS_TOP = (function () { try { return window.top === window.self; } catch (e)
 console.log('[Alicia] content script loaded in frame — IS_TOP=' + IS_TOP + ' url=' + location.href);
 
 function trySelectors(selectors, minLen, maxLen) {
+  var el = tryElementSelectors(selectors, minLen, maxLen);
+  return el ? getText(el) : null;
+}
+
+// Same matching as trySelectors but returns the matched ELEMENT (for anchoring UI to it)
+// instead of its text.
+function tryElementSelectors(selectors, minLen, maxLen) {
   for (var i = 0; i < selectors.length; i++) {
     try {
       var el = document.querySelector(selectors[i]);
       if (el) {
         var t = getText(el);
-        if (t.length >= (minLen || 1) && t.length <= (maxLen || 300)) return t;
+        if (t.length >= (minLen || 1) && t.length <= (maxLen || 300)) return el;
       }
     } catch (e) {}
   }
@@ -410,19 +417,46 @@ function escapeOverlayHtml(s) {
 }
 
 function findMatchOverlayAnchor() {
-  // Known top-card title selectors first.
-  var known = document.querySelector(
-    '.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, h1.t-24.t-bold, h1.t-24, h2.top-card-layout__title'
-  );
+  // Same proven selector list detectJob() uses to find the job title text — reusing it means
+  // the overlay attaches inline wherever job detection already successfully finds the title.
+  var known = tryElementSelectors([
+    '.job-details-jobs-unified-top-card__job-title h1 a',
+    '.job-details-jobs-unified-top-card__job-title h1',
+    '.job-details-jobs-unified-top-card__job-title h2',
+    '.job-details-jobs-unified-top-card__job-title a',
+    '.job-details-jobs-unified-top-card__job-title',
+    '.jobs-unified-top-card__job-title a',
+    '.jobs-unified-top-card__job-title',
+    'h1.t-24.t-bold',
+    'h1.t-24',
+    'h2.t-24.t-bold',
+    'h2.t-24',
+    'h1.topcard__title',
+    'h2.top-card-layout__title',
+    '.t-24.t-bold.inline'
+  ], 3, 200);
   if (known && known.offsetParent !== null) return known;
-  // LinkedIn churns those classes — fall back to any visible <h1> that looks like a job title
-  // (the job detail pane's heading). Skip the LinkedIn global nav/search area.
+
+  // LinkedIn churns those classes — fall back to any visible <h1> that looks like a job title.
+  // Skip the LinkedIn global nav/search area.
   var h1s = document.querySelectorAll('h1, h2.t-24, h2.t-bold');
   for (var i = 0; i < h1s.length; i++) {
     var h = h1s[i];
     if (h.offsetParent === null) continue;
     var t = getText(h);
     if (t.length > 3 && t.length < 200 && !/^(jobs|linkedin|messaging|my network|notifications)$/i.test(t)) return h;
+  }
+
+  // Last resort: anchor to the "Easy Apply"/"Save" button row, which is visually stable even
+  // when title markup changes — the badge renders directly after it (inserted "afterend").
+  var btns = document.querySelectorAll('button, [role="button"]');
+  for (var b = 0; b < btns.length; b++) {
+    var bt = getText(btns[b]).toLowerCase();
+    if (btns[b].offsetParent === null) continue;
+    if (bt === 'easy apply' || bt === 'save' || bt === 'apply') {
+      var row = btns[b].closest('div');
+      if (row && row.parentElement) return row;
+    }
   }
   return null;
 }
@@ -436,7 +470,7 @@ function toggleMatchOverlayDetails(badgeEl, result) {
   panel.__forBadge = badgeEl;
   var isFixed = badgeEl.parentNode === document.body; // floating badge → float the panel too
   panel.style.cssText = 'padding:10px 12px;border-radius:8px;background:#20203a;color:#e6e6f0;font:12px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;max-width:320px;box-shadow:0 2px 12px rgba(0,0,0,.4);'
-    + (isFixed ? 'position:fixed;top:108px;right:20px;z-index:2147483646;' : 'margin:6px 0 10px;max-width:480px;');
+    + (isFixed ? 'position:fixed;bottom:96px;right:20px;z-index:2147483646;' : 'margin:6px 0 10px;max-width:480px;');
 
   var html = result.summary ? '<div style="margin-bottom:4px;">' + escapeOverlayHtml(result.summary) + '</div>' : '';
   function chips(label, items, color) {
@@ -471,8 +505,11 @@ function renderMatchOverlay(state, result) {
   }
 
   var base = 'display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font:600 12px/1.3 -apple-system,Segoe UI,Roboto,sans-serif;user-select:none;color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25);';
+  // Bottom-right, same corner already used by the Easy Apply review banner (proven to never
+  // sit on top of LinkedIn's own nav/filter/toolbar controls) — offset above it so the two
+  // never overlap on the rare page where both are showing at once.
   var placement = fixed
-    ? 'position:fixed;top:72px;right:20px;z-index:2147483646;'
+    ? 'position:fixed;bottom:56px;right:20px;z-index:2147483646;'
     : 'margin:8px 0;';
   el.style.cssText = base + placement;
 
