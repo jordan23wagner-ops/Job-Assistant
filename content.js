@@ -699,6 +699,20 @@ function cardIsApplied(card) {
   return /\bapplied\b/i.test(card.innerText || card.textContent || '');
 }
 
+// URL the queue navigates to for a job. We open it in the SEARCH-RESULTS layout (the current
+// search URL with currentJobId set to this job) rather than the standalone /jobs/view/<id>/ page —
+// LinkedIn shows the job's detail pane, with its Easy Apply button, right there, so the tool clicks
+// Easy Apply in-context and the search list/filters stay put (fewer page loads, less jarring).
+function searchUrlForJob(jobId) {
+  try {
+    var u = new URL(location.href);
+    u.searchParams.set('currentJobId', jobId);
+    return u.toString();
+  } catch (e) {
+    return 'https://www.linkedin.com/jobs/view/' + jobId + '/';
+  }
+}
+
 // Read every currently-rendered job card (no light-list 40-cap) with its Easy Apply / applied flags.
 function scrapeJobCardsDetailed() {
   var nodes = document.querySelectorAll(
@@ -773,7 +787,7 @@ async function collectEasyApplyQueue() {
   var jobs = Object.keys(byId).map(function (k) { return byId[k]; })
     .filter(function (c) { return c.easyApply && !c.applied; })
     .map(function (c) {
-      return { jobId: c.jobId, title: c.title, company: c.company, location: c.location, url: c.url, status: 'pending' };
+      return { jobId: c.jobId, title: c.title, company: c.company, location: c.location, url: searchUrlForJob(c.jobId), status: 'pending' };
     });
   console.log('[Alicia] Collected', jobs.length, 'Easy Apply jobs for the queue');
   return jobs;
@@ -1848,13 +1862,23 @@ function currentQueueJob() {
 // is left alone. Visibility is checked with getClientRects (offsetParent is null for the sticky
 // header's fixed-position button, which would wrongly reject it).
 function findEasyApplyOpenButton() {
-  var els = document.querySelectorAll('button, [role="button"], a[role="button"], a.jobs-apply-button');
-  for (var i = 0; i < els.length; i++) {
-    var b = els[i];
-    if (b.disabled) continue;
-    if (!b.getClientRects().length) continue;
-    var t = normTxt((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || b.textContent || ''));
-    if (/\beasy apply\b/.test(t)) return b;
+  // Prefer the job-details pane first so on a search-results page we never grab something from the
+  // results list on the left; fall back to the whole document (standalone /jobs/view/ pages).
+  var scopes = [
+    document.querySelector('.jobs-search__job-details, .jobs-search__job-details--container, .scaffold-layout__detail, .job-view-layout, .jobs-details'),
+    document
+  ];
+  for (var s = 0; s < scopes.length; s++) {
+    var root = scopes[s];
+    if (!root) continue;
+    var els = root.querySelectorAll('button, [role="button"], a[role="button"], a.jobs-apply-button');
+    for (var i = 0; i < els.length; i++) {
+      var b = els[i];
+      if (b.disabled) continue;
+      if (!b.getClientRects().length) continue;
+      var t = normTxt((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || b.textContent || ''));
+      if (/\beasy apply\b/.test(t)) return b;
+    }
   }
   return null;
 }
