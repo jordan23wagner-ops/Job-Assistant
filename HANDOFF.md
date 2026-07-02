@@ -1,4 +1,50 @@
-# Job-Assistant ("Alicia AI") — Engineering Handoff (2026-06-30)
+# Job-Assistant ("Alicia AI") — Engineering Handoff
+
+## Update 2026-07-01 — v1.0.0: reliable auto-apply + tabbed UI
+
+This session hardened the auto-apply pipeline end to end and reorganized the side panel.
+
+**LinkedIn Easy Apply (`content.js`):**
+- Modal detection now has fallbacks (known classes → any open `[role="dialog"]` that says
+  "apply" and contains form controls), so LinkedIn class churn degrades gracefully.
+- Typeahead fields (City etc.) are resolved properly: type → wait for the listbox → click the
+  best suggestion. Typed-only values fail LinkedIn validation; this was a top flakiness cause.
+- The fill pass is strictly sequential (contact → resume attach → custom questions → THEN
+  auto-advance), so Next is never clicked while a fill/AI answer is still resolving.
+- Learned-answer capture is a delegated capture-phase listener on the modal — it survives
+  LinkedIn re-rendering the footer buttons. Still: AI-answered steps pause for human review;
+  the human's Next click (with any edits) is what gets learned.
+- If the resume upload step is empty, the stored resume file (see below) is attached.
+  Submit is NEVER clicked — allowlist advance patterns only.
+
+**External ATS (`autofill.js` — NEW FILE, replaces the inline `runUniversalAutofill`):**
+- Standalone injected engine for Workday/Greenhouse/Lever/iCIMS/Ashby/etc. Reads everything
+  from `chrome.storage` itself and reports back via `UNIVERSAL_FILL_RESULT` messages.
+- Adds over the old version: Workday-style ARIA-combobox dropdowns, learned-answer reuse,
+  batched AI answers for custom questions (pauses for review, learns from the human's
+  confirming click, then resumes), resume file attach via DataTransfer, account-creation
+  passwords (per-site, saved to Site Passwords), and DOM-settle waits between wizard steps.
+- **Survives page navigations:** clicking "Auto-Fill Open Application" on a non-LinkedIn page
+  starts a 20-minute session for that tab (`autofillSessions` in storage); `background.js`
+  re-injects autofill.js on each page load in that tab while the page is the same site or a
+  known ATS domain. Submit/Apply/Create-Account buttons are never clicked.
+- The resume file itself (base64, ≤5 MB) is now stored as `resumeFile` when a resume is
+  uploaded in the panel, so ATS file inputs can be filled.
+
+**UI (`sidepanel.html` + tab code at the end of `sidepanel.js`):**
+- Five tabs — Apply / Search / Tracker / Tools / Chat. Every feature kept, just grouped.
+  Last-used tab persists (`activeTab` in storage).
+
+**Verified:** all four JS files pass `node --check`; the autofill engine was run end-to-end
+against a synthetic 4-step ATS wizard (contact + account creation + EEO select/radio/ARIA
+combobox + resume file + learned/AI custom questions) in a real browser — all fields filled
+correctly, AI answers paused for review, the human's edit was what got learned, filling
+resumed after the confirming click, and the Submit button was never clicked. Live LinkedIn /
+Workday behavior still needs Jordon's load test (agent browser tools can't use his session).
+
+---
+
+# Previous handoff (2026-06-30)
 
 A complete handoff for continuing the **Career-mode / Job Coach** work. This session turned
 the existing Chrome extension into a free, AI-powered job-search assistant for Alicia by
