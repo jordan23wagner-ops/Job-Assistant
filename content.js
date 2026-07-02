@@ -43,6 +43,15 @@ function safeStorageSet(obj) {
 
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+// content.js runs in EVERY linkedin.com frame (manifest all_frames:true) because LinkedIn
+// renders some Easy Apply forms — including ATS-powered ones like Lever — inside a
+// SAME-ORIGIN linkedin.com/preload iframe that a top-frame-only script can't reach. Page-level
+// features (job detection, the match overlay, job-list/people scraping) must run ONLY in the
+// top frame, or a subframe would send spurious/empty results that clobber the real ones. The
+// Easy Apply autofill + auto-advance run in ALL frames, so whichever frame actually holds the
+// application form gets filled.
+var IS_TOP = (function () { try { return window.top === window.self; } catch (e) { return false; } })();
+
 function trySelectors(selectors, minLen, maxLen) {
   for (var i = 0; i < selectors.length; i++) {
     try {
@@ -579,32 +588,37 @@ function scrapeHiringTeam() {
   return people;
 }
 
-setTimeout(function() {
-  expandJobDescription();
+if (IS_TOP) {
   setTimeout(function() {
-    if (!detectJob()) {
+    expandJobDescription();
+    setTimeout(function() {
+      if (!detectJob()) {
+        setTimeout(function() {
+          expandJobDescription();
+          detectJob();
+        }, 3000);
+      }
+    }, 1000);
+  }, 1500);
+
+  var lastUrl = location.href;
+  var observer = new MutationObserver(function() {
+    if (!extAlive()) { observer.disconnect(); return; }
+    if (location.href !== lastUrl) {
+      lastUrl = location.href;
       setTimeout(function() {
         expandJobDescription();
-        detectJob();
-      }, 3000);
+        setTimeout(detectJob, 1000);
+      }, 2000);
     }
-  }, 1000);
-}, 1500);
-
-var lastUrl = location.href;
-var observer = new MutationObserver(function() {
-  if (!extAlive()) { observer.disconnect(); return; }
-  if (location.href !== lastUrl) {
-    lastUrl = location.href;
-    setTimeout(function() {
-      expandJobDescription();
-      setTimeout(detectJob, 1000);
-    }, 2000);
-  }
-});
-observer.observe(document.body, { childList: true, subtree: true });
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+}
 
 chrome.runtime.onMessage.addListener(function(message) {
+  // Page-level scrape/detect requests are only meaningful in the top frame; ignore them in
+  // subframes so an empty subframe result can't overwrite the real one.
+  if (!IS_TOP && (message.type === 'DETECT_JOB' || message.type === 'SCAN_JOBS' || message.type === 'SCAN_PEOPLE')) return;
   if (message.type === 'DETECT_JOB') {
     console.log('[Alicia] Manual detect triggered');
     expandJobDescription();
@@ -1347,6 +1361,6 @@ function maybeCheckAtsIframe() {
 var applyObserver = new MutationObserver(function () {
   if (!extAlive()) { applyObserver.disconnect(); return; }
   if (findEasyApplyModal()) scheduleAutoFill();
-  maybeCheckAtsIframe();
+  if (IS_TOP) maybeCheckAtsIframe(); // only the top frame scans for cross-origin employer iframes
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });
