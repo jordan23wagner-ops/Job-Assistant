@@ -1,3 +1,12 @@
+// Whole file runs inside a run-once-per-frame IIFE: background.js force-injects this file
+// programmatically (into every LinkedIn frame on navigation events AND immediately after
+// every extension reload), in addition to the manifest registration — so the same frame can
+// legitimately receive it multiple times. The guard makes repeat injection a no-op instead of
+// stacking duplicate observers/listeners.
+(function () {
+if (window.__aliciaContentLoaded) return;
+window.__aliciaContentLoaded = true;
+
 function cleanText(text) {
   if (!text) return '';
   var clean = '';
@@ -1038,9 +1047,17 @@ function applyAnswerToItem(item, answerText) {
 // Question containers that are still empty and aren't EEO or contact fields.
 function findUnansweredCustomQuestions(modal) {
   var out = [];
-  var containers = modal.querySelectorAll(
+  var containers = Array.prototype.slice.call(modal.querySelectorAll(
     '.fb-dash-form-element, .jobs-easy-apply-form-element, .jobs-easy-apply-form-section__grouping, fieldset'
-  );
+  ));
+  // Class-independent fallback (ATS-powered forms in the /preload iframe don't use LinkedIn's
+  // form classes): treat each <label>'s nearest block as a question container.
+  if (!containers.length) {
+    modal.querySelectorAll('label').forEach(function (l) {
+      var c = l.closest('fieldset, li, section, div');
+      if (c && containers.indexOf(c) === -1 && !containers.some(function (p) { return p.contains(c) || c.contains(p); })) containers.push(c);
+    });
+  }
   containers.forEach(function (container) {
     if (out.length >= CUSTOM_QA_MAX_PER_STEP) return;
     var label = getText(container.querySelector('label, legend, .fb-dash-form-element__label')) || getText(container).slice(0, 220);
@@ -1103,6 +1120,10 @@ var customQuestionsResolving = false;
 async function handleCustomQuestions(modal) {
   if (customQuestionsResolving) return; // a previous call for this cycle is still in flight
   var items = findUnansweredCustomQuestions(modal);
+  // Questions already registered for learn-on-Next are being handled by the human right now —
+  // don't re-run the AI or re-banner for them on every mutation cycle.
+  var alreadyPending = (modal.__aliciaLearnItems || []).map(function (it) { return it.label; });
+  items = items.filter(function (it) { return alreadyPending.indexOf(it.label) === -1; });
   if (!items.length) return;
 
   customQuestionsResolving = true;
@@ -1121,28 +1142,48 @@ async function handleCustomQuestions(modal) {
     safeStorageSet({ customQA: bank }); // persist lastUsedAt bumps
     if (!remaining.length) return;
 
+    // Try the AI on what the learned bank couldn't cover (needs a saved resume to reason from).
+    var answeredAny = false;
     var rdata = await safeStorageGetAsync('resumeText');
     var resumeText = rdata && rdata.resumeText;
-    if (!resumeText) return; // nothing to reason from — leave these for Alicia
+    if (resumeText) {
+      try {
+        var answers = await callCustomAnswerBackend(remaining, lastDetectedJob, resumeText);
+        var byIndex = {};
+        answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
+        remaining.forEach(function (item, i) {
+          var answer = byIndex[i + 1];
+          if (answer && applyAnswerToItem(item, answer)) answeredAny = true;
+        });
+      } catch (aiErr) {
+        console.log('[Alicia] AI answer call failed, falling back to ask-the-human:', aiErr);
+      }
+    }
 
-    var answers = await callCustomAnswerBackend(remaining, lastDetectedJob, resumeText);
-    var byIndex = {};
-    answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
-    var answeredAny = false;
-    remaining.forEach(function (item, i) {
-      var answer = byIndex[i + 1];
-      if (answer && applyAnswerToItem(item, answer)) answeredAny = true;
-    });
-    if (answeredAny) {
+    // Anything still empty is a question Alicia has never seen and couldn't answer — the
+    // Jobright loop: STOP auto-advance, ask the human to fill it in, and bank whatever they
+    // typed the moment they click Next, so next time it fills automatically.
+    var needHuman = remaining.filter(function (item) { return !itemIsAnswered(item); });
+
+    if (answeredAny || needHuman.length) {
       pendingReviewModal = modal;
-      showEasyApplyBanner('Alicia answered a question here — please review before clicking Next.', '#e0a800');
-      attachLearningCapture(modal, remaining);
+      attachLearningCapture(modal, remaining); // banks the final value of EVERY item on Next
+      modal.__aliciaPendingMsg = needHuman.length
+        ? ('New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill in and click Next. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' for next time.')
+        : 'Alicia answered a question here — please review before clicking Next.';
+      showEasyApplyBanner(modal.__aliciaPendingMsg, '#e0a800');
     }
   } catch (err) {
     console.log('[Alicia] Custom question answer error:', err);
   } finally {
     customQuestionsResolving = false;
   }
+}
+
+function itemIsAnswered(item) {
+  if (item.type === 'select') return !!(item.control && item.control.value);
+  if (item.type === 'radio') return !!item.container.querySelector('input[type="radio"]:checked');
+  return !!(item.control && item.control.value && item.control.value.trim());
 }
 
 // Once Alicia clicks Next/Continue/Review herself (auto-advance won't, while pendingReviewModal
@@ -1291,7 +1332,7 @@ function tryAutoAdvanceEasyApply() {
     // Alicia answered a custom question on this step — wait for her to review/edit and click
     // Next herself (that click is what confirms the answer and saves it to the learned bank).
     if (pendingReviewModal === modal) {
-      showEasyApplyBanner('Alicia answered a question here — please review before clicking Next.', '#e0a800');
+      showEasyApplyBanner(modal.__aliciaPendingMsg || 'Alicia answered a question here — please review before clicking Next.', '#e0a800');
       return;
     }
 
@@ -1382,3 +1423,9 @@ var applyObserver = new MutationObserver(function () {
   if (IS_TOP) maybeCheckAtsIframe(); // only the top frame scans for cross-origin employer iframes
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });
+
+// A subframe (e.g. LinkedIn's /preload apply iframe) may already contain the full form when
+// this script arrives — mutations alone would never fire. Kick one fill pass on load.
+if (!IS_TOP) setTimeout(function () { if (findEasyApplyModal()) scheduleAutoFill(); }, 800);
+
+})();

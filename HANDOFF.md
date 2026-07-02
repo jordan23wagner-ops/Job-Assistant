@@ -1,5 +1,28 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-01 (late) — v1.1.0: self-healing injection + learn-from-human
+
+Root cause of "Easy Apply does nothing" on ATS-powered postings (e.g. Lever "Apply to
+Serverfarm"): the form lives in a **same-origin `linkedin.com/preload` iframe**; content
+scripts don't run in subframes by default, and manifest registration never reaches frames
+created before an extension reload (orphaned copies spam `chrome-extension://invalid`).
+Fixes:
+- `background.js` now **force-injects content.js programmatically** — per-frame on
+  `webNavigation.onCompleted`/`onHistoryStateUpdated` (linkedin.com filter) and into all open
+  LinkedIn tabs on `runtime.onInstalled` — so a reload needs no manual tab refresh ever again.
+  content.js is wrapped in a run-once-per-frame guard, making repeat injection a no-op.
+- content.js subframe support: `IS_TOP` gates page-level features to the top frame; in a
+  subframe whose text reads like an application, the whole document is treated as the modal;
+  question containers fall back to generic label-block detection when LinkedIn's form classes
+  are absent; a load-time fill pass runs since a prebuilt iframe never mutates.
+- **Learn-from-human (the Jobright loop), both content.js and autofill.js:** any question that
+  learned answers + AI can't fill now PAUSES auto-advance with a "fill in and click Next —
+  Alicia will remember" banner; the human's Next click banks their typed answer for future
+  applications, then advancing resumes.
+- Verified in a browser harness replicating the exact parent-heading/iframe-form layout:
+  detection, fill, AI-partial answer, human-teach pause, banking of both answers, resume to
+  Submit (never clicked).
+
 ## Update 2026-07-01 — v1.0.0: reliable auto-apply + tabbed UI
 
 This session hardened the auto-apply pipeline end to end and reorganized the side panel.

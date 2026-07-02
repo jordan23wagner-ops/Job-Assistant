@@ -665,24 +665,36 @@
         result.status = 'no_fields_found';
       } else {
         for (var step = 0; step < MAX_STEPS; step++) {
-          // AI-answer whatever the learned bank couldn't cover, then pause for human review.
-          if (pass.unanswered.length && resumeText) {
-            var answers = [];
-            try { answers = await callCustomAnswerBackend(pass.unanswered, resumeText); } catch (e) {}
-            var byIndex = {};
-            answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
+          // AI-answer whatever the learned bank couldn't cover; anything STILL empty after
+          // that is a question Alicia has never seen — the Jobright loop: stop, let the human
+          // fill it, and bank their answer the moment they click Continue (attachConfirmCapture
+          // resumes filling automatically after that click).
+          if (pass.unanswered.length) {
             var answeredItems = [];
-            pass.unanswered.forEach(function (item, i) {
-              var ans = byIndex[i + 1];
-              if (ans && applyAnswerToItem(item, ans)) answeredItems.push(item);
-            });
-            if (answeredItems.length) {
+            if (resumeText) {
+              var answers = [];
+              try { answers = await callCustomAnswerBackend(pass.unanswered, resumeText); } catch (e) {}
+              var byIndex = {};
+              answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
+              pass.unanswered.forEach(function (item, i) {
+                var ans = byIndex[i + 1];
+                if (ans && applyAnswerToItem(item, ans)) answeredItems.push(item);
+              });
+            }
+            var needHuman = pass.unanswered.filter(function (it) { return !String(itemFinalValue(it) || '').trim(); });
+
+            if (answeredItems.length || needHuman.length) {
               result.aiAnswered += answeredItems.length;
               result.filled += answeredItems.length;
-              pendingLearnItems = (pendingLearnItems || []).concat(answeredItems);
+              pendingLearnItems = (pendingLearnItems || []).concat(pass.unanswered);
               attachConfirmCapture();
-              result.status = 'answered_review';
-              showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.', '#e0a800');
+              if (needHuman.length) {
+                result.status = 'stopped_needs_input';
+                showBanner('New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill in and click Continue. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' and keep going.', '#e0a800');
+              } else {
+                result.status = 'answered_review';
+                showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.', '#e0a800');
+              }
               break;
             }
           }

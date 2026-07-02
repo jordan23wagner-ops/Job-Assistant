@@ -46,6 +46,34 @@ chrome.tabs.onRemoved.addListener(function (tabId) {
   });
 });
 
+// ===== Self-healing content-script injection on LinkedIn =====
+// Manifest-registered content scripts only reach frames created AFTER the extension load and
+// never heal orphaned copies left behind by an extension reload. That made every fix depend on
+// a perfectly-timed manual reload + tab refresh — and left LinkedIn's same-origin /preload
+// apply iframe (where ATS-powered Easy Apply forms actually live) unscripted whenever timing
+// was off. So we also inject programmatically: on every completed navigation in any LinkedIn
+// frame, on SPA history updates, and into all existing LinkedIn tabs the moment the extension
+// (re)loads. content.js carries a run-once-per-frame guard, so repeat injection is a no-op.
+function injectContentScript(tabId, frameIds) {
+  var target = { tabId: tabId };
+  if (frameIds) target.frameIds = frameIds; else target.allFrames = true;
+  chrome.scripting.executeScript({ target: target, files: ['content.js'] }).catch(function () {});
+}
+
+chrome.webNavigation.onCompleted.addListener(function (details) {
+  injectContentScript(details.tabId, [details.frameId]);
+}, { url: [{ hostSuffix: 'linkedin.com' }] });
+
+chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
+  injectContentScript(details.tabId, [details.frameId]);
+}, { url: [{ hostSuffix: 'linkedin.com' }] });
+
+chrome.runtime.onInstalled.addListener(function () {
+  chrome.tabs.query({ url: '*://*.linkedin.com/*' }, function (tabs) {
+    (tabs || []).forEach(function (t) { injectContentScript(t.id); });
+  });
+});
+
 // ===== ATS forms embedded in an iframe ON linkedin.com itself =====
 // Some "Easy Apply" postings actually show the employer's real ATS page (Lever, Greenhouse,
 // etc.) inside a cross-origin iframe layered on top of the LinkedIn page, rather than
