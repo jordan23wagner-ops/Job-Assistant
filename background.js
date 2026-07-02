@@ -46,6 +46,41 @@ chrome.tabs.onRemoved.addListener(function (tabId) {
   });
 });
 
+// ===== ATS forms embedded in an iframe ON linkedin.com itself =====
+// Some "Easy Apply" postings actually show the employer's real ATS page (Lever, Greenhouse,
+// etc.) inside a cross-origin iframe layered on top of the LinkedIn page, rather than
+// LinkedIn's own native Easy Apply form. content.js (matched only to linkedin.com, top frame)
+// cannot see inside that iframe at all — cross-origin frames are opaque to a content script
+// that isn't itself running in them. The fix: when content.js notices an unfamiliar
+// cross-origin iframe sitting inside an open modal, it messages here, and we inject autofill.js
+// directly INTO that frame (permitted because host_permissions covers every origin) — once
+// injected, autofill.js runs natively inside the iframe's own document and can fill/advance it
+// like any other external ATS page. Only frames whose hostname matches a known ATS provider are
+// targeted, so this never touches LinkedIn's own ad/chat/video iframes.
+function injectAtsFrames(tabId) {
+  if (!chrome.webNavigation || !chrome.webNavigation.getAllFrames) return;
+  chrome.webNavigation.getAllFrames({ tabId: tabId }, function (frames) {
+    if (!frames) return;
+    frames.forEach(function (f) {
+      if (f.frameId === 0) return; // top frame is linkedin.com itself, handled by content.js
+      var host = '';
+      try { host = new URL(f.url).hostname; } catch (e) { return; }
+      if (!ATS_HOST_RE.test(host)) return;
+      chrome.scripting.executeScript({ target: { tabId: tabId, frameIds: [f.frameId] }, files: ['autofill.js'] }).catch(function () {});
+    });
+  });
+}
+
+chrome.runtime.onMessage.addListener(function (message, sender) {
+  if (message && message.type === 'CHECK_ATS_IFRAME' && sender.tab) {
+    var tabId = sender.tab.id;
+    // Lever/Greenhouse-style embeds often render their real form asynchronously after the
+    // iframe's initial (near-empty) document loads, so try a couple of times.
+    setTimeout(function () { injectAtsFrames(tabId); }, 1200);
+    setTimeout(function () { injectAtsFrames(tabId); }, 3000);
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'JOB_DETECTED') {
     chrome.runtime.sendMessage(message).catch(() => {});

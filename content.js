@@ -1300,8 +1300,32 @@ function scheduleAutoFill() {
   }, 700);
 }
 
+// Some "Easy Apply" postings actually embed the employer's real ATS page (Lever, Greenhouse,
+// etc.) in a cross-origin iframe layered on top of the LinkedIn page, instead of showing
+// LinkedIn's own native Easy Apply form. This script can't see or fill inside that iframe at
+// all (cross-origin), but it CAN notice the iframe exists and ask background.js to inject the
+// autofill engine directly into it. Debounced and de-duplicated by src so one modal doesn't
+// spam repeated injection requests while its iframe re-renders.
+var seenAtsIframeSrcs = {};
+var lastAtsIframeCheck = 0;
+function maybeCheckAtsIframe() {
+  var now = Date.now();
+  if (now - lastAtsIframeCheck < 3000) return;
+  var modal = document.querySelector('.artdeco-modal, [role="dialog"]');
+  if (!modal) return;
+  var iframe = modal.querySelector('iframe[src]');
+  if (!iframe) return;
+  var src = iframe.src || '';
+  if (!src || /linkedin\.com|licdn\.com/i.test(src) || seenAtsIframeSrcs[src]) return;
+  seenAtsIframeSrcs[src] = true;
+  lastAtsIframeCheck = now;
+  console.log('[Alicia] Cross-origin application iframe detected inside a modal, asking background to fill it:', src);
+  safeSendMessage({ type: 'CHECK_ATS_IFRAME' });
+}
+
 var applyObserver = new MutationObserver(function () {
   if (!extAlive()) { applyObserver.disconnect(); return; }
   if (findEasyApplyModal()) scheduleAutoFill();
+  maybeCheckAtsIframe();
 });
 applyObserver.observe(document.body, { childList: true, subtree: true });

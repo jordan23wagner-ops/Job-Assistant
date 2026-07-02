@@ -3,7 +3,7 @@
   "name": "Alicia AI - Job Assistant",
   "version": "1.0.0",
   "description": "AI-powered job search assistant for LinkedIn",
-  "permissions": ["sidePanel", "activeTab", "storage", "tabs", "scripting"],
+  "permissions": ["sidePanel", "activeTab", "storage", "tabs", "scripting", "webNavigation"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
