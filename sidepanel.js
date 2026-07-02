@@ -2732,6 +2732,15 @@ if (autoAdvanceToggle) {
   });
 }
 
+// Master auto-fill switch: when off, content.js does no auto-fill/auto-advance at all. Default on.
+const autofillToggle = document.getElementById('autofill-toggle');
+if (autofillToggle) {
+  chrome.storage.local.get('autoFillEasyApply', function (d) { autofillToggle.checked = d.autoFillEasyApply !== false; });
+  autofillToggle.addEventListener('change', function () {
+    chrome.storage.local.set({ autoFillEasyApply: autofillToggle.checked });
+  });
+}
+
 const EEO_FIELDS = ['eeo-gender', 'eeo-race', 'eeo-veteran', 'eeo-disability', 'eeo-authorization', 'eeo-sponsorship'];
 const PROFILE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'city', 'state', 'zip', 'linkedin', 'website'];
 

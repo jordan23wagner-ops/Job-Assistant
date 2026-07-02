@@ -890,9 +890,9 @@ chrome.runtime.onMessage.addListener(function(message) {
     console.log('[Alicia] Auto-fill EEO triggered (manual)');
     var p = message.prefs && Object.keys(message.prefs).length ? message.prefs : null;
     if (p) {
-      autoFillEeo(p);
+      autoFillEeo(p, true);
     } else {
-      safeStorageGet('eeoPrefs', function (d) { autoFillEeo(d.eeoPrefs || {}); });
+      safeStorageGet('eeoPrefs', function (d) { autoFillEeo(d.eeoPrefs || {}, true); });
     }
   }
 });
@@ -1041,9 +1041,12 @@ function fillTextInput(inputEl, desiredValue) {
   return true;
 }
 
-function autoFillEeo(prefs) {
+// `report` is true only for the manual "Auto-Fill Open Application" button — that's when the side
+// panel should show a "filled N / no matching questions" status. The automatic poll-driven passes
+// (scheduleAutoFill) call this WITHOUT report, so they don't spam that status every ~1.2s.
+function autoFillEeo(prefs, report) {
   if (!prefs || Object.keys(prefs).length === 0) {
-    safeSendMessage({ type: 'EEO_FILL_RESULT', filled: 0 });
+    if (report) safeSendMessage({ type: 'EEO_FILL_RESULT', filled: 0 });
     return;
   }
   var filled = 0;
@@ -1093,7 +1096,7 @@ function autoFillEeo(prefs) {
   });
 
   console.log('[Alicia] Auto-fill complete, filled', filled, 'field(s)');
-  safeSendMessage({ type: 'EEO_FILL_RESULT', filled: filled });
+  if (report) safeSendMessage({ type: 'EEO_FILL_RESULT', filled: filled });
 }
 
 // Contact fields (name/email/phone/address/links) inside the Easy Apply modal — a separate
@@ -1717,7 +1720,10 @@ function scheduleAutoFill() {
   autofillTimer = setTimeout(function () {
     if (autofillPassRunning) { scheduleAutoFill(); return; } // don't overlap passes
     autofillPassRunning = true;
-    safeStorageGet(['eeoPrefs', 'profile'], function (data) {
+    safeStorageGet(['eeoPrefs', 'profile', 'autoFillEasyApply'], function (data) {
+      // Master switch: when the user turns off "Auto-fill applications", do nothing at all — no
+      // field fill, no custom-question answering, no auto-advance. Default is on (undefined).
+      if (data.autoFillEasyApply === false) { autofillPassRunning = false; return; }
       // Strictly sequential: fill everything (including async typeahead picks and any AI
       // custom-question call) BEFORE ever checking whether to auto-advance — otherwise
       // Next could be clicked while a fill on this same step is still resolving.
