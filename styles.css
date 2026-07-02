@@ -1393,3 +1393,54 @@ header h1 {
   cursor: pointer;
 }
 .queue-skip:hover { border-color: var(--accent); color: var(--text-strong); }
+
+/* ===== Saved Resumes ===== */
+.saved-resumes-list { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.saved-resume {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.saved-resume-active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.saved-resume-radio { flex: 0 0 auto; accent-color: var(--accent); cursor: pointer; }
+.saved-resume-info { flex: 1 1 auto; min-width: 0; }
+.saved-resume-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.saved-resume-src {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.saved-resume-rename {
+  width: 100%;
+  font-size: 13px;
+  padding: 3px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-strong);
+}
+.saved-resume-actions { display: flex; gap: 4px; flex: 0 0 auto; }
+.saved-resume-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.saved-resume-btn:hover { border-color: var(--accent); color: var(--text-strong); }
+.saved-resume-del:hover { border-color: #c0564b; color: #e08a80; }

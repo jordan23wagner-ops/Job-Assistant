@@ -48,7 +48,7 @@
   <div class="container">
     <header>
       <h1>Alicia AI</h1>
-      <p class="subtitle">Job Assistant v1.5.0</p>
+      <p class="subtitle">Job Assistant v1.6.0</p>
       <div id="theme-picker" class="theme-picker">
         <button class="theme-dot midnight" data-theme="midnight" title="Midnight"></button>
         <button class="theme-dot yellow" data-theme="yellow" title="Matte Yellow"></button>
@@ -316,6 +316,15 @@
         </div>
         <span id="resume-status" class="resume-status"></span>
         <button id="build-resume-btn" class="btn-small" style="width:100%;margin-top:6px;">&#9997;&#65039; Build a Resume from Scratch</button>
+      </section>
+
+      <section id="saved-resumes-section" class="section">
+        <div class="section-header">
+          <h2>Saved Resumes</h2>
+        </div>
+        <p class="chat-mode-hint">Keep multiple resumes &mdash; a base plus tailored versions. The <strong>active</strong> one (radio) is used for match scoring, autofill, and ATS uploads. Upload a file, paste text, build one, or tailor from a job&rsquo;s match badge to add more (max 10).</p>
+        <div id="saved-resumes-list" class="saved-resumes-list"></div>
+        <p id="saved-resumes-empty" class="placeholder">No saved resumes yet &mdash; upload a file or paste text above, or build one.</p>
       </section>
 
       <section id="builder-section" class="section hidden">

@@ -500,6 +500,152 @@ function showGoogleDocsTip() {
   }
 }
 
+// ========== Saved Resumes ==========
+// Multiple saved resumes (a base + tailored/built variants). Exactly one is "active". To avoid
+// touching every reader, we keep the legacy `resumeText` (module var + storage key) and
+// `resumeFile` storage key pointed at the ACTIVE resume — so content.js match scoring,
+// autofill.js ATS upload, and all the sidepanel AI tools keep working unchanged (the shim).
+const MAX_SAVED_RESUMES = 10;
+const MAX_RESUME_FILE_BYTES = 2 * 1024 * 1024; // 2 MB — matches LinkedIn's own resume upload cap
+let savedResumes = [];
+
+function genResumeId() { return 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+
+function activeResume() {
+  return savedResumes.filter(function (r) { return r.isActive; })[0] || savedResumes[0] || null;
+}
+
+// Point the legacy keys + module var at the active resume, and refresh anything that depends on it.
+function syncActiveResume() {
+  var a = activeResume();
+  resumeText = a ? a.text : null;
+  chrome.storage.local.set({ resumeText: resumeText || '' });
+  if (a && a.file) chrome.storage.local.set({ resumeFile: a.file });
+  else chrome.storage.local.remove('resumeFile');
+  updateToolButtons();
+}
+
+function persistSavedResumes(cb) {
+  chrome.storage.local.set({ savedResumes: savedResumes }, function () {
+    syncActiveResume();
+    if (cb) cb();
+  });
+}
+
+function setActiveResume(id) {
+  savedResumes.forEach(function (r) { r.isActive = (r.id === id); });
+  persistSavedResumes(function () {
+    renderSavedResumes();
+    var a = activeResume();
+    if (a) setResumeStatus('Active resume: ' + a.name, '#4caf50');
+  });
+}
+
+// Add a new saved resume and make it active. Enforces the 10-resume cap. Returns the entry or null.
+function addSavedResume(entry) {
+  if (savedResumes.length >= MAX_SAVED_RESUMES) {
+    setResumeStatus('You have the max of ' + MAX_SAVED_RESUMES + ' saved resumes. Delete one to add another.', '#ff9955');
+    return null;
+  }
+  var r = {
+    id: genResumeId(),
+    name: entry.name || 'Resume',
+    text: entry.text || '',
+    file: entry.file || null,
+    createdAt: Date.now(),
+    tailoredForJob: entry.tailoredForJob || null,
+    isActive: true
+  };
+  savedResumes.forEach(function (x) { x.isActive = false; });
+  savedResumes.push(r);
+  persistSavedResumes(renderSavedResumes);
+  return r;
+}
+
+function deleteSavedResume(id) {
+  var wasActive = false;
+  savedResumes = savedResumes.filter(function (r) {
+    if (r.id === id) { wasActive = r.isActive; return false; }
+    return true;
+  });
+  if (wasActive && savedResumes.length) savedResumes[0].isActive = true;
+  persistSavedResumes(function () {
+    renderSavedResumes();
+    if (!savedResumes.length) setResumeStatus('All resumes deleted — add one to use the AI tools.', '#ff9955');
+  });
+}
+
+function renameSavedResume(id, name) {
+  var r = savedResumes.filter(function (x) { return x.id === id; })[0];
+  if (r && name && name.trim()) { r.name = name.trim(); persistSavedResumes(renderSavedResumes); }
+}
+
+function resumeSourceLabel(r) {
+  if (r.tailoredForJob) return 'Tailored for ' + (r.tailoredForJob.company || r.tailoredForJob.title || 'a job');
+  if (r.file) return 'Uploaded · ' + r.file.name;
+  return 'Text';
+}
+
+function viewSavedResume(r) {
+  var html = formatResumeContent(r.text);
+  chrome.storage.local.set({ tailoredResumeHtml: html }, function () {
+    chrome.tabs.create({ url: chrome.runtime.getURL('resume-preview.html') });
+  });
+}
+
+function renderSavedResumes() {
+  var listEl = document.getElementById('saved-resumes-list');
+  var emptyEl = document.getElementById('saved-resumes-empty');
+  if (!listEl) return;
+  if (emptyEl) emptyEl.style.display = savedResumes.length ? 'none' : '';
+  listEl.innerHTML = '';
+  savedResumes.forEach(function (r) {
+    var row = document.createElement('div');
+    row.className = 'saved-resume' + (r.isActive ? ' saved-resume-active' : '');
+
+    var radio = document.createElement('input');
+    radio.type = 'radio'; radio.name = 'active-resume'; radio.className = 'saved-resume-radio';
+    radio.checked = !!r.isActive;
+    radio.title = 'Make this the active resume';
+    radio.addEventListener('change', function () { setActiveResume(r.id); });
+    row.appendChild(radio);
+
+    var info = document.createElement('div'); info.className = 'saved-resume-info';
+    var nameEl = document.createElement('div'); nameEl.className = 'saved-resume-name'; nameEl.textContent = r.name;
+    var src = document.createElement('div'); src.className = 'saved-resume-src';
+    src.textContent = resumeSourceLabel(r) + (r.isActive ? ' · Active' : '');
+    info.appendChild(nameEl); info.appendChild(src);
+    row.appendChild(info);
+
+    var actions = document.createElement('div'); actions.className = 'saved-resume-actions';
+    var viewBtn = document.createElement('button'); viewBtn.className = 'saved-resume-btn'; viewBtn.textContent = 'View';
+    viewBtn.addEventListener('click', function () { viewSavedResume(r); });
+    var renameBtn = document.createElement('button'); renameBtn.className = 'saved-resume-btn'; renameBtn.textContent = 'Rename';
+    renameBtn.addEventListener('click', function () { startRenameSavedResume(r, nameEl); });
+    var delBtn = document.createElement('button'); delBtn.className = 'saved-resume-btn saved-resume-del'; delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', function () {
+      if (delBtn.dataset.confirm === '1') { deleteSavedResume(r.id); return; }
+      delBtn.dataset.confirm = '1'; delBtn.textContent = 'Sure?';
+      setTimeout(function () { if (delBtn.parentNode) { delBtn.dataset.confirm = ''; delBtn.textContent = 'Delete'; } }, 3000);
+    });
+    actions.appendChild(viewBtn); actions.appendChild(renameBtn); actions.appendChild(delBtn);
+    row.appendChild(actions);
+
+    listEl.appendChild(row);
+  });
+}
+
+// Inline rename: swap the name label for a text input; commit on Enter/blur.
+function startRenameSavedResume(r, nameEl) {
+  var input = document.createElement('input');
+  input.type = 'text'; input.className = 'saved-resume-rename'; input.value = r.name;
+  nameEl.replaceWith(input); input.focus(); input.select();
+  var done = false;
+  function commit() { if (done) return; done = true; renameSavedResume(r.id, input.value); }
+  input.addEventListener('keydown', function (e) { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { done = true; renderSavedResumes(); } });
+  input.addEventListener('blur', commit);
+}
+
 async function extractResumeText(file) {
   var name = (file.name || '').toLowerCase();
   if (name.endsWith('.pdf')) {
@@ -532,31 +678,32 @@ resumeUpload.addEventListener('change', async function(e) {
 
     const isLowQuality = isLowQualityResumeText(text);
 
-    resumeText = text;
-    await chrome.storage.local.set({ resumeText: resumeText });
-
-    // Keep the original file too (base64) so autofill can attach it to resume/CV file
-    // inputs on ATS applications (Greenhouse, Workday, etc.).
+    // Keep the original file bytes (base64) so autofill can attach it to resume/CV file inputs on
+    // ATS applications. Capped at 2 MB per file (LinkedIn's own cap); larger files still save their
+    // text, just without the attachable file.
+    var fileObj = null;
+    var tooBig = false;
     try {
-      if (file.size <= 5 * 1024 * 1024) {
+      if (file.size <= MAX_RESUME_FILE_BYTES) {
         var buf = await file.arrayBuffer();
         var bytes = new Uint8Array(buf);
         var bin = '';
         for (var bi = 0; bi < bytes.length; bi += 0x8000) {
           bin += String.fromCharCode.apply(null, bytes.subarray(bi, bi + 0x8000));
         }
-        await chrome.storage.local.set({ resumeFile: { name: file.name, type: file.type || 'application/octet-stream', b64: btoa(bin), savedAt: Date.now() } });
+        fileObj = { name: file.name, type: file.type || 'application/octet-stream', b64: btoa(bin), savedAt: Date.now() };
+      } else {
+        tooBig = true;
       }
     } catch (fileErr) { console.log('Could not store resume file bytes:', fileErr); }
 
-    if (isLowQuality) {
-      setResumeStatus('Loaded (partial text — quality may be limited)', '#ffaa00');
-      showGoogleDocsTip();
-    } else {
-      setResumeStatus('Loaded: ' + file.name, '#4caf50');
+    var added = addSavedResume({ name: file.name, text: text, file: fileObj });
+    if (added) {
+      if (isLowQuality) { setResumeStatus('Loaded (partial text — quality may be limited)', '#ffaa00'); showGoogleDocsTip(); }
+      else if (tooBig) setResumeStatus('Loaded: ' + file.name + ' (file over 2 MB — text saved, but it won\'t attach on ATS uploads)', '#ffaa00');
+      else setResumeStatus('Loaded: ' + file.name, '#4caf50');
     }
-
-    updateToolButtons();
+    resumeUpload.value = ''; // allow re-selecting the same file later
   } catch (err) {
     setResumeStatus(err.message || 'Could not read file', '#ff5555');
     if (file.name.toLowerCase().endsWith('.pdf') || file.name.toLowerCase().endsWith('.docx')) {
@@ -576,25 +723,41 @@ resumePasteSave.addEventListener('click', async function() {
     setResumeStatus('Please paste a bit more of your resume.', '#ff9955');
     return;
   }
-  resumeText = text;
-  await chrome.storage.local.set({ resumeText: resumeText });
-  setResumeStatus('Resume saved from pasted text', '#4caf50');
-  pasteBox.classList.add('hidden');
-  updateToolButtons();
+  var added = addSavedResume({ name: 'Pasted resume', text: text, file: null });
+  if (added) {
+    setResumeStatus('Resume saved from pasted text', '#4caf50');
+    pasteBox.classList.add('hidden');
+    resumePaste.value = '';
+  }
 });
 
-chrome.storage.local.get(['resumeText', 'groqApiKey'], function(data) {
-  if (data.resumeText) {
-    if (isLowQualityResumeText(data.resumeText)) {
+chrome.storage.local.get(['savedResumes', 'resumeText', 'resumeFile'], function(data) {
+  if (Array.isArray(data.savedResumes) && data.savedResumes.length) {
+    savedResumes = data.savedResumes;
+  } else if (data.resumeText && !isLowQualityResumeText(data.resumeText)) {
+    // Migrate the single legacy resume into the new multi-resume model (one active entry).
+    savedResumes = [{
+      id: genResumeId(),
+      name: (data.resumeFile && data.resumeFile.name) || 'My Resume',
+      text: sanitizeText(data.resumeText),
+      file: data.resumeFile || null,
+      createdAt: Date.now(), tailoredForJob: null, isActive: true
+    }];
+    chrome.storage.local.set({ savedResumes: savedResumes });
+  } else {
+    savedResumes = [];
+    if (data.resumeText) { // present but low-quality
       chrome.storage.local.remove('resumeText');
-      resumeText = null;
       setResumeStatus('Your saved resume was unreadable or low-quality. Please re-upload or paste text.', '#ff9955');
-    } else {
-      resumeText = sanitizeText(data.resumeText);
-      setResumeStatus('Resume loaded from storage', '#4caf50');
     }
-    updateToolButtons();
   }
+
+  var a = activeResume();
+  resumeText = a ? a.text : null;
+  if (a) setResumeStatus(savedResumes.length > 1 ? ('Active resume: ' + a.name) : 'Resume loaded from storage', '#4caf50');
+  syncActiveResume();   // keep resumeText/resumeFile keys aligned with the active resume
+  renderSavedResumes();
+  updateToolButtons();
   // No API key needed any more — Alicia runs on the free Wagner-GPT backend, so the
   // onboarding key screen is no longer shown on load.
 
@@ -785,7 +948,7 @@ async function runQuickTailor() {
     removeLoadingMessage('Tailoring');
     tailoringState.tailoredResume = result;
     addTailoringMessage(result, 'final');
-    addTailoringQuickOptions(['Download Resume', 'Start over']);
+    addTailoringQuickOptions(['Save to my resumes', 'Download Resume', 'Start over']);
   } catch (err) {
     removeLoadingMessage('Tailoring');
     addTailoringMessage('Error: ' + err.message, 'ai');
@@ -830,7 +993,7 @@ async function generateTailoredResume() {
     removeLoadingMessage('Building');
     tailoringState.tailoredResume = result;
     addTailoringMessage(result, 'final');
-    addTailoringQuickOptions(['Download Resume', 'Start over']);
+    addTailoringQuickOptions(['Save to my resumes', 'Download Resume', 'Start over']);
   } catch (err) {
     removeLoadingMessage('Building');
     addTailoringMessage('Error: ' + err.message, 'ai');
@@ -897,6 +1060,24 @@ async function handleTailoringResponse(response) {
 
   if (response === 'Download Resume') {
     downloadTailoredResume();
+    return;
+  }
+
+  if (response === 'Save to my resumes') {
+    if (!tailoringState || !tailoringState.tailoredResume) return;
+    var jobForName = currentJob || {};
+    var nm = 'Resume — ' + [jobForName.company, jobForName.title].filter(Boolean).join(' ');
+    if (nm.trim() === 'Resume —') nm = 'Tailored resume';
+    var saved = addSavedResume({
+      name: nm,
+      text: tailoringState.tailoredResume,
+      file: null,
+      tailoredForJob: (jobForName.title || jobForName.company) ? { title: jobForName.title || '', company: jobForName.company || '' } : null
+    });
+    addTailoringMessage(saved
+      ? 'Saved as **' + escapeHtml(saved.name) + '** and set active. Manage it under **Saved Resumes** in the Tools tab.'
+      : 'Could not save — you may be at the 10-resume limit. Delete one under Saved Resumes and try again.', 'ai');
+    addTailoringQuickOptions(['Download Resume', 'Start over']);
     return;
   }
 
@@ -1034,11 +1215,10 @@ function downloadBuiltResume() {
 
 async function useBuiltResumeAsMyResume() {
   if (!builderState || !builderState.generatedResume) return;
-  resumeText = builderState.generatedResume;
-  await chrome.storage.local.set({ resumeText: resumeText });
+  var added = addSavedResume({ name: 'Built resume', text: builderState.generatedResume, file: null });
+  if (!added) return;
   setResumeStatus('Resume saved from builder', '#4caf50');
-  updateToolButtons();
-  addBuilderMessage('Saved as your resume — Tailor Resume, Cover Letter, Interview Prep, and Match Score can all use it now.', 'ai');
+  addBuilderMessage('Saved as your active resume — Tailor Resume, Cover Letter, Interview Prep, and Match Score can all use it now. Manage it under **Saved Resumes**.', 'ai');
 }
 
 function handleBuilderResponse(response) {
