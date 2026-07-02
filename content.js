@@ -1826,9 +1826,10 @@ try {
 refreshQueueState();
 
 function queueActionDelay() {
-  var base = 8000 + Math.floor(Math.random() * 12000);          // 8–20s
-  if (Math.random() < 0.2) base += 10000 + Math.floor(Math.random() * 20000); // ~1 in 5: +10–30s reading pause
-  return base;
+  // A short, randomized human-like pause before opening each application. Kept snappy (3–7s) so it
+  // visibly works rather than appearing frozen — the real pacing is that YOU review and click Submit
+  // on every application, which naturally spaces the run out, plus the 20-app-per-run cap.
+  return 3000 + Math.floor(Math.random() * 4000);
 }
 
 // The current job the queue expects THIS page to be — only if the page URL matches its jobId.
@@ -1840,17 +1841,20 @@ function currentQueueJob() {
   return job;
 }
 
-// The blue "Easy Apply" button on the job posting (NOT inside a modal). Must say "Easy Apply"
-// (an external "Apply" button opens the employer site and is skipped), be visible and enabled.
+// The blue "Easy Apply" button on the job posting (NOT inside a modal). Detected by its VISIBLE
+// TEXT rather than a class/aria-label — LinkedIn churns those, which made class-based lookups miss
+// the button entirely (the queue then just sat and skipped). Scans every clickable element and
+// matches "easy apply"; an external "Apply" button (opens the employer site) has no such text and
+// is left alone. Visibility is checked with getClientRects (offsetParent is null for the sticky
+// header's fixed-position button, which would wrongly reject it).
 function findEasyApplyOpenButton() {
-  var candidates = document.querySelectorAll(
-    'button.jobs-apply-button, .jobs-apply-button--top-card button, button[aria-label*="Easy Apply" i], button[aria-label*="apply" i]'
-  );
-  for (var i = 0; i < candidates.length; i++) {
-    var b = candidates[i];
-    if (b.disabled || b.offsetParent === null) continue;
+  var els = document.querySelectorAll('button, [role="button"], a[role="button"], a.jobs-apply-button');
+  for (var i = 0; i < els.length; i++) {
+    var b = els[i];
+    if (b.disabled) continue;
+    if (!b.getClientRects().length) continue;
     var t = normTxt((b.getAttribute('aria-label') || '') + ' ' + (b.innerText || b.textContent || ''));
-    if (/easy apply/.test(t)) return b;
+    if (/\beasy apply\b/.test(t)) return b;
   }
   return null;
 }
@@ -1884,12 +1888,13 @@ function driveQueueJobPage() {
   var btn = findEasyApplyOpenButton();
   if (btn) {
     var now = Date.now();
-    if (!queueDelayUntil) {                 // first sighting — schedule a human-like delay
+    if (!queueDelayUntil) {                 // first sighting — schedule a short human-like delay
       queueDelayUntil = now + queueActionDelay();
-      showEasyApplyBanner('Queue: opening this application shortly…', '#3a7afe');
+    }
+    if (now < queueDelayUntil) {            // count down so it's obviously working, not frozen
+      showEasyApplyBanner('Queue: opening this application in ' + Math.ceil((queueDelayUntil - now) / 1000) + 's…', '#3a7afe');
       return;
     }
-    if (now < queueDelayUntil) return;      // still waiting out the pace delay
     // Click once; if the modal hasn't opened a few seconds later, retry (up to 4 total).
     if (!queueOpenClickedAt || (now - queueOpenClickedAt > 6000 && queueOpenAttempts < 4 && !findEasyApplyModalRaw())) {
       queueOpenClickedAt = now;
