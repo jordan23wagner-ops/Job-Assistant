@@ -319,6 +319,29 @@
         <button id="build-resume-btn" class="btn-small" style="width:100%;margin-top:6px;">&#9997;&#65039; Build a Resume from Scratch</button>
       </section>
 
+      <section id="account-section" class="section">
+        <div class="section-header">
+          <h2>Account</h2>
+        </div>
+        <div id="account-signed-out">
+          <p class="chat-mode-hint">Alicia is free to use. Sign in with a free Chatwillow account for a <strong>3&times; higher daily AI allowance</strong> &mdash; or go Pro for the full allowance.</p>
+          <div class="tailoring-text-input">
+            <input type="email" id="account-email" placeholder="you@email.com" />
+            <button id="account-send-code" class="btn-small">Send code</button>
+          </div>
+          <div class="tailoring-text-input hidden" id="account-code-row">
+            <input type="text" id="account-code" placeholder="6-digit code from your email" />
+            <button id="account-verify" class="btn-small">Verify</button>
+          </div>
+        </div>
+        <div id="account-signed-in" class="hidden">
+          <p class="chat-mode-hint">Signed in as <strong id="account-user-email"></strong> &mdash; <span id="account-plan">&hellip;</span></p>
+          <button id="account-upgrade" class="btn-small">&#11088; Upgrade to Alicia Pro</button>
+          <button id="account-signout" class="btn-small">Sign out</button>
+        </div>
+        <span id="account-status" class="resume-status"></span>
+      </section>
+
       <section id="saved-resumes-section" class="section">
         <div class="section-header">
           <h2>Saved Resumes</h2>
@@ -441,6 +464,7 @@
     </div>
   </div>
   <script src="parsers.js"></script>
+  <script src="account.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

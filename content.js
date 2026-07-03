@@ -340,7 +340,23 @@ var lastDetectedJob = null;
 // ========== Match Score overlay: mirrors the side panel's "Match Score" tool, but shows
 // automatically on the job page itself (like Jobright), scored against the saved resume. ==========
 
-var MATCH_BACKEND_URL = 'https://wagner-gpt.vercel.app/api/chat';
+var MATCH_BACKEND_URL = 'https://chatwillow.com/api/chat';
+
+// Bearer token for the signed-in Chatwillow account (higher daily allowance), if any.
+// Content scripts don't refresh tokens — the side panel owns that — so a stale token
+// just means this call runs on the anonymous tier. Never throws.
+function getAliciaAuthHeader() {
+  return new Promise(function (resolve) {
+    try {
+      chrome.storage.local.get(['alicia_session'], function (d) {
+        var s = d && d.alicia_session;
+        if (s && s.access_token && Date.now() < (s.expires_at || 0) - 60000) {
+          resolve('Bearer ' + s.access_token);
+        } else resolve(null);
+      });
+    } catch (e) { resolve(null); }
+  });
+}
 var matchScoreCache = {}; // "title|company" -> {score,matched,missing,summary}
 var matchScoreInFlight = {};
 
@@ -367,9 +383,12 @@ function parseMatchJson(raw) {
 // JS context and can't call into the side panel, so the NDJSON-stream client is duplicated
 // here (shared by every AI-backed content.js feature: match score, custom-question answers).
 async function fetchBackendText(sys, user) {
+  var headers = { 'Content-Type': 'application/json' };
+  var auth = await getAliciaAuthHeader();
+  if (auth) headers['Authorization'] = auth;
   var resp = await fetch(MATCH_BACKEND_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify({ messages: [{ role: 'system', content: sys }], newMessage: user, model: 'auto' })
   });
   if (!resp.ok) throw new Error('Backend error: ' + resp.status);

@@ -25,7 +25,7 @@
   if (window.__aliciaAutofillRun) { window.__aliciaAutofillRun(); return; }
   if (/(^|\.)linkedin\.com$/i.test(location.hostname)) return; // content.js owns LinkedIn
 
-  var BACKEND_URL = 'https://wagner-gpt.vercel.app/api/chat';
+  var BACKEND_URL = 'https://chatwillow.com/api/chat';
   var MAX_STEPS = 20;
   var CUSTOM_QA_MATCH_THRESHOLD = 65;
   var CUSTOM_QA_MAX_PER_STEP = 10;
@@ -176,9 +176,17 @@
     return cleaned.replace(/<\/?think>/gi, '').trim();
   }
   async function fetchBackendText(sys, user) {
+    // Signed-in Chatwillow session (higher daily allowance) if present and fresh;
+    // stale/absent just means the anonymous tier. storageGet never throws.
+    var headers = { 'Content-Type': 'application/json' };
+    var stored = await storageGet(['alicia_session']);
+    var session = stored && stored.alicia_session;
+    if (session && session.access_token && Date.now() < (session.expires_at || 0) - 60000) {
+      headers['Authorization'] = 'Bearer ' + session.access_token;
+    }
     var resp = await fetch(BACKEND_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify({ messages: [{ role: 'system', content: sys }], newMessage: user, model: 'auto' })
     });
     if (!resp.ok) throw new Error('Backend error: ' + resp.status);
