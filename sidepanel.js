@@ -269,28 +269,41 @@ function isResponseGarbage(text) {
   return (letters / text.length) < 0.2;
 }
 
-// Wagner-GPT's free chat backend (Ollama Cloud -> NVIDIA NIM fallback). No API key:
-// the keys live server-side on Vercel, so Alicia is 100% free for the user. CORS on that
-// endpoint allows this extension's origin through.
-var BACKEND_URL = 'https://wagner-gpt.vercel.app/api/chat';
+// Chatwillow's chat backend (Ollama Cloud -> Cerebras -> Groq -> NIM fallback). No API
+// key needed: the keys live server-side on Vercel. Signed-in users (Tools -> Account)
+// get a higher daily allowance via the Authorization header; anonymous use still works.
+var BACKEND_URL = 'https://chatwillow.com/api/chat';
 
 // Call the backend and return a single completion string. The endpoint streams NDJSON
 // ({"delta":"..."}\n ... {"done":true}\n), so we read the stream and concatenate the deltas
 // into the one-shot string the rest of the UI expects.
 async function rawBackendCall(messages, temperature, maxTokens) {
   var msgs = messages || [];
-  // The last message is the current user turn; everything before it is history. Wagner-GPT
+  // The last message is the current user turn; everything before it is history. The backend
   // forwards history messages with their role intact, so the tool's system prompt (always
   // the first message) reaches the model.
   var last = msgs.length ? msgs[msgs.length - 1] : { content: '' };
   var history = msgs.slice(0, -1).map(function (m) { return { role: m.role, content: m.content }; });
 
+  var headers = { 'Content-Type': 'application/json' };
+  try {
+    var aliciaToken = await AliciaAccount.getAccessToken();
+    if (aliciaToken) headers['Authorization'] = 'Bearer ' + aliciaToken;
+  } catch (e) { /* anonymous tier */ }
+
   var resp = await fetch(BACKEND_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: headers,
     body: JSON.stringify({ messages: history, newMessage: last.content || '', model: 'auto' })
   });
-  if (!resp.ok) throw new Error('Backend error: ' + resp.status);
+  if (!resp.ok) {
+    if (resp.status === 429) {
+      var quotaMsg = null;
+      try { quotaMsg = (await resp.json()).error; } catch (e) {}
+      throw new Error(quotaMsg || 'Daily AI limit reached — sign in or upgrade in Tools → Account for more.');
+    }
+    throw new Error('Backend error: ' + resp.status);
+  }
 
   var reader = resp.body.getReader();
   var decoder = new TextDecoder();
