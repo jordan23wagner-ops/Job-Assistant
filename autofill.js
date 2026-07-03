@@ -9,7 +9,7 @@
 //      (generating + saving a per-site credential when the page wants an account created),
 //      and attaches the stored resume file to empty resume/CV file inputs.
 //   3. Answers leftover custom questions from the learned bank; anything still unanswered
-//      goes to the free Wagner-GPT backend in ONE batched AI call.
+//      goes to the free Chatwillow backend in ONE batched AI call.
 //   4. If the AI answered anything, it STOPS and asks the human to review — the click on
 //      Next/Continue that the human makes is what confirms + saves those answers to the
 //      learned bank (then filling automatically resumes).

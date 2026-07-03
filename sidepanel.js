@@ -1,6 +1,5 @@
 let currentJob = null;
 let resumeText = null;
-let groqApiKey = null;
 let tailoringState = null;
 // Set when tailoring is launched from the match badge — the badge's "missing" keywords, so the
 // tailor prompts can re-emphasize real experience toward them (never fabricate). Cleared each run.
@@ -35,12 +34,6 @@ function persistUsage() { chrome.storage.local.set({ usage: usage }); }
 
 function historyCap() { return isPremium ? PREMIUM_HISTORY_CAP : FREE_HISTORY_CAP; }
 
-// TEST MODE: Set this to true to clear stored API key and test onboarding on load
-const TEST_FIRST_RUN = false;
-
-// Groq model. Qwen 3.6 27B: multimodal (text + image), fast, current as of 2026.
-const GROQ_MODEL = 'qwen/qwen3.6-27b';
-
 const jobInfo = document.getElementById('job-info');
 const detectBtn = document.getElementById('detect-btn');
 const analyzeBtn = document.getElementById('analyze-btn');
@@ -73,11 +66,6 @@ const pasteToggle = document.getElementById('paste-toggle');
 const pasteBox = document.getElementById('paste-box');
 const resumePaste = document.getElementById('resume-paste');
 const resumePasteSave = document.getElementById('resume-paste-save');
-const onboarding = document.getElementById('onboarding');
-const openGroqBtn = document.getElementById('open-groq-btn');
-const obKeyInput = document.getElementById('ob-key-input');
-const obSaveBtn = document.getElementById('ob-save-btn');
-const obError = document.getElementById('ob-error');
 const modeJobBtn = document.getElementById('mode-job');
 const modeGeneralBtn = document.getElementById('mode-general');
 const chatModeHint = document.getElementById('chat-mode-hint');
@@ -109,96 +97,6 @@ const TRACKER_STAGES = [
   { key: 'offer', label: 'Offer' },
   { key: 'rejected', label: 'Rejected' }
 ];
-
-function showOnboarding(errorMsg) {
-  if (!onboarding) return;
-  onboarding.classList.remove('hidden');
-  if (errorMsg) {
-    obError.textContent = errorMsg;
-    obError.classList.remove('hidden');
-  } else {
-    obError.classList.add('hidden');
-  }
-  if (obKeyInput) obKeyInput.focus();
-}
-
-function hideOnboarding() {
-  if (onboarding) onboarding.classList.add('hidden');
-}
-
-function validateGroqKey(key) {
-  if (!key) return { ok: false, msg: 'Please paste your API key in the box above.' };
-  if (/\s/.test(key)) return { ok: false, msg: 'The key should not contain spaces or line breaks. Copy just the key itself.' };
-  if (key.indexOf('gsk_') !== 0) return { ok: false, msg: 'Groq keys start with "gsk_". Double-check you copied the whole key from the Groq page.' };
-  if (key.length < 40) return { ok: false, msg: 'That key looks too short. Copy the entire key — it is about 56 characters long.' };
-  return { ok: true };
-}
-
-async function verifyGroqKey(key) {
-  var resp = await fetch('https://api.groq.com/openai/v1/models', {
-    headers: { 'Authorization': 'Bearer ' + key }
-  });
-  return resp.ok;
-}
-
-if (openGroqBtn) {
-  openGroqBtn.addEventListener('click', function() {
-    chrome.tabs.create({ url: 'https://console.groq.com/keys' });
-  });
-}
-
-async function handleSaveKey() {
-  var key = obKeyInput.value.trim();
-  var v = validateGroqKey(key);
-  if (!v.ok) {
-    obError.textContent = v.msg;
-    obError.classList.remove('hidden');
-    return;
-  }
-  obError.classList.add('hidden');
-  obSaveBtn.disabled = true;
-  obSaveBtn.textContent = 'Checking your key...';
-
-  var verified = null;
-  try {
-    verified = await verifyGroqKey(key);
-  } catch (e) {
-    verified = null; // network/CORS hiccup — don't block her, store it anyway
-  }
-
-  if (verified === false) {
-    obError.textContent = 'That key did not work. Make sure you copied the whole key and that your Groq account is active, then try again.';
-    obError.classList.remove('hidden');
-    obSaveBtn.disabled = false;
-    obSaveBtn.textContent = 'Save & Get Started';
-    return;
-  }
-
-  groqApiKey = key;
-  await chrome.storage.local.set({ groqApiKey: key });
-  obSaveBtn.disabled = false;
-  obSaveBtn.textContent = 'Save & Get Started';
-  hideOnboarding();
-}
-
-if (obSaveBtn) {
-  obSaveBtn.addEventListener('click', handleSaveKey);
-}
-if (obKeyInput) {
-  obKeyInput.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') handleSaveKey();
-  });
-}
-
-async function getApiKey() {
-  var stored = await chrome.storage.local.get('groqApiKey');
-  if (stored.groqApiKey) {
-    groqApiKey = stored.groqApiKey;
-    return groqApiKey;
-  }
-  showOnboarding();
-  return null;
-}
 
 function sanitizeText(text) {
   if (!text) return '';
@@ -332,7 +230,7 @@ async function rawBackendCall(messages, temperature, maxTokens) {
 }
 
 // Kept the name callGroq so the ~12 existing call sites are untouched; it now routes to the
-// free Wagner-GPT backend instead of Groq.
+// free Chatwillow backend instead of Groq.
 async function callGroq(messages, temperature, maxTokens) {
   if (temperature === undefined) temperature = 0.7;
 
@@ -771,8 +669,9 @@ chrome.storage.local.get(['savedResumes', 'resumeText', 'resumeFile'], function(
   syncActiveResume();   // keep resumeText/resumeFile keys aligned with the active resume
   renderSavedResumes();
   updateToolButtons();
-  // No API key needed any more — Alicia runs on the free Wagner-GPT backend, so the
-  // onboarding key screen is no longer shown on load.
+  // No API key needed — Alicia runs on the Chatwillow backend. Remove any Groq key
+  // that pre-1.5 versions left in storage (that onboarding flow is gone).
+  chrome.storage.local.remove('groqApiKey');
 
   // If the user clicked "Tailor my resume for this job" on the in-page match badge while the panel
   // was closed, pick that request up now (resumeText is loaded above, so tailoring can run).
