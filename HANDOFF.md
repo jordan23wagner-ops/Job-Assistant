@@ -1,6 +1,46 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-06 (latest) — v1.8.5: Ashby, SmartRecruiters, Taleo, BrassRing adapters
+## Update 2026-07-06 (latest) — v1.9.0: Job Search (new-tab, Adzuna-backed) — Phase 1
+
+New feature: search for jobs by **title and/or industry**, ranked by résumé fit, in a **full-page
+browser tab** (roomy, uncluttered). Built in phases; this is Phase 1 (search + filters + ranked
+results). Phase 2 = tighter apply hand-off; Phase 3 = résumé tailoring with follow-up questions.
+
+**Cross-repo — CRITICAL setup (Wagner-GPT backend + Adzuna):**
+- Job data comes from the **Adzuna** free jobs API, proxied through the Wagner-GPT backend so **no key
+  ships in the extension**. New backend endpoint **`api/jobs.js`** (in `C:\Users\Jordon\Wagner-GPT\
+  wife-gpt`) — `POST {action:'search'|'categories', …}`. It reads **`ADZUNA_APP_ID` / `ADZUNA_APP_KEY`
+  from the backend env**; until those are set it returns a clear "not configured" message and the
+  feature shows that error. Register free at developer.adzuna.com → set both as Vercel env vars →
+  redeploy. (Adzuna has no clean remote flag, so remote:true just appends "remote" to the query.)
+- Backend base is `https://chatwillow.com/api` (same host as `/api/chat`). `api/jobs.js` follows the
+  same reflect-origin CORS as `chat.js`; Vercel auto-detects it as a function (no `vercel.json` change).
+
+**Extension (files):**
+- **`jobsearch.html` + `jobsearch.js` (NEW):** the full-page UI. Self-contained styles (no theme
+  coupling). Inputs: titles (comma-sep), **industry** (curated list — Software/IT, Cybersecurity, AI/ML,
+  Oil & Gas/Energy, Healthcare Tech, Manufacturing, Engineering, Any), location, salary min, remote,
+  full-time, country. Industry resolves to an Adzuna category by **matching the live category label**
+  (fetched via `action:'categories'`) — never a hardcoded tag — plus keyword augmentation for
+  sub-fields Adzuna doesn't categorize (Cybersecurity/AI live inside "IT Jobs"). Results are ranked by
+  résumé fit (batched AI call, same NDJSON `/api/chat` seam as autofill.js; falls back to a lexical
+  overlap score if the AI call fails or no résumé is saved). Cards show fit badge, salary, category, an
+  **"⚡ auto-fill ready"** pill when the posting URL is a known ATS host, and **Apply** (opens the
+  posting → the existing detect.js offer fires there) + **View posting**.
+- **Opened via** a new **"🔎 Search Jobs by Title & Industry"** button in the side panel's **Search**
+  tab → `chrome.tabs.create({url: chrome.runtime.getURL('jobsearch.html')})`. Own extension page, so
+  no `web_accessible_resources` / manifest change needed.
+
+**Verified:** `node --check` clean on `api/jobs.js`, `jobsearch.js`, and the extension JS; unit tests
+pass for industry→category resolution (by label match), title+keyword merge, salary formatting, and the
+Adzuna search-URL assembly. **Live E2E still needs** (a) the Adzuna key set in the backend env + a
+redeploy, and (b) an extension reload — then a real search from the new tab.
+
+**Next (this feature):** Phase 2 — make "Apply" auto-start the fill on landing (don't just rely on the
+offer) + save to Tracker. Phase 3 — "Tailor my résumé for this role": follow-up questions about your
+experience, saved as a new active résumé (never invents — only adds what you confirm).
+
+## Update 2026-07-06 — v1.8.5: Ashby, SmartRecruiters, Taleo, BrassRing adapters
 
 Added the last four ATS adapters, completing the planned set. Split by nature:
 

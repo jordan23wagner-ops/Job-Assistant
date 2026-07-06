@@ -2105,6 +2105,14 @@ ivPracticeInput.addEventListener('keydown', function (e) { if (e.key === 'Enter'
 
 const searchPrefsToggle = document.getElementById('search-prefs-toggle');
 const searchPrefs = document.getElementById('search-prefs');
+
+// Open the full-page job search (Adzuna-backed) in a new browser tab — roomy and uncluttered.
+const openJobSearchBtn = document.getElementById('open-job-search');
+if (openJobSearchBtn) {
+  openJobSearchBtn.addEventListener('click', function () {
+    chrome.tabs.create({ url: chrome.runtime.getURL('jobsearch.html') });
+  });
+}
 const searchRun = document.getElementById('search-run');
 const searchResultsInfo = document.getElementById('search-results-info');
 const searchSavePrefs = document.getElementById('search-save-prefs');
