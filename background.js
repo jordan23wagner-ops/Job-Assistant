@@ -46,6 +46,52 @@ chrome.tabs.onRemoved.addListener(function (tabId) {
   });
 });
 
+// ===== Auto-detect + offer on known ATS pages =====
+// On a completed load of a known-ATS page (Workday/Greenhouse/Lever/etc.) with no active autofill
+// session for that tab, inject detect.js — a tiny script that offers to auto-fill if the page
+// looks like an application form. Scoped to ATS_HOST_RE so we never inject into arbitrary sites
+// the user browses; plain company career sites still use the side panel's manual button. When the
+// user accepts, we start the exact same session the manual button does. "Not now" suppresses the
+// offer for that host for a while (in-memory; a worker restart may re-offer — harmless).
+var atsOfferDismissed = {}; // host -> timestamp
+var OFFER_DISMISS_TTL_MS = 6 * 60 * 60 * 1000;
+
+chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
+  if (info.status !== 'complete' || !tab || !tab.url) return;
+  if (!/^https?:/i.test(tab.url) || /(^|\.)linkedin\.com/i.test(tab.url)) return;
+  var host = '';
+  try { host = new URL(tab.url).hostname; } catch (e) { return; }
+  if (!ATS_HOST_RE.test(host)) return;
+  var dismissedAt = atsOfferDismissed[host];
+  if (dismissedAt && Date.now() - dismissedAt < OFFER_DISMISS_TTL_MS) return;
+  chrome.storage.local.get('autofillSessions', function (data) {
+    var s = (data.autofillSessions || {})[String(tabId)];
+    if (s && Date.now() - (s.startedAt || 0) < ATS_SESSION_TTL_MS) return; // autofill.js already owns this tab
+    setTimeout(function () {
+      chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['detect.js'] }).catch(function () {});
+    }, 1200);
+  });
+});
+
+chrome.runtime.onMessage.addListener(function (message, sender) {
+  if (!message || !sender || !sender.tab) return;
+  if (message.type === 'ATS_OFFER_ACCEPT') {
+    var tab = sender.tab;
+    var host = '';
+    try { host = new URL(tab.url).hostname; } catch (e) {}
+    chrome.storage.local.get('autofillSessions', function (data) {
+      var sessions = data.autofillSessions || {};
+      sessions[String(tab.id)] = { hostname: host, startedAt: Date.now() };
+      chrome.storage.local.set({ autofillSessions: sessions }, function () {
+        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }).catch(function () {});
+      });
+    });
+  }
+  if (message.type === 'ATS_OFFER_DISMISS' && message.host) {
+    atsOfferDismissed[message.host] = Date.now();
+  }
+});
+
 // ===== Self-healing content-script injection on LinkedIn =====
 // Manifest-registered content scripts only reach frames created AFTER the extension load and
 // never heal orphaned copies left behind by an extension reload. That made every fix depend on

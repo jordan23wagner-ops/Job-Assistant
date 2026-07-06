@@ -616,12 +616,167 @@
     });
   }
 
+  // ---------- ATS detection + adapter registry ----------
+  // Phase 1 establishes the seam only: every ATS resolves to behavior identical to today's
+  // generic engine. Phase 2/3 fill in the workday/greenhouse/lever adapters by adding optional
+  // hooks to their object here — anything a hook omits falls back to the shared generic engine,
+  // so an empty adapter {} is byte-for-byte today's behavior. Recognized hooks:
+  //   adapter.fillDropdowns(eeo)     -> async; ATS-specific custom dropdowns (e.g. Workday's
+  //                                     portaled "prompt option" listboxes). Runs BEFORE the
+  //                                     generic combobox pass. Returns a fill count.
+  //   adapter.fillTypeaheads(profile)-> async; ATS-specific autocomplete inputs that need a
+  //                                     type-then-pick (e.g. Greenhouse/Lever location). Returns
+  //                                     a fill count. On pick-failure it leaves the typed value,
+  //                                     so it never regresses the generic text fill.
+  //   adapter.blockingWall()         -> string|null; a hard human-only blocker (e.g. Workday's
+  //                                     verify-email wall). Non-null message => stop with a banner.
+  //   adapter.advancePatterns        -> RegExp[] replacing ADVANCE_PATTERNS for this ATS.
+  //   adapter.stopPatterns           -> RegExp[] replacing STOP_PATTERNS for this ATS.
+  function detectATS() {
+    var h = location.hostname.toLowerCase();
+    if (/(^|\.)(myworkdayjobs|myworkdaysite|workday)\./.test(h) || document.querySelector('[data-automation-id]')) return 'workday';
+    if (/(^|\.)greenhouse\.io$/.test(h) || document.getElementById('grnhse_app') || document.querySelector('form[action*="greenhouse"]')) return 'greenhouse';
+    if (/(^|\.)lever\.co$/.test(h) || document.querySelector('.application-form, [data-qa="application-form"], form[action*="lever"]')) return 'lever';
+    return 'generic';
+  }
+  // ---------- Workday adapter (Phase 2) ----------
+  // Workday differs from a plain HTML form in three ways this adapter handles:
+  //  1. Dropdowns aren't <select> or role=combobox+role=option — they're a button
+  //     (aria-haspopup="listbox") that opens a PORTALED list of [data-automation-id="promptOption"]
+  //     items rendered at the end of <body>. wdFillDropdowns opens EEO/known ones and picks.
+  //  2. An account is created BEFORE the form (email + password + verifyPassword + an agree
+  //     checkbox + a "Create Account" button). Per the product decision, Create Account IS
+  //     auto-clicked (it's in WD_ADVANCE, and removed from WD_STOP); the agree checkbox is ticked
+  //     here. Generic fillPasswordFields fills BOTH password fields with the same generated value,
+  //     so they match. The FINAL application "Submit" is still never auto-clicked.
+  //  3. After Create Account, Workday shows an email-verification wall (a real page nav, so
+  //     autofill.js is re-injected and re-runs) — wdBlockingWall detects it and stops with a
+  //     clear banner, since only the human can click the link in the inbox.
+  async function wdFillDropdowns(eeo) {
+    var filled = 0;
+
+    // (a) Account-creation page: tick the agree-to-terms checkbox so Create Account can submit.
+    // Only the agreement box (by data-automation-id or an agree/terms/consent label), or — if
+    // there's exactly one checkbox on the page — that one. Avoids opting into a marketing box.
+    if (document.querySelector('[data-automation-id="createAccountSubmitButton"], [data-automation-id="createAccountCheckbox"]')) {
+      var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type="checkbox"]'));
+      var candidates = boxes.filter(function (cb) {
+        if (cb.checked || cb.disabled) return false;
+        var sig = signals(cb) + ' ' + norm(labelText(cb));
+        var aid = norm(cb.getAttribute('data-automation-id') || '');
+        return /agree|terms|consent|acknowledge|privacy|create account/.test(sig) || /createaccount|agree|terms/.test(aid);
+      });
+      if (!candidates.length && boxes.length === 1 && !boxes[0].checked && !boxes[0].disabled) candidates = boxes;
+      candidates.forEach(function (cb) { try { cb.click(); filled++; } catch (e) {} });
+    }
+
+    // (b) Workday prompt-option dropdowns. EEO/known keys only — unknown dropdowns are left for
+    // the human in Phase 2. (Native <select> + role=option widgets are handled by the generic
+    // fillEeoSelects/fillEeoComboboxes passes that run alongside this one.)
+    var triggers = document.querySelectorAll('button[aria-haspopup="listbox"], [aria-haspopup="listbox"]');
+    for (var ti = 0; ti < triggers.length; ti++) {
+      var trig = triggers[ti];
+      try {
+        if (trig.tagName === 'SELECT' || trig.tagName === 'INPUT' || trig.disabled || !visible(trig)) continue;
+        var cur = norm(getText(trig));
+        var isEmpty = !cur || /^(select|choose|please select)/.test(cur);
+        if (!isEmpty) continue; // already has a real selection
+        var ff = trig.closest('[data-automation-id^="formField-"]');
+        var s = norm([signals(trig), ff ? ff.getAttribute('data-automation-id') : ''].filter(Boolean).join(' '));
+        var key = eeoKey(s);
+        if (!key || !eeo[key]) continue;
+
+        fireClick(trig);
+        await sleep(300);
+        var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
+        var best = null, bs = 0;
+        for (var oi = 0; oi < opts.length; oi++) {
+          var opt = opts[oi];
+          if (!visible(opt)) continue;
+          var otext = opt.getAttribute('data-automation-label') || getText(opt);
+          var sc = score(otext, eeo[key]);
+          if (sc > bs) { bs = sc; best = opt; }
+        }
+        if (best && bs >= 45) { fireClick(best); await sleep(150); filled++; }
+        else { trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); }
+      } catch (e) { /* one odd widget shouldn't abort the rest */ }
+    }
+    return filled;
+  }
+
+  function wdBlockingWall() {
+    if (!document.body) return null;
+    var t = norm(document.body.innerText || '');
+    var verify = /verify your email|verify email address|check your email|verification email|verification link|we sent you|we have sent you|we emailed you|please verify your email/.test(t);
+    if (!verify) return null;
+    // Only a wall if there's essentially no form to fill on this page (otherwise it's a normal
+    // page that merely mentions email verification somewhere).
+    var ctrls = document.querySelectorAll('input:not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea');
+    var visibleCtrls = 0;
+    for (var i = 0; i < ctrls.length; i++) { if (visible(ctrls[i])) visibleCtrls++; }
+    if (visibleCtrls >= 2) return null;
+    return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
+  }
+
+  // Create Account is auto-clicked (advance); the final application Submit is not (stop).
+  var WD_ADVANCE = ADVANCE_PATTERNS.concat([/create account/]);
+  var WD_STOP = [/submit application/, /submit your application/, /^submit$/, /finish application/, /complete application/, /^apply$/, /^apply now$/];
+
+  // ---------- Greenhouse + Lever adapter (Phase 3) ----------
+  // Greenhouse and Lever are single-page forms whose standard fields, EEO selects, and custom
+  // questions are already handled by the generic engine (Submit is caught by the generic stop
+  // patterns; there's no multi-step Next to tune). Their one shared generic gap is the LOCATION
+  // field: it's a Google-Places / listbox autocomplete, and typing a value without picking a
+  // suggestion can fail validation. atsFillLocationTypeahead types "City, State" and picks the
+  // first suggestion; if no dropdown appears it leaves the typed value (identical to generic —
+  // so this can only help, never regress). Best-effort selectors; see the console diagnostic in
+  // the handoff if a specific site's location field doesn't pick.
+  async function atsFillLocationTypeahead(profile) {
+    var city = profile && profile.city;
+    if (!city) return 0;
+    var query = [city, profile.state].filter(Boolean).join(', ');
+    var filled = 0;
+    var inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      if (!visible(el) || el.disabled || el.readOnly) continue;
+      if (el.getAttribute('data-alicia-typeahead')) continue;
+      if (!/\blocation\b/.test(signals(el))) continue; // location-specific only
+      try {
+        el.focus();
+        setNativeValue(el, query);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+        el.setAttribute('data-alicia-typeahead', '1');
+        await sleep(650);
+        var opts = document.querySelectorAll('.pac-item, #location_autocomplete_dropdown li, .location-dropdown li, ul[role="listbox"] li[role="option"], [role="listbox"] [role="option"]');
+        var pick = null;
+        for (var o = 0; o < opts.length; o++) { if (visible(opts[o])) { pick = opts[o]; break; } }
+        if (pick) { fireClick(pick); await sleep(150); filled++; }
+        // else: leave the typed value (same as the generic city fill would).
+      } catch (e) { /* leave typed value */ }
+    }
+    return filled;
+  }
+
+  var ADAPTERS = {
+    generic: {},
+    workday: { fillDropdowns: wdFillDropdowns, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP },
+    greenhouse: { fillTypeaheads: atsFillLocationTypeahead },
+    lever: { fillTypeaheads: atsFillLocationTypeahead }
+  };
+
   // ---------- main ----------
   window.__aliciaAutofillRun = async function () {
     if (busy) return;
     busy = true;
     var state = { generatedCredential: null };
-    var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0 };
+    var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, ats: 'generic' };
+    var atsName = detectATS();
+    var adapter = ADAPTERS[atsName] || {};
+    result.ats = atsName;
+    var advancePatterns = adapter.advancePatterns || ADVANCE_PATTERNS;
+    var stopPatterns = adapter.stopPatterns || STOP_PATTERNS;
 
     try {
       var data = await storageGet(['profile', 'eeoPrefs', 'siteCredentials', 'customQA', 'resumeText', 'resumeFile']);
@@ -638,12 +793,26 @@
         return result;
       }
 
+      // Adapter-specific hard blocker (e.g. Workday's email-verification wall) — only the human
+      // can clear it, so stop with a clear banner rather than churning on an empty page.
+      if (adapter.blockingWall) {
+        var wallMsg = adapter.blockingWall();
+        if (wallMsg) {
+          result.status = 'stopped_needs_input';
+          showBanner(wallMsg, '#e0a800');
+          report(result);
+          return result;
+        }
+      }
+
       async function fillOnePass() {
         var n = 0;
         n += fillStdFields(profile);
+        if (adapter.fillTypeaheads) { try { n += await adapter.fillTypeaheads(profile); } catch (e) {} }
         n += fillPasswordFields(profile, siteCredentials, state);
         n += fillEeoSelects(eeo);
         n += fillEeoRadios(eeo);
+        if (adapter.fillDropdowns) { try { n += await adapter.fillDropdowns(eeo); } catch (e) {} }
         n += await fillEeoComboboxes(eeo);
         var ra = attachResume(resumeFile);
         result.resumeAttached += ra;
@@ -673,6 +842,13 @@
         result.status = 'no_fields_found';
       } else {
         for (var step = 0; step < MAX_STEPS; step++) {
+          // A page nav may have landed us on an adapter hard blocker mid-wizard (e.g. Workday's
+          // verify-email wall appears right after Create Account) — stop cleanly if so.
+          if (adapter.blockingWall) {
+            var midWall = adapter.blockingWall();
+            if (midWall) { result.status = 'stopped_needs_input'; showBanner(midWall, '#e0a800'); break; }
+          }
+
           // AI-answer whatever the learned bank couldn't cover; anything STILL empty after
           // that is a question Alicia has never seen — the Jobright loop: stop, let the human
           // fill it, and bank their answer the moment they click Continue (attachConfirmCapture
@@ -707,7 +883,7 @@
             }
           }
 
-          var stopBtn = findButton(STOP_PATTERNS);
+          var stopBtn = findButton(stopPatterns);
           if (stopBtn) {
             result.status = 'ready_to_submit';
             result.readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim();
@@ -719,7 +895,7 @@
             showBanner('Filled what it could — this step needs your input.', '#e0a800');
             break;
           }
-          var nextBtn = findButton(ADVANCE_PATTERNS);
+          var nextBtn = findButton(advancePatterns);
           if (!nextBtn) { result.status = 'done_no_more_fields'; break; }
 
           nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
