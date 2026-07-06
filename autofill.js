@@ -651,8 +651,39 @@
     if (/(^|\.)(myworkdayjobs|myworkdaysite|workday)\./.test(h) || document.querySelector('[data-automation-id]')) return 'workday';
     if (/(^|\.)greenhouse\.io$/.test(h) || document.getElementById('grnhse_app') || document.querySelector('form[action*="greenhouse"]')) return 'greenhouse';
     if (/(^|\.)lever\.co$/.test(h) || document.querySelector('.application-form, [data-qa="application-form"], form[action*="lever"]')) return 'lever';
+    if (/(^|\.)icims\.com$/.test(h) || document.querySelector('.iCIMS_MainWrapper, #icims_content, form#quickForm, [id^="icims_"]')) return 'icims';
     return 'generic';
   }
+  // ---------- shared account-gate helpers (Workday, iCIMS) ----------
+  // Tick the agree-to-terms checkbox on an account-creation page so Create Account / Register can
+  // submit. Only the agreement box (by data-automation-id or an agree/terms/consent label), or — if
+  // there's exactly one checkbox on the page — that one. Avoids opting into a marketing box. Returns
+  // the number ticked.
+  function tickAccountAgreement() {
+    var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type="checkbox"]'));
+    var candidates = boxes.filter(function (cb) {
+      if (cb.checked || cb.disabled) return false;
+      var sig = signals(cb) + ' ' + norm(labelText(cb));
+      var aid = norm(cb.getAttribute('data-automation-id') || '');
+      return /agree|terms|consent|acknowledge|privacy|create account/.test(sig) || /createaccount|agree|terms/.test(aid);
+    });
+    if (!candidates.length && boxes.length === 1 && !boxes[0].checked && !boxes[0].disabled) candidates = boxes;
+    candidates.forEach(function (cb) { try { cb.click(); } catch (e) {} });
+    return candidates.length;
+  }
+  // True when the page is essentially just an email-verification wall: verify phrases present AND
+  // almost no form to fill (so it's the wall itself, not a normal page that merely mentions it).
+  function isVerifyEmailWall() {
+    if (!document.body) return false;
+    var t = norm(document.body.innerText || '');
+    var verify = /verify your email|verify email address|check your email|verification email|verification link|we sent you|we have sent you|we emailed you|please verify your email/.test(t);
+    if (!verify) return false;
+    var ctrls = document.querySelectorAll('input:not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea');
+    var visibleCtrls = 0;
+    for (var i = 0; i < ctrls.length; i++) { if (visible(ctrls[i])) visibleCtrls++; }
+    return visibleCtrls < 2;
+  }
+
   // ---------- Workday adapter (Phase 2) ----------
   // Workday differs from a plain HTML form in three ways this adapter handles:
   //  1. Dropdowns aren't <select> or role=combobox+role=option — they're a button
@@ -711,18 +742,8 @@
     var filled = 0;
 
     // (a) Account-creation page: tick the agree-to-terms checkbox so Create Account can submit.
-    // Only the agreement box (by data-automation-id or an agree/terms/consent label), or — if
-    // there's exactly one checkbox on the page — that one. Avoids opting into a marketing box.
     if (document.querySelector('[data-automation-id="createAccountSubmitButton"], [data-automation-id="createAccountCheckbox"]')) {
-      var boxes = Array.prototype.slice.call(document.querySelectorAll('input[type="checkbox"]'));
-      var candidates = boxes.filter(function (cb) {
-        if (cb.checked || cb.disabled) return false;
-        var sig = signals(cb) + ' ' + norm(labelText(cb));
-        var aid = norm(cb.getAttribute('data-automation-id') || '');
-        return /agree|terms|consent|acknowledge|privacy|create account/.test(sig) || /createaccount|agree|terms/.test(aid);
-      });
-      if (!candidates.length && boxes.length === 1 && !boxes[0].checked && !boxes[0].disabled) candidates = boxes;
-      candidates.forEach(function (cb) { try { cb.click(); filled++; } catch (e) {} });
+      filled += tickAccountAgreement();
     }
 
     // (b) Workday prompt-option dropdowns: EEO/demographics from saved prefs, plus State/Province
@@ -753,16 +774,7 @@
   }
 
   function wdBlockingWall() {
-    if (!document.body) return null;
-    var t = norm(document.body.innerText || '');
-    var verify = /verify your email|verify email address|check your email|verification email|verification link|we sent you|we have sent you|we emailed you|please verify your email/.test(t);
-    if (!verify) return null;
-    // Only a wall if there's essentially no form to fill on this page (otherwise it's a normal
-    // page that merely mentions email verification somewhere).
-    var ctrls = document.querySelectorAll('input:not([type="hidden"]):not([type="button"]):not([type="submit"]), select, textarea');
-    var visibleCtrls = 0;
-    for (var i = 0; i < ctrls.length; i++) { if (visible(ctrls[i])) visibleCtrls++; }
-    if (visibleCtrls >= 2) return null;
+    if (!isVerifyEmailWall()) return null;
     return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
   }
 
@@ -907,6 +919,32 @@
   var WD_ADVANCE = ADVANCE_PATTERNS.concat([/create account/]);
   var WD_STOP = [/submit application/, /submit your application/, /^submit$/, /finish application/, /complete application/, /^apply$/, /^apply now$/];
 
+  // ---------- iCIMS adapter ----------
+  // iCIMS is largely standard HTML (native <select>/radio/text + a resume file input), so the
+  // generic engine already fills its contact fields, EEO selects, and custom questions (its
+  // firstname/lastname/homePhone/postalCode ids match the generic matchers). The adapter adds only
+  // what's iCIMS-specific:
+  //  - detection: hostname *.icims.com, or the iCIMS_ wrapper markup when the form is embedded in an
+  //    iframe (background.js injects autofill.js into the icims iframe, so this runs inside it).
+  //  - the account gate (per the Workday/iCIMS product decision): Create Account/Register IS
+  //    auto-clicked (in ICIMS_ADVANCE, out of ICIMS_STOP); icimsFillDropdowns ticks the agreement
+  //    checkbox when the page has a password field + a register/create button. The final Submit/Apply
+  //    is still never auto-clicked.
+  //  - the email-verification wall (same detector as Workday).
+  function icimsAccountPage() {
+    if (!document.querySelector('input[type="password"]')) return false;
+    return !!findButton([/create account/, /create your account/, /^register$/, /^sign up$/]);
+  }
+  async function icimsFillDropdowns(eeo, profile) {
+    return icimsAccountPage() ? tickAccountAgreement() : 0;
+  }
+  function icimsBlockingWall() {
+    if (!isVerifyEmailWall()) return null;
+    return 'iCIMS sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
+  }
+  var ICIMS_ADVANCE = ADVANCE_PATTERNS.concat([/create account/, /create your account/, /^register$/, /^sign up$/]);
+  var ICIMS_STOP = WD_STOP; // final Submit/Apply/Finish only
+
   // ---------- Greenhouse + Lever adapter (Phase 3) ----------
   // Greenhouse and Lever are single-page forms whose standard fields, EEO selects, and custom
   // questions are already handled by the generic engine (Submit is caught by the generic stop
@@ -948,7 +986,8 @@
     generic: {},
     workday: { fillDropdowns: wdFillDropdowns, findDropdownQuestions: wdFindDropdownQuestions, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP },
     greenhouse: { fillTypeaheads: atsFillLocationTypeahead },
-    lever: { fillTypeaheads: atsFillLocationTypeahead }
+    lever: { fillTypeaheads: atsFillLocationTypeahead },
+    icims: { fillDropdowns: icimsFillDropdowns, blockingWall: icimsBlockingWall, advancePatterns: ICIMS_ADVANCE, stopPatterns: ICIMS_STOP }
   };
 
   // ---------- main ----------

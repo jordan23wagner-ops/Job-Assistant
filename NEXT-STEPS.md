@@ -5,7 +5,7 @@ don't re-derive it or repeat solved mistakes) and specs the **next three feature
 
 - **Repo:** https://github.com/jordan23wagner-ops/Job-Assistant
 - **Canonical local folder (LOAD THIS ONE):** `C:\Users\Jordon\Job-Assistant`
-- **Current version:** v1.8.3 (in `manifest.json` and the side-panel header)
+- **Current version:** v1.8.4 (in `manifest.json` and the side-panel header)
 - Also read `HANDOFF.md` in this repo for the full version-by-version history.
 
 ---
@@ -43,7 +43,9 @@ autofill.js     Standalone engine injected into NON-LinkedIn ATS pages (and cros
                 primitive (single-select enumerated + searchable type-to-search, and multi-select
                 chip fields; EEO/State/Country + non-EEO questions through the AI answer flow) +
                 account-gate auto-create + email-verify wall; Greenhouse/Lever adapter = location
-                typeahead pick.
+                typeahead pick; iCIMS adapter = detection + account-gate auto-create + email-verify
+                wall (mostly standard HTML the generic engine already fills). Shared account-gate
+                helpers: tickAccountAgreement(), isVerifyEmailWall() (Workday + iCIMS).
 detect.js       (v1.8.0) Tiny offer script. background.js injects it on known-ATS hosts (ATS_HOST_RE)
                 with no active session; floats "Auto-fill this application?". Accept -> background
                 starts the same autofillSessions flow as the manual button. Never fills/submits itself.

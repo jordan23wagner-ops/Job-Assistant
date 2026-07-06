@@ -1,6 +1,40 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-06 (latest) — v1.8.3: Workday multi-select prompt fields (Phase 2d)
+## Update 2026-07-06 (latest) — v1.8.4: iCIMS adapter
+
+Added an `icims` adapter. iCIMS is largely standard HTML (native `<select>`/radio/text + a resume
+file input), so the generic engine already fills its contact fields, EEO selects, and custom
+questions — its `firstname`/`lastname`/`homePhone`/`postalCode` ids match the generic matchers. The
+adapter adds only what's iCIMS-specific:
+
+- **Detection** (`detectATS`): hostname `*.icims.com`, or the `iCIMS_` wrapper markup
+  (`.iCIMS_MainWrapper`, `#icims_content`, `form#quickForm`, `[id^="icims_"]`) when the form is
+  embedded in an iframe. Note iCIMS forms are usually embedded on the company careers page via an
+  iframe whose src is `*.icims.com`; `background.js` already injects `autofill.js` into ATS iframes
+  (`ATS_HOST_RE` includes icims), so the adapter runs INSIDE that iframe.
+- **Account gate** (per the Workday/iCIMS product decision — auto-create): Create Account / Register /
+  Sign Up is auto-clicked (`ICIMS_ADVANCE`; removed from `ICIMS_STOP` = `WD_STOP`). `icimsFillDropdowns`
+  ticks the agreement checkbox when the page has a password field AND a register/create button
+  (`icimsAccountPage`). Generic `fillPasswordFields` fills password + confirm with the same generated
+  value. The final **Submit/Apply is never auto-clicked.** "Login"/"Sign In" are NOT auto-clicked.
+- **Email-verification wall** (`icimsBlockingWall`): same detector as Workday.
+
+**Refactor:** the account-agreement checkbox logic and the verify-email-wall detector were extracted
+into shared `tickAccountAgreement()` and `isVerifyEmailWall()` (used by both Workday and iCIMS).
+Workday behavior is unchanged (same logic, now shared).
+
+**Verified:** `node --check` clean; unit tests pass for iCIMS host detection, account-gate routing
+(Create Account/Register/Sign Up → advance; Submit/Apply → stop; Login/Sign In → neither), and the
+agreement-checkbox selection (tick only agree/terms box; single-box fallback; tick nothing when only
+marketing boxes). **Live load test still needed** — iCIMS DOM varies (classic iForm vs. the newer
+Talent Cloud); if custom (non-native) dropdowns appear in the newer UI, they'd need an iCIMS
+`fillDropdowns`/`findDropdownQuestions` like Workday's (not built — classic iCIMS uses native selects
+the generic engine handles).
+
+**ATS coverage now:** Workday (full), Greenhouse, Lever, iCIMS have adapters; generic handles the
+rest. Ashby / SmartRecruiters / Taleo / BrassRing are still generic-only.
+
+## Update 2026-07-06 — v1.8.3: Workday multi-select prompt fields (Phase 2d)
 
 Workday multi-select fields (Skills, Languages, multi-pick "how did you hear") are a typed input
 inside `[data-automation-id="multiSelectContainer"]` whose picks render as chips
