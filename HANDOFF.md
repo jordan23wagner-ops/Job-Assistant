@@ -1,6 +1,43 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-06 (latest) — v1.8.2: Workday searchable dropdowns / type-to-search (Phase 2c)
+## Update 2026-07-06 (latest) — v1.8.3: Workday multi-select prompt fields (Phase 2d)
+
+Workday multi-select fields (Skills, Languages, multi-pick "how did you hear") are a typed input
+inside `[data-automation-id="multiSelectContainer"]` whose picks render as chips
+(`[data-automation-id="selectedItem"]`) — NOT a `button[aria-haspopup="listbox"]`, so neither the
+single-select fill nor the single-select discovery saw them. Phase 2d wires them into the same
+custom-question pipeline, answering multiple values.
+
+**`autofill.js`:**
+- `wdFindMultiselectQuestions(eeo)` discovers each visible, empty (no chips), non-EEO multiselect
+  container with a labelled input and emits a custom-question item with **`multi: true`**,
+  `type:'text'`, `options:[]`.
+- `callCustomAnswerBackend` formats `multi` items as **"[list one or more values from the resume,
+  comma-separated]"** (the truthful/resume-only system prompt is unchanged — no invented skills).
+- `wdAddMultiValues(container, answerText)` (the item's `apply`) splits the answer on `,`/`;`/newline
+  and, for each value, types it into the multiselect input, waits for the promptOption list, and
+  clicks the best match (≥45) to add a chip; unmatched values are cleared so no stray text lingers.
+- `getValue` reads the chip texts joined by ", " — so the human's reviewed/edited set is what gets
+  learned on the confirm click.
+- `wdFindDropdownQuestions` now appends the multiselect results to the single-select results (one
+  hook, shared `CUSTOM_QA_MAX_PER_STEP` cap). Disjoint from the single-select scan (that scans
+  `button[aria-haspopup="listbox"]`; multiselects use an input), and `wdFillDropdowns` skips inputs,
+  so no double-handling.
+
+**Safety:** multiselect answers are AI-generated from resume facts and, like all AI answers, **pause
+for human review** before Submit (the human can remove chips) — consistent with the never-auto-submit,
+never-invent guardrails. EEO/demographic multiselects are excluded.
+
+**Verified:** `node --check` clean; unit tests pass for value splitting (`,`/`;`/newline), the
+multi prompt label, apply match/no-match, and the chip `getValue` join. **Live load test still
+needed** for the real type→list→click-chip cycle and multi-value adds on a Workday Skills/Languages
+field.
+
+**Remaining Workday gaps:** none tracked beyond tuning (search wait time under heavy latency). The
+Workday adapter now covers standard fields, EEO, account gate + verify wall, single-select
+(enumerated + searchable) and multi-select prompt questions.
+
+## Update 2026-07-06 — v1.8.2: Workday searchable dropdowns / type-to-search (Phase 2c)
 
 Workday has two dropdown kinds: small enumerated lists (render options immediately) and SEARCHABLE
 lists — Country, School, State/Province — that render NOTHING until you type. Phases 2/2b handled

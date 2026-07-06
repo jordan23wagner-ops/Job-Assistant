@@ -543,9 +543,11 @@
   async function callCustomAnswerBackend(items, resumeText) {
     var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. If you cannot reasonably answer from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
     var qLines = items.map(function (it, i) {
-      var typeLabel = (it.type === 'select' || it.type === 'radio')
-        ? ('[choose one: ' + it.options.join(' | ') + ']')
-        : (it.type === 'textarea' ? '[short paragraph]' : '[short answer]');
+      var typeLabel = it.multi
+        ? '[list one or more values from the resume, comma-separated]'
+        : (it.type === 'select' || it.type === 'radio')
+          ? ('[choose one: ' + it.options.join(' | ') + ']')
+          : (it.type === 'textarea' ? '[short paragraph]' : '[short answer]');
       return (i + 1) + '. ' + typeLabel + ' ' + it.label;
     }).join('\n');
     var user = pageJobContext() + '\n\nCandidate Resume:\n' + (resumeText || '').slice(0, 6000) + '\n\nQuestions:\n' + qLines;
@@ -634,10 +636,12 @@
   //                                     so it never regresses the generic text fill.
   //   adapter.findDropdownQuestions(eeo)-> async; returns custom-question items for ATS dropdowns
   //                                     the generic <select>/radio/text discovery can't see (e.g.
-  //                                     Workday's prompt-option dropdowns). Each item carries its
-  //                                     own async apply(answerText) + getValue() so it flows through
-  //                                     the learned-bank -> AI -> learn-from-human pipeline. EEO/
-  //                                     demographic dropdowns are excluded (never AI-answered).
+  //                                     Workday's single-select prompt dropdowns AND multi-select
+  //                                     chip fields). Each item carries its own async apply(answerText)
+  //                                     + getValue() so it flows through the learned-bank -> AI ->
+  //                                     learn-from-human pipeline; multi-select items set multi:true
+  //                                     (AI returns comma-separated values). EEO/demographic dropdowns
+  //                                     are excluded (never AI-answered).
   //   adapter.blockingWall()         -> string|null; a hard human-only blocker (e.g. Workday's
   //                                     verify-email wall). Non-null message => stop with a banner.
   //   adapter.advancePatterns        -> RegExp[] replacing ADVANCE_PATTERNS for this ATS.
@@ -783,9 +787,84 @@
     return { options: labels, searchable: searchable };
   }
 
-  // Discover Workday's NON-EEO prompt-option dropdowns as custom questions so they flow through the
-  // learned-bank -> batched-AI -> learn-from-human pipeline like any other question. EEO dropdowns
-  // are excluded (handled by wdFillDropdowns from saved prefs — we never AI-guess demographics).
+  // ---- Workday MULTI-select prompt fields (Skills, Languages, multi-pick Source, …) ----
+  // A typed input inside a [data-automation-id="multiSelectContainer"] whose picks render as chips
+  // ([data-automation-id="selectedItem"]). Not a button[aria-haspopup="listbox"], so the single-
+  // select scan can't see them. The AI returns comma-separated values; wdAddMultiValues types each
+  // into the input, waits for the promptOption list, and clicks the best match to add a chip.
+  function wdMultiselectContainers() {
+    return document.querySelectorAll('[data-automation-id="multiSelectContainer"], [data-automation-id="multiselectInputContainer"]');
+  }
+  function wdMultiselectInput(container) {
+    return container.querySelector('input[type="text"], input:not([type]), input[role="combobox"]');
+  }
+  function wdSelectedChips(container) {
+    return container.querySelectorAll('[data-automation-id="selectedItem"], [data-automation-id^="selectedItem"]');
+  }
+  async function wdAddMultiValues(container, answerText) {
+    if (!answerText) return false;
+    var input = wdMultiselectInput(container);
+    if (!input || !visible(input) || input.disabled) return false;
+    var values = String(answerText).split(/[;,\n]/).map(function (v) { return v.trim(); }).filter(Boolean);
+    if (!values.length) return false;
+    fireClick(input);
+    await sleep(150);
+    var added = 0;
+    for (var vi = 0; vi < values.length; vi++) {
+      input.focus();
+      setNativeValue(input, values[vi]);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(700);
+      var opts = wdVisibleOptions();
+      var best = null, bs = 0;
+      for (var i = 0; i < opts.length; i++) {
+        var otext = opts[i].getAttribute('data-automation-label') || getText(opts[i]);
+        var sc = score(otext, values[vi]);
+        if (sc > bs) { bs = sc; best = opts[i]; }
+      }
+      if (best && bs >= 45) { fireClick(best); await sleep(200); added++; }
+      else { // no match — clear the stray typed text so it doesn't linger, then try the next value
+        setNativeValue(input, '');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        await sleep(120);
+      }
+    }
+    return added > 0;
+  }
+  async function wdFindMultiselectQuestions(eeo) {
+    var out = [];
+    var conts = wdMultiselectContainers();
+    for (var ci = 0; ci < conts.length; ci++) {
+      var cont = conts[ci];
+      try {
+        if (!visible(cont) || wdSelectedChips(cont).length) continue; // hidden or already has picks
+        var input = wdMultiselectInput(cont);
+        if (!input || input.disabled) continue;
+        var ff = cont.closest('[data-automation-id^="formField-"]');
+        var sig = norm([signals(input), ff ? ff.getAttribute('data-automation-id') : '', labelText(cont)].filter(Boolean).join(' '));
+        if (eeoKey(sig)) continue; // never AI-guess demographics
+        var label = (labelText(input) || labelText(cont) || '').replace(/\s+/g, ' ').trim();
+        if (!label || label.length < 5) continue;
+        out.push({
+          type: 'text', multi: true,
+          container: ff || cont,
+          label: label,
+          options: [],
+          apply: (function (c) { return function (ans) { return wdAddMultiValues(c, ans); }; })(cont),
+          getValue: (function (c) { return function () {
+            return Array.prototype.map.call(wdSelectedChips(c), function (p) { return getText(p); }).filter(Boolean).join(', ');
+          }; })(cont)
+        });
+      } catch (e) { /* one odd widget shouldn't abort discovery */ }
+    }
+    return out;
+  }
+
+  // Discover Workday's NON-EEO prompt-option dropdowns (single-select AND multi-select) as custom
+  // questions so they flow through the learned-bank -> batched-AI -> learn-from-human pipeline like
+  // any other question. EEO dropdowns are excluded (filled by wdFillDropdowns from saved prefs — we
+  // never AI-guess demographics).
   async function wdFindDropdownQuestions(eeo) {
     var out = [];
     var triggers = document.querySelectorAll('button[aria-haspopup="listbox"]');
@@ -818,6 +897,9 @@
         });
       } catch (e) { /* one odd widget shouldn't abort discovery */ }
     }
+    // Multi-select prompt fields (chips), same pipeline, capped alongside the single-selects.
+    var ms = await wdFindMultiselectQuestions(eeo);
+    for (var mi = 0; mi < ms.length && out.length < CUSTOM_QA_MAX_PER_STEP; mi++) out.push(ms[mi]);
     return out;
   }
 
