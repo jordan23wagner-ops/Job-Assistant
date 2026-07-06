@@ -1,5 +1,67 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-06 — v1.8.0: external-ATS adapter framework + auto-detect offer
+
+Expanded external-ATS autofill from one generic pass into a **detector → adapter** architecture,
+plus an auto-detect entry point so an application can be filled on a company/ATS site without
+opening the side panel. Shipped in three phases; all on the same free backend, still never
+auto-submits the final Apply.
+
+**Phase 1 — adapter seam + auto-detect/offer (`autofill.js`, new `detect.js`, `background.js`):**
+- `detectATS()` returns `workday | greenhouse | lever | generic` (hostname + DOM signature);
+  `ADAPTERS` is the registry. An **empty adapter `{}` is byte-for-byte the old generic engine** —
+  the refactor is a pure seam, no behavior change on unknown sites. The main run resolves
+  `adapter = ADAPTERS[detectATS()]`, routes dropdown fill + advance/stop lookups through it, and
+  sets `result.ats`. Hook interface (all optional, generic fallback if omitted):
+  `fillDropdowns(eeo)`, `fillTypeaheads(profile)`, `blockingWall()`, `advancePatterns`,
+  `stopPatterns` — documented in a comment block above the registry.
+- **`detect.js` (NEW):** a tiny offer script. `background.js` injects it on a completed load of a
+  known-ATS host (scoped to `ATS_HOST_RE`, so it NEVER runs on arbitrary sites the user browses)
+  when there's no active session for the tab and the host wasn't dismissed in the last 6h. It
+  checks for a real application form (same signal as `hasRecognizedForm`) and floats
+  "⚡ Auto-fill this application?". **Accept** messages `ATS_OFFER_ACCEPT` → background starts the
+  exact same `autofillSessions` flow the manual button uses (so re-injection + `UNIVERSAL_FILL_RESULT`
+  reporting already work). **Not now** → `ATS_OFFER_DISMISS` records the host (in-memory; a worker
+  restart may re-offer — harmless). No manifest change: `scripting` + `<all_urls>` already allow
+  programmatic injection, so no re-accept prompt on reload.
+
+**Phase 2 — Workday adapter (`wdFillDropdowns`, `wdBlockingWall`, `WD_ADVANCE`/`WD_STOP`):**
+- **Prompt-option dropdowns:** Workday dropdowns are a `button[aria-haspopup="listbox"]` opening a
+  PORTALED list of `[data-automation-id="promptOption"]` (`data-automation-label` = option text) at
+  the end of `<body>` — not `<select>` and not `role=option`. `wdFillDropdowns` opens EEO/known ones
+  (matched via the `formField-*` container id + label → `eeoKey`), scores options, picks or Escapes.
+  Runs before the generic combobox pass; unknown dropdowns are left for the human (Phase 2 scope).
+- **Account gate (auto-submit, per Jordon's call):** on the create-account page it ticks ONLY the
+  agreement checkbox (by `data-automation-id`/agree-terms label, or the sole checkbox — avoids
+  marketing opt-ins); generic `fillPasswordFields` fills both password + verifyPassword with the same
+  generated value so they match; **"Create Account" is auto-clicked** (it's in `WD_ADVANCE`, removed
+  from `WD_STOP`). The final application **Submit is still never auto-clicked.**
+- **Email-verification wall:** `wdBlockingWall()` detects the post-create-account verify screen
+  (verify phrases + essentially no form) and stops with a clear banner. Checked at run start AND at
+  the top of each wizard step, because Create Account triggers a real page nav that re-injects and
+  re-runs `autofill.js`.
+
+**Phase 3 — Greenhouse + Lever adapters (`atsFillLocationTypeahead`):**
+- Both are single-page forms already handled by the generic engine (standard fields, EEO selects,
+  custom questions; generic stop patterns catch "Submit Application"). No pattern override, no gate.
+- Their one shared generic gap is the **location autocomplete** — generic types the city but never
+  picks the suggestion, which can fail validation. `atsFillLocationTypeahead` types "City, State" and
+  picks the first suggestion (`.pac-item`, listbox options, Greenhouse's dropdown). **On pick-failure
+  it leaves the typed value = identical to generic, so it can only help, never regress.**
+
+**Verification (this session):** `node --check` clean on all JS + valid `manifest.json`; unit tests
+pass for host detection, Workday advance/stop routing + `eeoKey` on `formField-*` ids + wall phrases,
+and Greenhouse/Lever field matching + the location signal. **Still needs Jordon's live load test** for
+the interactive DOM (Workday dropdown pick, GH/Lever location pick, offer→fill handoff) — the
+`promptOption`/suggestion-container selectors are best-effort against current ATS DOM. Console
+diagnostics for tightening selectors are in the session notes (dropdown dump for Workday; suggestion
+dump for GH/Lever).
+
+**Next tuning candidates:** Workday **custom (non-EEO) question dropdowns** don't yet route through the
+learned/AI batched flow (only native `<select>` + radios do); wiring `promptOption` questions into
+`findUnansweredCustomQuestions` is the natural Phase 2b. iCIMS/Taleo/Ashby/SmartRecruiters remain
+generic-only (adapters not built).
+
 ## Update 2026-07-01 — v1.3.0: Easy Apply refinements (banking, resume, post-submit)
 
 Three fixes after v1.2.0 confirmed Easy Apply works:

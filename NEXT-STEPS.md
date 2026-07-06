@@ -5,7 +5,7 @@ don't re-derive it or repeat solved mistakes) and specs the **next three feature
 
 - **Repo:** https://github.com/jordan23wagner-ops/Job-Assistant
 - **Canonical local folder (LOAD THIS ONE):** `C:\Users\Jordon\Job-Assistant`
-- **Current version:** v1.3.6 (in `manifest.json` and the side-panel header)
+- **Current version:** v1.8.0 (in `manifest.json` and the side-panel header)
 - Also read `HANDOFF.md` in this repo for the full version-by-version history.
 
 ---
@@ -34,8 +34,16 @@ background.js   Service worker. FORCE-injects content.js into LinkedIn frames on
 content.js      Runs in EVERY linkedin.com frame. Job detection, the match-score badge, job-list &
                 hiring-team scraping, and the Easy Apply autofill/auto-advance/learning engine.
 autofill.js     Standalone engine injected into NON-LinkedIn ATS pages (and cross-origin iframes).
-                Contact/EEO/custom-question fill, Workday combobox support, resume file attach,
-                per-site account passwords, multi-step advance. Never clicks Submit/Apply.
+                Contact/EEO/custom-question fill, resume file attach, per-site account passwords,
+                multi-step advance. Never clicks the final Submit/Apply. Since v1.8.0 it's a
+                detector->adapter architecture: detectATS() -> ADAPTERS[workday|greenhouse|lever|
+                generic]; empty adapter == old generic behavior. Adapter hooks (all optional):
+                fillDropdowns, fillTypeaheads, blockingWall, advancePatterns, stopPatterns. Workday
+                adapter = prompt-option dropdowns + account-gate auto-create + email-verify wall;
+                Greenhouse/Lever adapter = location typeahead pick.
+detect.js       (v1.8.0) Tiny offer script. background.js injects it on known-ATS hosts (ATS_HOST_RE)
+                with no active session; floats "Auto-fill this application?". Accept -> background
+                starts the same autofillSessions flow as the manual button. Never fills/submits itself.
 sidepanel.html  The whole UI. 5 tabs: Apply / Search / Tracker / Tools / Chat.
 sidepanel.js    All side-panel logic: backend seam (rawBackendCall), Scan&Rank, People+outreach,
                 resume parse/store, tailor/build resume, interview prep, tracker, learned-answer &
@@ -92,6 +100,19 @@ styles.css      Themed (4 themes via CSS vars) + tab bar.
 9. **Backend seam:** `https://wagner-gpt.vercel.app/api/chat`, NDJSON delta stream
    (`{"delta":"..."}\n … {"done":true}\n`). Client is `fetchBackendText()` in content.js/autofill.js
    and `rawBackendCall()` in sidepanel.js. Post `{messages:[{role:'system',content}], newMessage, model:'auto'}`.
+
+10. **External ATS = detector→adapter (v1.8.0), generic is the fallback.** `autofill.js` resolves
+    `adapter = ADAPTERS[detectATS()]` once per run. **An empty adapter is byte-for-byte the old
+    generic engine** — so adding/editing an adapter can't regress unknown sites. To support a new
+    ATS: add a `detectATS()` signature + an adapter object with only the hooks that differ
+    (`fillDropdowns`/`fillTypeaheads`/`blockingWall`/`advancePatterns`/`stopPatterns`). Workday's
+    dropdowns are portaled `[data-automation-id="promptOption"]` lists (NOT `<select>`/`role=option`);
+    its Create Account is auto-clicked (advance) but the final Submit never is; its verify-email screen
+    is a `blockingWall`. The **auto-detect offer** (`detect.js`, injected by background on `ATS_HOST_RE`
+    hosts) is the new hands-off entry point; the side-panel "Auto-Fill Open Application" button still
+    works and both converge on the same `autofillSessions` flow. Selectors for live ATS DOM are
+    best-effort — when a dropdown/typeahead doesn't fill, dump candidate selectors in the ATS tab
+    console and tighten (same upkeep pattern as the LinkedIn scrapers).
 
 ### chrome.storage.local keys in use
 `resumeText`, `resumeFile` ({name,type,b64}), `profile`, `eeoPrefs`, `customQA` (learned answers),
