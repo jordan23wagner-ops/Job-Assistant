@@ -623,9 +623,11 @@
   // generic engine. Phase 2/3 fill in the workday/greenhouse/lever adapters by adding optional
   // hooks to their object here — anything a hook omits falls back to the shared generic engine,
   // so an empty adapter {} is byte-for-byte today's behavior. Recognized hooks:
-  //   adapter.fillDropdowns(eeo)     -> async; ATS-specific custom dropdowns (e.g. Workday's
-  //                                     portaled "prompt option" listboxes). Runs BEFORE the
-  //                                     generic combobox pass. Returns a fill count.
+  //   adapter.fillDropdowns(eeo,profile)-> async; ATS-specific custom dropdowns (e.g. Workday's
+  //                                     portaled "prompt option" listboxes, incl. searchable
+  //                                     type-to-search ones). Fills EEO/demographics from prefs and
+  //                                     State/Country from the profile. Runs BEFORE the generic
+  //                                     combobox pass. Returns a fill count.
   //   adapter.fillTypeaheads(profile)-> async; ATS-specific autocomplete inputs that need a
   //                                     type-then-pick (e.g. Greenhouse/Lever location). Returns
   //                                     a fill count. On pick-failure it leaves the typed value,
@@ -660,7 +662,48 @@
   //  3. After Create Account, Workday shows an email-verification wall (a real page nav, so
   //     autofill.js is re-injected and re-runs) — wdBlockingWall detects it and stops with a
   //     clear banner, since only the human can click the link in the inbox.
-  async function wdFillDropdowns(eeo) {
+  // The search input that appears inside an open SEARCHABLE Workday dropdown popup.
+  function wdSearchBox() {
+    return document.querySelector('input[data-automation-id="searchBox"], [data-automation-id="promptSearchBox"] input, [role="listbox"] input[type="text"], [data-automation-widget="wd-popup"] input[type="text"]');
+  }
+  function wdVisibleOptions() {
+    var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
+    var out = [];
+    for (var i = 0; i < opts.length; i++) { if (visible(opts[i])) out.push(opts[i]); }
+    return out;
+  }
+  // Open a Workday dropdown and select the option best matching `desired`. Handles BOTH kinds:
+  // small enumerated lists (options render immediately) and SEARCHABLE lists (Country, School,
+  // State) that render nothing until you type — for those, type `desired` into the popup search
+  // box, wait for it to filter, then pick. Leaves the dropdown closed (Escape) on no match.
+  async function wdPickOption(trigger, desired) {
+    if (!desired) return false;
+    fireClick(trigger);
+    await sleep(300);
+    var opts = wdVisibleOptions();
+    if (!opts.length) {
+      var search = wdSearchBox();
+      if (search && visible(search)) {
+        search.focus();
+        setNativeValue(search, desired);
+        search.dispatchEvent(new Event('input', { bubbles: true }));
+        await sleep(750);
+        opts = wdVisibleOptions();
+      }
+    }
+    var best = null, bs = 0;
+    for (var i = 0; i < opts.length; i++) {
+      var otext = opts[i].getAttribute('data-automation-label') || getText(opts[i]);
+      var sc = score(otext, desired);
+      if (sc > bs) { bs = sc; best = opts[i]; }
+    }
+    if (best && bs >= 45) { fireClick(best); await sleep(150); return true; }
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(120);
+    return false;
+  }
+
+  async function wdFillDropdowns(eeo, profile) {
     var filled = 0;
 
     // (a) Account-creation page: tick the agree-to-terms checkbox so Create Account can submit.
@@ -678,9 +721,11 @@
       candidates.forEach(function (cb) { try { cb.click(); filled++; } catch (e) {} });
     }
 
-    // (b) Workday prompt-option dropdowns. EEO/known keys only — unknown dropdowns are left for
-    // the human in Phase 2. (Native <select> + role=option widgets are handled by the generic
-    // fillEeoSelects/fillEeoComboboxes passes that run alongside this one.)
+    // (b) Workday prompt-option dropdowns: EEO/demographics from saved prefs, plus State/Province
+    // and Country from the profile. Both small enumerated AND searchable (type-to-search) lists are
+    // handled by wdPickOption. Note Workday's State/Province field is often "countryRegion" — the
+    // state check runs before the country check and matches "region", so it routes correctly.
+    // Anything else is left for the custom-question flow / the human.
     var triggers = document.querySelectorAll('button[aria-haspopup="listbox"], [aria-haspopup="listbox"]');
     for (var ti = 0; ti < triggers.length; ti++) {
       var trig = triggers[ti];
@@ -692,21 +737,12 @@
         var ff = trig.closest('[data-automation-id^="formField-"]');
         var s = norm([signals(trig), ff ? ff.getAttribute('data-automation-id') : ''].filter(Boolean).join(' '));
         var key = eeoKey(s);
-        if (!key || !eeo[key]) continue;
-
-        fireClick(trig);
-        await sleep(300);
-        var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
-        var best = null, bs = 0;
-        for (var oi = 0; oi < opts.length; oi++) {
-          var opt = opts[oi];
-          if (!visible(opt)) continue;
-          var otext = opt.getAttribute('data-automation-label') || getText(opt);
-          var sc = score(otext, eeo[key]);
-          if (sc > bs) { bs = sc; best = opt; }
-        }
-        if (best && bs >= 45) { fireClick(best); await sleep(150); filled++; }
-        else { trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); }
+        var desired = null;
+        if (key && eeo[key]) desired = eeo[key];
+        else if (profile && profile.state && /\b(state|province|region)\b/.test(s)) desired = profile.state;
+        else if (profile && profile.country && /\bcountry\b/.test(s)) desired = profile.country;
+        if (!desired) continue;
+        if (await wdPickOption(trig, desired)) filled++;
       } catch (e) { /* one odd widget shouldn't abort the rest */ }
     }
     return filled;
@@ -726,43 +762,25 @@
     return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
   }
 
-  // Open a Workday prompt-option dropdown and return its option label strings, then close it.
-  // Workday only renders the [data-automation-id="promptOption"] items while the list is open, so
-  // custom-question discovery has to open each candidate to learn its choices. Searchable dropdowns
-  // (huge lists like country/school) render no options until you type — those come back empty and
-  // are left for the human.
+  // Open a Workday prompt-option dropdown to learn what it is, then close it. Workday only renders
+  // the [data-automation-id="promptOption"] items while the list is open, so custom-question
+  // discovery has to open each candidate. Returns { options, searchable }: enumerated lists come
+  // back with their labels; searchable lists (Country, School) render no options until you type, so
+  // they come back with options=[] and searchable=true (a search box is present in the popup).
   async function wdReadOptions(trigger) {
     fireClick(trigger);
     await sleep(300);
-    var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
+    var opts = wdVisibleOptions();
     var labels = [];
     for (var i = 0; i < opts.length; i++) {
-      if (!visible(opts[i])) continue;
       var lab = opts[i].getAttribute('data-automation-label') || getText(opts[i]);
       if (lab) labels.push(lab);
     }
+    var sb = wdSearchBox();
+    var searchable = !labels.length && !!(sb && visible(sb));
     trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     await sleep(150);
-    return labels;
-  }
-
-  // Open a Workday dropdown and pick the option best matching answerText (same scoring as EEO).
-  async function wdSelectAnswer(trigger, answerText) {
-    if (!answerText) return false;
-    fireClick(trigger);
-    await sleep(300);
-    var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
-    var best = null, bs = 0;
-    for (var i = 0; i < opts.length; i++) {
-      if (!visible(opts[i])) continue;
-      var otext = opts[i].getAttribute('data-automation-label') || getText(opts[i]);
-      var sc = score(otext, answerText);
-      if (sc > bs) { bs = sc; best = opts[i]; }
-    }
-    if (best && bs >= 45) { fireClick(best); await sleep(150); return true; }
-    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-    await sleep(120);
-    return false;
+    return { options: labels, searchable: searchable };
   }
 
   // Discover Workday's NON-EEO prompt-option dropdowns as custom questions so they flow through the
@@ -784,14 +802,18 @@
         var label = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
         if (!label || label.length < 5) continue;
         if (label.split(' ').length < 2 && !/\?/.test(label)) continue; // skip bare single-word selects (Country, State…)
-        var options = await wdReadOptions(trig);
-        if (options.length < 2 || options.length > 30) continue; // empty (searchable) or absurdly long -> human
+        var read = await wdReadOptions(trig);
+        var isSelect = read.options.length >= 2 && read.options.length <= 30;
+        // Enumerated -> choose-one (AI must return an exact option). Searchable -> free-text (AI
+        // returns the value, apply types it into the search box and picks). Neither (empty & not
+        // searchable, or an absurdly long list) -> leave for the human.
+        if (!isSelect && !read.searchable) continue;
         out.push({
-          type: 'select', // makes the AI prompt format it as "[choose one: …]"
+          type: isSelect ? 'select' : 'text',
           container: ff || trig.parentElement,
           label: label,
-          options: options,
-          apply: (function (t) { return function (ans) { return wdSelectAnswer(t, ans); }; })(trig),
+          options: isSelect ? read.options : [],
+          apply: (function (t) { return function (ans) { return wdPickOption(t, ans); }; })(trig),
           getValue: (function (t) { return function () { return getText(t); }; })(trig)
         });
       } catch (e) { /* one odd widget shouldn't abort discovery */ }
@@ -893,7 +915,7 @@
         n += fillPasswordFields(profile, siteCredentials, state);
         n += fillEeoSelects(eeo);
         n += fillEeoRadios(eeo);
-        if (adapter.fillDropdowns) { try { n += await adapter.fillDropdowns(eeo); } catch (e) {} }
+        if (adapter.fillDropdowns) { try { n += await adapter.fillDropdowns(eeo, profile); } catch (e) {} }
         n += await fillEeoComboboxes(eeo);
         var ra = attachResume(resumeFile);
         result.resumeAttached += ra;

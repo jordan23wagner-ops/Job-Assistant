@@ -1,5 +1,44 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-06 (latest) — v1.8.2: Workday searchable dropdowns / type-to-search (Phase 2c)
+
+Workday has two dropdown kinds: small enumerated lists (render options immediately) and SEARCHABLE
+lists — Country, School, State/Province — that render NOTHING until you type. Phases 2/2b handled
+only the first kind; searchable ones came back empty and were skipped. Phase 2c adds type-to-search
+and folds all the dropdown open/pick logic into one primitive.
+
+**`wdPickOption(trigger, desired)` (`autofill.js`) — the single open→pick primitive now:**
+- Opens the dropdown; if no `promptOption` items render, it finds the popup's search box
+  (`wdSearchBox`: `input[data-automation-id="searchBox"]` + fallbacks), types `desired`, waits for
+  the list to filter, then picks the best-scoring option (≥45). Escapes closed on no match.
+- Both `wdFillDropdowns` (EEO/State/Country) and the custom-question `apply` closures call it, so
+  enumerated AND searchable dropdowns go through the exact same path. `wdSelectAnswer` was removed
+  (folded in).
+
+**Standard-field dropdowns from the profile:** `wdFillDropdowns(eeo, profile)` now also fills
+**State/Province** and **Country** from `profile` (previously EEO-only). Gotcha baked in: Workday's
+State field is usually `formField-countryRegion`, so the state check (`/state|province|region/`) runs
+BEFORE the country check and matches "region" — routing `countryRegion` to `profile.state`, not
+country. (`profile` has no `country` field today, so Country only fills if one is added later.)
+
+**Searchable custom questions:** `wdReadOptions` now returns `{ options, searchable }`.
+`wdFindDropdownQuestions` emits enumerated dropdowns as `type:'select'` (AI must return an exact
+option) and searchable ones as `type:'text'` with `options:[]` (AI returns the value; `apply` types
+it into the search box and picks). Empty-non-searchable and absurdly-long (>30) lists are still left
+for the human.
+
+**Signature change:** the `fillDropdowns` adapter hook is now `fillDropdowns(eeo, profile)` (was
+`(eeo)`); the call site passes `profile`. Generic adapter doesn't implement it, so no impact there.
+
+**Verified:** `node --check` clean; unit tests pass for the desired-value routing (gender→pref,
+`countryRegion`→state, pure country→country, address/phone-type→skip) and the searchable
+classification (enumerated→select, empty+searchbox→text, empty→skip, >30→skip). **Live load test
+still needed** for the real type-into-search-box→filter→pick cycle on Workday Country/School/State.
+
+**Remaining Workday gaps:** multi-select prompt fields (skills/languages that accept several picks)
+aren't handled — only single-select. Network-latency-heavy searches may need a longer wait than the
+750ms in `wdPickOption`.
+
 ## Update 2026-07-06 (later) — v1.8.1: Workday prompt-option questions → AI answer flow (Phase 2b)
 
 Workday's NON-EEO question dropdowns now flow through the same learned-bank → batched-AI →
