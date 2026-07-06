@@ -1,6 +1,45 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-06 (latest) — v1.8.4: iCIMS adapter
+## Update 2026-07-06 (latest) — v1.8.5: Ashby, SmartRecruiters, Taleo, BrassRing adapters
+
+Added the last four ATS adapters, completing the planned set. Split by nature:
+
+**Ashby + SmartRecruiters (modern, clean, guest-apply — no account):** their standard fields, EEO,
+and custom questions are already handled by the generic engine; the only shared gap is the location
+autocomplete, so both reuse `atsFillLocationTypeahead` (same as Greenhouse/Lever). Detection:
+hostname `*.ashbyhq.com` / `*.smartrecruiters.com`, plus a loose DOM signature fallback (harmless —
+these adapters only add a location typeahead).
+
+**Taleo + BrassRing (legacy, ACCOUNT-GATED, multi-step):** the important part. Generic treats
+"Create Account" as a stop, so on these it **halts at the account gate and never reaches the form**.
+The adapter unblocks the whole flow. iCIMS/Taleo/BrassRing now share one **`accountGateAdapter(name)`
+factory** (iCIMS was refactored onto it — behavior unchanged): auto-clicks Create Account / Register /
+Sign Up / **New User** (advance) via `ACCOUNT_GATE_ADVANCE`, ticks the agreement checkbox on the
+account page (`isAccountCreationPage` = a password field + a create/register/new-user button present),
+stops on the email-verification wall (`isVerifyEmailWall`) and the final Submit (`WD_STOP`). Login/
+Sign In are never auto-clicked. Detection is **hostname-only** for Taleo (`*.taleo.net`) and BrassRing
+(`*.brassring.com`) — no weak DOM signature, because account auto-create is riskier than a location
+typeahead and must not misfire on an unrelated page.
+
+**`background.js`:** added `brassring` to `ATS_HOST_RE` (the other three were already present), so the
+auto-detect offer + ATS-iframe injection fire on BrassRing. Taleo/BrassRing/iCIMS forms are often
+embedded via an iframe whose src is the ATS host; `background.js` injects `autofill.js` into it and the
+adapter runs inside.
+
+**Verified:** `node --check` clean; unit tests pass for detection of all four hosts, the `ATS_HOST_RE`
+membership (incl. `sjobs.brassring.com`), and the account-gate routing (Create Account/Register/Sign
+Up/New User → advance; Submit/Apply → stop; Login/Sign In → neither). **Live load test still needed** —
+Taleo/BrassRing DOM is notoriously clunky and iframe-heavy; these are first-pass adapters (standard-
+field fill + account gate + multi-step advance). If they use custom non-native dropdowns, add a
+`fillDropdowns`/`findDropdownQuestions` hook like Workday's.
+
+**ATS coverage COMPLETE:** Workday (full: fields, EEO, account gate, single-select enumerated +
+searchable, multi-select), Greenhouse, Lever, iCIMS, Ashby, SmartRecruiters, Taleo, BrassRing all have
+adapters; generic handles everything else. Shared building blocks for future ATSs: `wdPickOption`
+(prompt dropdowns), `atsFillLocationTypeahead` (location), `accountGateAdapter` (account gates),
+`tickAccountAgreement` / `isVerifyEmailWall` (gate helpers).
+
+## Update 2026-07-06 — v1.8.4: iCIMS adapter
 
 Added an `icims` adapter. iCIMS is largely standard HTML (native `<select>`/radio/text + a resume
 file input), so the generic engine already fills its contact fields, EEO selects, and custom

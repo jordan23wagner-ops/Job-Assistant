@@ -652,6 +652,12 @@
     if (/(^|\.)greenhouse\.io$/.test(h) || document.getElementById('grnhse_app') || document.querySelector('form[action*="greenhouse"]')) return 'greenhouse';
     if (/(^|\.)lever\.co$/.test(h) || document.querySelector('.application-form, [data-qa="application-form"], form[action*="lever"]')) return 'lever';
     if (/(^|\.)icims\.com$/.test(h) || document.querySelector('.iCIMS_MainWrapper, #icims_content, form#quickForm, [id^="icims_"]')) return 'icims';
+    if (/(^|\.)ashbyhq\.com$/.test(h) || document.querySelector('[class*="ashby"], [id*="ashby"]')) return 'ashby';
+    if (/(^|\.)smartrecruiters\.com$/.test(h) || document.querySelector('#smartr, .sr-application, [class*="smartrecruiters"]')) return 'smartrecruiters';
+    // Taleo/BrassRing are hostname-only: their account-gate auto-create is riskier than a location
+    // typeahead, so we don't want a weak DOM signature misfiring on an unrelated page.
+    if (/(^|\.)taleo\.net$/.test(h)) return 'taleo';
+    if (/(^|\.)brassring\.com$/.test(h)) return 'brassring';
     return 'generic';
   }
   // ---------- shared account-gate helpers (Workday, iCIMS) ----------
@@ -919,31 +925,33 @@
   var WD_ADVANCE = ADVANCE_PATTERNS.concat([/create account/]);
   var WD_STOP = [/submit application/, /submit your application/, /^submit$/, /finish application/, /complete application/, /^apply$/, /^apply now$/];
 
-  // ---------- iCIMS adapter ----------
-  // iCIMS is largely standard HTML (native <select>/radio/text + a resume file input), so the
-  // generic engine already fills its contact fields, EEO selects, and custom questions (its
-  // firstname/lastname/homePhone/postalCode ids match the generic matchers). The adapter adds only
-  // what's iCIMS-specific:
-  //  - detection: hostname *.icims.com, or the iCIMS_ wrapper markup when the form is embedded in an
-  //    iframe (background.js injects autofill.js into the icims iframe, so this runs inside it).
-  //  - the account gate (per the Workday/iCIMS product decision): Create Account/Register IS
-  //    auto-clicked (in ICIMS_ADVANCE, out of ICIMS_STOP); icimsFillDropdowns ticks the agreement
-  //    checkbox when the page has a password field + a register/create button. The final Submit/Apply
-  //    is still never auto-clicked.
-  //  - the email-verification wall (same detector as Workday).
-  function icimsAccountPage() {
+  // ---------- account-gated legacy ATS (iCIMS, Taleo, BrassRing) ----------
+  // These are largely standard HTML but REQUIRE creating a candidate account before/within the
+  // application. Generic treats "Create Account" as a stop, so it halts at the gate and never reaches
+  // the form — accountGateAdapter is what unblocks them. Per the Workday/iCIMS product decision it
+  // auto-clicks Create Account/Register/Sign Up/New User (advance) and ticks the agreement checkbox on
+  // the account page (password field + a create/register button present); it stops on the email-
+  // verification wall and on the final Submit/Apply (never auto-clicked). "Login"/"Sign In" are not
+  // auto-clicked. Standard fields, EEO, and native-select questions are filled by the generic engine;
+  // if a provider turns out to use custom non-native dropdowns, give it a fillDropdowns/
+  // findDropdownQuestions hook like Workday's.
+  var ACCOUNT_GATE_ADVANCE = ADVANCE_PATTERNS.concat([/create account/, /create your account/, /^register$/, /^sign up$/, /new user/]);
+  function isAccountCreationPage() {
     if (!document.querySelector('input[type="password"]')) return false;
-    return !!findButton([/create account/, /create your account/, /^register$/, /^sign up$/]);
+    return !!findButton([/create account/, /create your account/, /^register$/, /^sign up$/, /new user/]);
   }
-  async function icimsFillDropdowns(eeo, profile) {
-    return icimsAccountPage() ? tickAccountAgreement() : 0;
+  function accountGateAdapter(providerName) {
+    return {
+      fillDropdowns: async function () { return isAccountCreationPage() ? tickAccountAgreement() : 0; },
+      blockingWall: function () {
+        return isVerifyEmailWall()
+          ? (providerName + ' sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.')
+          : null;
+      },
+      advancePatterns: ACCOUNT_GATE_ADVANCE,
+      stopPatterns: WD_STOP // final Submit/Apply/Finish only
+    };
   }
-  function icimsBlockingWall() {
-    if (!isVerifyEmailWall()) return null;
-    return 'iCIMS sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
-  }
-  var ICIMS_ADVANCE = ADVANCE_PATTERNS.concat([/create account/, /create your account/, /^register$/, /^sign up$/]);
-  var ICIMS_STOP = WD_STOP; // final Submit/Apply/Finish only
 
   // ---------- Greenhouse + Lever adapter (Phase 3) ----------
   // Greenhouse and Lever are single-page forms whose standard fields, EEO selects, and custom
@@ -987,7 +995,11 @@
     workday: { fillDropdowns: wdFillDropdowns, findDropdownQuestions: wdFindDropdownQuestions, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP },
     greenhouse: { fillTypeaheads: atsFillLocationTypeahead },
     lever: { fillTypeaheads: atsFillLocationTypeahead },
-    icims: { fillDropdowns: icimsFillDropdowns, blockingWall: icimsBlockingWall, advancePatterns: ICIMS_ADVANCE, stopPatterns: ICIMS_STOP }
+    ashby: { fillTypeaheads: atsFillLocationTypeahead },
+    smartrecruiters: { fillTypeaheads: atsFillLocationTypeahead },
+    icims: accountGateAdapter('iCIMS'),
+    taleo: accountGateAdapter('Taleo'),
+    brassring: accountGateAdapter('BrassRing')
   };
 
   // ---------- main ----------
