@@ -6,20 +6,22 @@ New feature: search for jobs by **title and/or industry**, ranked by résumé fi
 browser tab** (roomy, uncluttered). Built in phases; this is Phase 1 (search + filters + ranked
 results). Phase 2 = tighter apply hand-off; Phase 3 = résumé tailoring with follow-up questions.
 
-**Cross-repo — CRITICAL setup (Chatwillow backend + Adzuna):**
-- The extension's backend is **Chatwillow** (`https://chatwillow.com`, repo
-  github.com/jordan23wagner-ops/Chatwillow, local `C:\Users\Jordon\Chatwillow`) — NOT Wagner-GPT.
-  Wagner-GPT is the older base clone; the extension moved to Chatwillow at v1.7.0. All `/api/*` calls
-  (chat AND jobs) go to chatwillow.com. (An `api/jobs.js` was briefly mis-deployed to Wagner-GPT and
-  reverted — the real one lives in the Chatwillow repo.)
-- Job data comes from the **Adzuna** free jobs API, proxied through the Chatwillow backend so **no key
-  ships in the extension**. Backend endpoint **`Chatwillow/api/jobs.js`** — `POST {action:'search'|
-  'categories', …}`. It reads **`ADZUNA_APP_ID` / `ADZUNA_APP_KEY` from the backend env**; until those
-  are set on the **Chatwillow** Vercel project it returns a clear "not configured" 500 and the feature
-  shows that error. Register free at developer.adzuna.com → set both env vars → redeploy. (Adzuna has
-  no clean remote flag, so remote:true just appends "remote" to the query.)
-- Backend base is `https://chatwillow.com/api` (same host as `/api/chat`). `api/jobs.js` follows the
-  same reflect-origin CORS as `chat.js`; Vercel auto-detects it as a function (no `vercel.json` change).
+**Cross-repo — backends (IMPORTANT, two of them):**
+- Most of the extension (chat, match scoring, autofill answers, résumé tailoring) uses the
+  **Chatwillow** backend (`https://chatwillow.com`, repo github.com/jordan23wagner-ops/Chatwillow) —
+  the public app with accounts/Pro. That's unchanged.
+- **Job Search runs on the WAGNER-GPT backend instead** (`https://wagner-gpt.vercel.app`, repo
+  github.com/jordan23wagner-ops/Wagner-GPT, local `C:\Users\Jordon\Wagner-GPT\wife-gpt`) — Jordon &
+  Alicia's personal tool. `jobsearch.js` sets `BACKEND = 'https://wagner-gpt.vercel.app/api'`, so BOTH
+  the Adzuna `/api/jobs` proxy AND the fit-ranking `/api/chat` call for the job-search page go to
+  wagner-gpt. (Chatwillow intentionally does NOT have the jobs endpoint — it was removed.)
+- Job data comes from the **Adzuna** free jobs API, proxied through **`wife-gpt/api/jobs.js`** so **no
+  key ships in the extension** — `POST {action:'search'|'categories', …}`. It reads
+  **`ADZUNA_APP_ID` / `ADZUNA_APP_KEY`** from the backend env; without them it returns a clear "not
+  configured" 500 (with a presence-only diagnostic). **The keys live on the wagner-gpt Vercel project**
+  (verified working — 30 categories + live search returned). Same reflect-origin CORS as `chat.js`;
+  Vercel auto-detects it (no `vercel.json` change). Adzuna has no clean remote flag, so remote:true
+  appends "remote" to the query.
 
 **Extension (files):**
 - **`jobsearch.html` + `jobsearch.js` (NEW):** the full-page UI. Self-contained styles (no theme

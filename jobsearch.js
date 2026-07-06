@@ -5,7 +5,10 @@
 // résumé tailoring = Phase 3.)
 (function () {
   'use strict';
-  var BACKEND = 'https://chatwillow.com/api';
+  // Job Search runs on the Wagner-GPT backend (Jordon & Alicia's personal tool) — it holds the
+  // Adzuna key server-side and also serves the fit-ranking /chat call. (The rest of the extension
+  // still uses chatwillow.com; only this feature is on wagner-gpt.)
+  var BACKEND = 'https://wagner-gpt.vercel.app/api';
 
   // Curated industries. Each resolves to an Adzuna category (matched by label against the live
   // category list, so we never hardcode a possibly-wrong tag) plus optional keyword augmentation
