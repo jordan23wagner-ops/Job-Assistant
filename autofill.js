@@ -504,8 +504,9 @@
     return out;
   }
 
-  function applyAnswerToItem(item, answerText) {
+  async function applyAnswerToItem(item, answerText) {
     if (!answerText) return false;
+    if (item.apply) return await item.apply(answerText); // adapter-provided (e.g. Workday prompt-option dropdown)
     if (item.type === 'select') {
       var sel = item.control;
       var best = null, bs = 0;
@@ -525,6 +526,7 @@
   }
 
   function itemFinalValue(item) {
+    if (item.getValue) return item.getValue(); // adapter-provided (e.g. Workday prompt-option dropdown)
     if (item.type === 'select') return item.control && item.control.value;
     if (item.type === 'radio') {
       var checked = item.radios.filter(function (r) { return r.checked; })[0];
@@ -628,6 +630,12 @@
   //                                     type-then-pick (e.g. Greenhouse/Lever location). Returns
   //                                     a fill count. On pick-failure it leaves the typed value,
   //                                     so it never regresses the generic text fill.
+  //   adapter.findDropdownQuestions(eeo)-> async; returns custom-question items for ATS dropdowns
+  //                                     the generic <select>/radio/text discovery can't see (e.g.
+  //                                     Workday's prompt-option dropdowns). Each item carries its
+  //                                     own async apply(answerText) + getValue() so it flows through
+  //                                     the learned-bank -> AI -> learn-from-human pipeline. EEO/
+  //                                     demographic dropdowns are excluded (never AI-answered).
   //   adapter.blockingWall()         -> string|null; a hard human-only blocker (e.g. Workday's
   //                                     verify-email wall). Non-null message => stop with a banner.
   //   adapter.advancePatterns        -> RegExp[] replacing ADVANCE_PATTERNS for this ATS.
@@ -718,6 +726,79 @@
     return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
   }
 
+  // Open a Workday prompt-option dropdown and return its option label strings, then close it.
+  // Workday only renders the [data-automation-id="promptOption"] items while the list is open, so
+  // custom-question discovery has to open each candidate to learn its choices. Searchable dropdowns
+  // (huge lists like country/school) render no options until you type — those come back empty and
+  // are left for the human.
+  async function wdReadOptions(trigger) {
+    fireClick(trigger);
+    await sleep(300);
+    var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
+    var labels = [];
+    for (var i = 0; i < opts.length; i++) {
+      if (!visible(opts[i])) continue;
+      var lab = opts[i].getAttribute('data-automation-label') || getText(opts[i]);
+      if (lab) labels.push(lab);
+    }
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(150);
+    return labels;
+  }
+
+  // Open a Workday dropdown and pick the option best matching answerText (same scoring as EEO).
+  async function wdSelectAnswer(trigger, answerText) {
+    if (!answerText) return false;
+    fireClick(trigger);
+    await sleep(300);
+    var opts = document.querySelectorAll('[data-automation-id="promptOption"], [role="option"]');
+    var best = null, bs = 0;
+    for (var i = 0; i < opts.length; i++) {
+      if (!visible(opts[i])) continue;
+      var otext = opts[i].getAttribute('data-automation-label') || getText(opts[i]);
+      var sc = score(otext, answerText);
+      if (sc > bs) { bs = sc; best = opts[i]; }
+    }
+    if (best && bs >= 45) { fireClick(best); await sleep(150); return true; }
+    trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(120);
+    return false;
+  }
+
+  // Discover Workday's NON-EEO prompt-option dropdowns as custom questions so they flow through the
+  // learned-bank -> batched-AI -> learn-from-human pipeline like any other question. EEO dropdowns
+  // are excluded (handled by wdFillDropdowns from saved prefs — we never AI-guess demographics).
+  async function wdFindDropdownQuestions(eeo) {
+    var out = [];
+    var triggers = document.querySelectorAll('button[aria-haspopup="listbox"]');
+    for (var ti = 0; ti < triggers.length && out.length < CUSTOM_QA_MAX_PER_STEP; ti++) {
+      var trig = triggers[ti];
+      try {
+        if (trig.disabled || !visible(trig)) continue;
+        var cur = norm(getText(trig));
+        var isEmpty = !cur || /^(select|choose|please select)/.test(cur);
+        if (!isEmpty) continue; // already answered
+        var ff = trig.closest('[data-automation-id^="formField-"]');
+        var sig = norm([signals(trig), ff ? ff.getAttribute('data-automation-id') : ''].filter(Boolean).join(' '));
+        if (eeoKey(sig)) continue; // demographics -> wdFillDropdowns, never the AI
+        var label = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+        if (!label || label.length < 5) continue;
+        if (label.split(' ').length < 2 && !/\?/.test(label)) continue; // skip bare single-word selects (Country, State…)
+        var options = await wdReadOptions(trig);
+        if (options.length < 2 || options.length > 30) continue; // empty (searchable) or absurdly long -> human
+        out.push({
+          type: 'select', // makes the AI prompt format it as "[choose one: …]"
+          container: ff || trig.parentElement,
+          label: label,
+          options: options,
+          apply: (function (t) { return function (ans) { return wdSelectAnswer(t, ans); }; })(trig),
+          getValue: (function (t) { return function () { return getText(t); }; })(trig)
+        });
+      } catch (e) { /* one odd widget shouldn't abort discovery */ }
+    }
+    return out;
+  }
+
   // Create Account is auto-clicked (advance); the final application Submit is not (stop).
   var WD_ADVANCE = ADVANCE_PATTERNS.concat([/create account/]);
   var WD_STOP = [/submit application/, /submit your application/, /^submit$/, /finish application/, /complete application/, /^apply$/, /^apply now$/];
@@ -761,7 +842,7 @@
 
   var ADAPTERS = {
     generic: {},
-    workday: { fillDropdowns: wdFillDropdowns, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP },
+    workday: { fillDropdowns: wdFillDropdowns, findDropdownQuestions: wdFindDropdownQuestions, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP },
     greenhouse: { fillTypeaheads: atsFillLocationTypeahead },
     lever: { fillTypeaheads: atsFillLocationTypeahead }
   };
@@ -818,19 +899,26 @@
         result.resumeAttached += ra;
         n += ra;
 
-        // Learned answers for custom questions on this step.
+        // Learned answers for custom questions on this step. Native selects/radios/text come from
+        // findUnansweredCustomQuestions; an adapter can add more (e.g. Workday's prompt-option
+        // dropdowns, which aren't <select> so the generic pass can't see them).
         var items = findUnansweredCustomQuestions(eeo);
+        if (adapter.findDropdownQuestions) {
+          try { items = items.concat(await adapter.findDropdownQuestions(eeo)); } catch (e) {}
+        }
+        if (items.length > CUSTOM_QA_MAX_PER_STEP) items = items.slice(0, CUSTOM_QA_MAX_PER_STEP);
         var unanswered = [];
-        items.forEach(function (item) {
-          var learned = findLearnedAnswer(bank, item.label);
-          if (learned && applyAnswerToItem(item, learned.answer)) {
+        for (var qi = 0; qi < items.length; qi++) {
+          var qItem = items[qi];
+          var learned = findLearnedAnswer(bank, qItem.label);
+          if (learned && await applyAnswerToItem(qItem, learned.answer)) {
             learned.lastUsedAt = Date.now();
             result.learnedUsed++;
             n++;
           } else if (!learned) {
-            unanswered.push(item);
+            unanswered.push(qItem);
           }
-        });
+        }
         if (result.learnedUsed) storageSet({ customQA: bank });
         return { filled: n, unanswered: unanswered };
       }
@@ -860,10 +948,11 @@
               try { answers = await callCustomAnswerBackend(pass.unanswered, resumeText); } catch (e) {}
               var byIndex = {};
               answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
-              pass.unanswered.forEach(function (item, i) {
-                var ans = byIndex[i + 1];
-                if (ans && applyAnswerToItem(item, ans)) answeredItems.push(item);
-              });
+              for (var ui = 0; ui < pass.unanswered.length; ui++) {
+                var aiItem = pass.unanswered[ui];
+                var ans = byIndex[ui + 1];
+                if (ans && await applyAnswerToItem(aiItem, ans)) answeredItems.push(aiItem);
+              }
             }
             var needHuman = pass.unanswered.filter(function (it) { return !String(itemFinalValue(it) || '').trim(); });
 

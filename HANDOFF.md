@@ -1,5 +1,36 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-06 (later) — v1.8.1: Workday prompt-option questions → AI answer flow (Phase 2b)
+
+Workday's NON-EEO question dropdowns now flow through the same learned-bank → batched-AI →
+learn-from-human pipeline as native `<select>`/radio/text questions. Before this, only real
+`<select>`, radio groups, and text inputs were discovered by `findUnansweredCustomQuestions`, so
+Workday's button+portaled-listbox dropdowns ("How did you hear about us?", "Highest level of
+education", yes/no eligibility questions, etc.) were silently skipped.
+
+**How it works (`autofill.js`):**
+- New adapter hook **`findDropdownQuestions(eeo)`** (async), wired into `fillOnePass` right after the
+  generic `findUnansweredCustomQuestions` and concatenated into the same `items` list (capped at
+  `CUSTOM_QA_MAX_PER_STEP`). Only Workday implements it (`wdFindDropdownQuestions`).
+- Custom-question **items can now carry their own `apply(answerText)` (async) + `getValue()`**.
+  `applyAnswerToItem` is now `async` and short-circuits to `item.apply` when present; `itemFinalValue`
+  short-circuits to `item.getValue`. Both `applyAnswerToItem` call sites (learned loop + AI loop)
+  were converted from `forEach` to `await`-ing `for` loops. Generic select/radio/text items are
+  unchanged (no `apply`/`getValue` → same code path as before).
+- `wdFindDropdownQuestions`: for each `button[aria-haspopup="listbox"]` that is empty, non-EEO, and
+  has a question-like label (≥2 words or `?`; single-word selects like Country/State are left for the
+  human), it OPENS the dropdown to read the `[data-automation-id="promptOption"]` labels (Workday only
+  renders them while open), closes it, and — if 2–30 options — emits a `type:'select'` item whose
+  `apply` re-opens and picks the best-scoring option and whose `getValue` reads the trigger text.
+  **EEO/demographic dropdowns are excluded** (they're filled from saved prefs by `wdFillDropdowns`;
+  we never AI-guess demographics). Searchable dropdowns render no options until you type, so they come
+  back empty (>30 or 0) and are left for the human — a known Phase-2c follow-up.
+
+**Verified:** `node --check` clean; unit tests pass for the discovery gating (include "how did you
+hear"/"education"; skip EEO, already-answered, single-word, and empty/searchable) and for the async
+`apply`/`getValue` routing (routed + awaited). **Live load test still needed** for the real
+open→read→close→reopen→pick cycle on a Workday questions page.
+
 ## Update 2026-07-06 — v1.8.0: external-ATS adapter framework + auto-detect offer
 
 Expanded external-ATS autofill from one generic pass into a **detector → adapter** architecture,
