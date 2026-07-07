@@ -499,6 +499,81 @@
     return filled;
   }
 
+  // ---------- generic combobox / react-select support ----------
+  // New Greenhouse (job-boards.greenhouse.io) and many modern forms render dropdown questions as
+  // react-select comboboxes — an <input role="combobox"> that filters a portaled listbox — NOT a
+  // native <select>. Typing an answer into them filters options but never commits a selection, so
+  // the form rejects it ("This field is required"). These helpers OPEN the menu and CLICK the
+  // matching option instead of typing.
+  function isComboControl(el) {
+    if (!el) return false;
+    if (el.getAttribute && (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox')) return true;
+    if (el.getAttribute && el.getAttribute('aria-autocomplete') === 'list') return true;
+    return !!(el.closest && el.closest('[role="combobox"], [aria-haspopup="listbox"], [class*="select__control"], [class*="-control"]') && !el.closest('select'));
+  }
+  function collectMenuOptions() {
+    var out = [];
+    document.querySelectorAll('[role="option"]').forEach(function (o) { if (visible(o) && o.getAttribute('aria-disabled') !== 'true') out.push(o); });
+    if (!out.length) document.querySelectorAll('[role="listbox"] li').forEach(function (o) { if (visible(o)) out.push(o); });
+    if (!out.length) document.querySelectorAll('[class*="menu"] [class*="option"], [class*="MenuList"] [class*="option"]').forEach(function (o) { if (visible(o) && o.getAttribute('aria-disabled') !== 'true') out.push(o); });
+    return out;
+  }
+  async function openComboMenu(trig) {
+    try { trig.focus(); } catch (e) {}
+    fireClick(trig);
+    await sleep(280);
+    var opts = collectMenuOptions();
+    if (!opts.length) { // some react-selects only open on ArrowDown after focus
+      trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+      await sleep(240);
+      opts = collectMenuOptions();
+    }
+    return opts;
+  }
+  function closeComboMenu(trig) {
+    try { trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); } catch (e) {}
+  }
+  function comboValueText(trig, container) {
+    var sv = container && container.querySelector('[class*="singleValue"], [class*="single-value"], [class*="multiValue"]');
+    if (sv && getText(sv)) return getText(sv);
+    var t = getText(trig) || trig.value || '';
+    return /^(select|choose|--|)$/.test(norm(t)) ? '' : t;
+  }
+  // Open the combobox, click the option best matching `desired` (string or array of acceptable
+  // strings), and return whether a selection was made. Leaves the menu closed either way.
+  async function selectFromCombobox(trig, desired) {
+    var wants = Array.isArray(desired) ? desired : [desired];
+    var opts = await openComboMenu(trig);
+    var best = null, bs = 0;
+    for (var i = 0; i < opts.length; i++) {
+      var opt = opts[i]; if (!visible(opt)) continue;
+      var otext = getText(opt);
+      for (var w = 0; w < wants.length; w++) {
+        var want = wants[w]; if (!want) continue;
+        var sc = score(otext, want);
+        if (norm(otext) === norm(want)) sc = 100;
+        if (sc > bs) { bs = sc; best = opt; }
+      }
+    }
+    if (best && bs >= 45) { fireClick(best); await sleep(150); return true; }
+    closeComboMenu(trig);
+    return false;
+  }
+  // Briefly open a combobox to read its option texts (so the AI can pick an exact one), then close.
+  async function harvestComboOptions(trig) {
+    try {
+      var opts = await openComboMenu(trig);
+      var texts = [];
+      for (var i = 0; i < opts.length && texts.length < 40; i++) {
+        var t = getText(opts[i]);
+        if (t && t.length < 120 && texts.indexOf(t) < 0) texts.push(t);
+      }
+      closeComboMenu(trig);
+      await sleep(60);
+      return texts;
+    } catch (e) { return []; }
+  }
+
   // ---------- resume file attach ----------
   function b64ToFile(rec) {
     var bin = atob(rec.b64);
@@ -534,11 +609,35 @@
   }
 
   // ---------- custom questions (learned bank first, then one batched AI call) ----------
-  function findUnansweredCustomQuestions(eeo) {
+  async function findUnansweredCustomQuestions(eeo) {
     var out = [];
     var seenControls = [];
 
     function pushItem(item) { if (out.length < CUSTOM_QA_MAX_PER_STEP) out.push(item); }
+
+    // react-select / listbox combobox questions that aren't EEO and have no selection yet. These
+    // MUST be picked from a menu, not typed, so give each an apply()/getValue() that drives the
+    // combobox. Harvest the option texts up front so the AI can return one verbatim.
+    var combos = document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"]');
+    for (var ki = 0; ki < combos.length; ki++) {
+      var trig = combos[ki];
+      if (trig.tagName === 'SELECT' || trig.disabled || !visible(trig)) continue;
+      var kcont = trig.closest('fieldset,.form-group,[class*="field"],[class*="question"],div') || trig.parentElement;
+      if (comboValueText(trig, kcont)) continue; // already has a selection
+      var klabel = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      if (!klabel || klabel.length < 8) continue;
+      if (eeoKey(norm(klabel))) continue; // EEO comboboxes handled by fillEeoComboboxes
+      var kopts = await harvestComboOptions(trig);
+      seenControls.push(trig);
+      out.push((function (t, c, lbl, opts) {
+        return {
+          type: 'combobox', control: t, container: c, label: lbl, options: opts,
+          apply: function (ans) { return selectFromCombobox(t, ans); },
+          getValue: function () { return comboValueText(t, c); }
+        };
+      })(trig, kcont, klabel, kopts));
+      if (out.length >= CUSTOM_QA_MAX_PER_STEP) return out;
+    }
 
     // Selects that aren't EEO and have no value yet.
     var selects = document.querySelectorAll('select');
@@ -576,6 +675,7 @@
     for (var i = 0; i < texts.length; i++) {
       var el = texts[i];
       if (!visible(el) || el.disabled || el.readOnly) continue;
+      if (isComboControl(el)) continue; // react-select input — handled by the combobox pass, never typed
       if (el.value && el.value.trim()) continue;
       var sig = signals(el);
       if (!sig || isKnownContactField(sig, el) || eeoKey(sig)) continue;
@@ -633,7 +733,7 @@
     var qLines = items.map(function (it, i) {
       var typeLabel = it.multi
         ? '[list one or more values from the resume, comma-separated]'
-        : (it.type === 'select' || it.type === 'radio')
+        : ((it.type === 'select' || it.type === 'radio' || it.type === 'combobox') && it.options && it.options.length)
           ? ('[choose one: ' + it.options.join(' | ') + ']')
           : (it.type === 'textarea' ? '[short paragraph]' : '[short answer]');
       return (i + 1) + '. ' + typeLabel + ' ' + it.label;
@@ -1175,7 +1275,7 @@
         // Learned answers for custom questions on this step. Native selects/radios/text come from
         // findUnansweredCustomQuestions; an adapter can add more (e.g. Workday's prompt-option
         // dropdowns, which aren't <select> so the generic pass can't see them).
-        var items = findUnansweredCustomQuestions(eeo);
+        var items = await findUnansweredCustomQuestions(eeo);
         if (adapter.findDropdownQuestions) {
           try { items = items.concat(await adapter.findDropdownQuestions(eeo)); } catch (e) {}
         }
