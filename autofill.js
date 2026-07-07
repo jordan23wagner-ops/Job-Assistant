@@ -685,6 +685,33 @@
     }
     return null;
   }
+
+  // Buttons/links that OPEN an application from a job *details* page (e.g. hirebridge details.aspx,
+  // Greenhouse/Lever posting pages). These land you ON the form — the opposite of STOP_PATTERNS,
+  // which submit a form. Only used when no fillable form is present, so there's nothing to submit.
+  var APPLY_START_PATTERNS = [/^apply now$/, /^apply for (this )?(job|position|role|opening)/, /^apply online$/, /^apply externally$/, /^apply on company site$/, /^apply$/, /start (your )?application/, /begin application/, /^i'?m interested$/];
+  function findApplyStartButton() {
+    var els = document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (el.disabled || !visible(el)) continue;
+      var t = norm((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || el.value || el.textContent || ''));
+      if (!t || t.length > 40) continue;
+      for (var p = 0; p < APPLY_START_PATTERNS.length; p++) { if (APPLY_START_PATTERNS[p].test(t)) return el; }
+    }
+    return null;
+  }
+  // From a details page, click through "Apply" up to a couple of hops until a real form appears.
+  async function advanceToApplicationForm() {
+    for (var hop = 0; hop < 2; hop++) {
+      var btn = findApplyStartButton();
+      if (!btn) return false;
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await waitForDomSettle(4000);
+      if (hasRecognizedForm()) return true;
+    }
+    return hasRecognizedForm();
+  }
   function hasRecognizedForm() {
     if (document.querySelector('input[type="password"], input[type="file"]')) return true;
     return document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input:not([type]), select, textarea').length >= 3;
@@ -1167,11 +1194,21 @@
         return { filled: n, unanswered: unanswered };
       }
 
+      // On a job *details* page (e.g. hirebridge details.aspx, a Greenhouse/Lever posting) there's
+      // no form yet — just an "Apply Now" button. Click through to the actual application before
+      // giving up, so the user doesn't see "nothing happen" after landing on the details page.
+      if (!hasRecognizedForm()) {
+        showBanner('Opening the application…', '#4caf50');
+        var advanced = await advanceToApplicationForm();
+        if (advanced) result.advancedToForm = true;
+      }
+
       var pass = await fillOnePass();
       result.filled += pass.filled;
 
       if (!hasRecognizedForm()) {
         result.status = 'no_fields_found';
+        showBanner('On the job page. Click "Apply" to open the form and I\'ll fill it in.', '#e0a800');
       } else {
         for (var step = 0; step < MAX_STEPS; step++) {
           var correctedThisStep = false; // one dropdown-correction attempt per step
