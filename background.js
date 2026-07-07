@@ -19,6 +19,13 @@ function baseDomain(host) {
   return parts.length <= 2 ? host : parts.slice(-2).join('.');
 }
 
+// Normalize a URL to origin+pathname (no query/hash) for matching web-app apply requests to the
+// tabs the web app opens.
+function normUrl(u) {
+  try { var x = new URL(u); return (x.origin + x.pathname).replace(/\/+$/, ''); } catch (e) { return String(u || '').split('?')[0].replace(/\/+$/, ''); }
+}
+var PENDING_APPLY_TTL_MS = 10 * 60 * 1000;
+
 // Injected into an aggregator landing page (Adzuna/Indeed/etc.) during an explicit apply session:
 // dismiss the email-capture modal and click through to the employer's application. Best-effort.
 function skipAggregatorInterstitial() {
@@ -44,10 +51,26 @@ function skipAggregatorInterstitial() {
 chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
   if (info.status !== 'complete' || !tab || !tab.url) return;
   if (!/^https?:/i.test(tab.url) || /(^|\.)linkedin\.com/i.test(tab.url)) return;
-  chrome.storage.local.get('autofillSessions', function (data) {
+  chrome.storage.local.get(['autofillSessions', 'pendingApplyUrls'], function (data) {
     var sessions = data.autofillSessions || {};
+    var pending = data.pendingApplyUrls || {};
     var s = sessions[String(tabId)];
-    if (!s) return;
+    if (!s) {
+      // Adopt a tab the web app opened for an apply: if this URL was registered by the Jobs tab,
+      // turn it into an explicit autofill session so the engine fills it (and follows redirects).
+      var key = normUrl(tab.url);
+      var match = pending[key];
+      if (match && Date.now() - (match.ts || 0) < PENDING_APPLY_TTL_MS) {
+        var mHost = '';
+        try { mHost = new URL(tab.url).hostname; } catch (e) {}
+        s = { hostname: mHost, startedAt: Date.now(), explicit: true, tailoredResume: match.resumeText || '' };
+        sessions[String(tabId)] = s;
+        delete pending[key];
+        chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
+      } else {
+        return;
+      }
+    }
     if (Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) {
       delete sessions[String(tabId)];
       chrome.storage.local.set({ autofillSessions: sessions });
@@ -127,35 +150,24 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
 
 // ===== Web-app handoff (Wagner-GPT "Jobs" tab -> auto-apply) =====
 // bridge.js (content script on the Wagner-GPT origin) relays the web app's "apply to these jobs"
-// request here. We open each posting in its own tab, paced ~3s apart (human-like, gentle), and
-// register an autofill session for it — the same session the manual button / auto-detect offer
-// create, so the existing onUpdated handler injects autofill.js when each posting loads. As always,
-// the engine stops before the final Submit; a human clicks Submit on each application.
-var WEBAPP_APPLY_PACE_MS = 3000;
-
+// request here. The WEB APP opens the posting tabs itself (reliable, gesture-preserved); we just
+// REGISTER the URLs so that when each posting loads, the onUpdated handler above adopts that tab as
+// an explicit autofill session and fills it (following redirects, skipping aggregator interstitials).
+// As always, the engine stops before the final Submit; a human clicks Submit on each application.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message || message.type !== 'WEBAPP_APPLY') return;
   var jobs = Array.isArray(message.jobs) ? message.jobs.slice(0, 5) : [];
-  var i = 0;
-  function openNext() {
-    if (i >= jobs.length) return;
-    var job = jobs[i++];
-    if (!job || !job.url || !/^https?:/i.test(job.url)) { openNext(); return; }
-    var host = '';
-    try { host = new URL(job.url).hostname; } catch (e) {}
-    chrome.tabs.create({ url: job.url, active: i === 1 }, function (tab) {
-      if (!tab) return;
-      chrome.storage.local.get('autofillSessions', function (data) {
-        var sessions = data.autofillSessions || {};
-        // Stash the tailored résumé text on the session so future autofill work can reference it.
-        sessions[String(tab.id)] = { hostname: host, startedAt: Date.now(), explicit: true, tailoredResume: job.resumeText || '' };
-        chrome.storage.local.set({ autofillSessions: sessions });
-      });
+  chrome.storage.local.get('pendingApplyUrls', function (data) {
+    var pending = data.pendingApplyUrls || {};
+    var now = Date.now();
+    Object.keys(pending).forEach(function (k) { if (now - (pending[k].ts || 0) > PENDING_APPLY_TTL_MS) delete pending[k]; });
+    jobs.forEach(function (j) {
+      if (j && j.url && /^https?:/i.test(j.url)) pending[normUrl(j.url)] = { ts: now, resumeText: j.resumeText || '' };
     });
-    setTimeout(openNext, WEBAPP_APPLY_PACE_MS);
-  }
-  openNext();
-  try { sendResponse({ ok: true, count: jobs.length }); } catch (e) {}
+    chrome.storage.local.set({ pendingApplyUrls: pending }, function () {
+      try { sendResponse({ ok: true, count: jobs.length }); } catch (e) {}
+    });
+  });
   return true; // async sendResponse
 });
 
