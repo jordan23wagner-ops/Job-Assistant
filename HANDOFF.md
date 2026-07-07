@@ -1,6 +1,46 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-06 (latest) — v1.9.0: Job Search (new-tab, Adzuna-backed) — Phase 1
+## Update 2026-07-07 (latest) — v1.11.8: dropdown vs free-text classification + ask-and-remember panel
+
+Fixes the reported failure where autofill treated dropdown questions as free text (typed value never
+commits → "required"/validation error on advance) or skipped fields outright. Four root causes fixed
+in `autofill.js`:
+
+1. **`isComboControl` false positive on Bootstrap's `form-control`** — the old `[class*="-control"]`
+   ancestor match classified plain text inputs as comboboxes, so real free-text questions were
+   *skipped entirely*. Now only strong signals count: ARIA combobox semantics (`role=combobox`,
+   `aria-haspopup=listbox`, `aria-autocomplete=list|both`), readonly menu-trigger inputs inside a
+   dropdown/`aria-expanded` container, react-select BEM (`select__control`/`Select-control`), or a
+   react-select emotion class (`css-…-control`) **with** a dropdown indicator inside.
+2. **`comboValueText` placeholder detection** — "Select an option" (non-exact placeholder) was read
+   as a real value, so those dropdowns were treated as already-answered and skipped. New
+   `isComboPlaceholder` treats any select/choose/please/pick/search-prefixed text (or dashes) as
+   empty; "None" stays a real answer.
+3. **`fillStdFields` typed into combo inputs** — the std contact pass now skips `isComboControl`
+   elements; a new **`fillStdCombos`** pass (the combobox twin of `fillStdSelects`) SELECTS
+   State/Country/City options instead. Also runs inside `correctErrors`.
+4. **Searchable combos never matched** — `selectFromCombobox` gained a type-to-filter fallback
+   (type the desired value into the combo's input, wait, pick the best filtered option) and ALWAYS
+   clears stray typed text on failure before closing, so a failed attempt can no longer leave
+   uncommitted free text that fails validation.
+
+Shared discovery: new `visibleComboTriggers()` (one item per widget, container-deduped) feeds
+`fillStdCombos`, `fillEeoComboboxes` (which previously skipped INPUT triggers — react-select EEO
+dropdowns like Greenhouse demographics were never selected), and the custom-question combobox pass
+(selector widened to `aria-autocomplete` inputs + react-select control divs).
+
+**Ask-and-remember:** questions with no learned answer that the AI also can't answer now raise an
+interactive on-page panel (`showQuestionPanel`) — dropdown questions render a real `<select>` of the
+harvested options, free text gets a textarea. "Save answers & continue" banks each answer in the
+learned `customQA` store FIRST (the human's answer is truth even if applying to the widget fails),
+applies it to the form, and resumes the fill loop. Dismissing the panel falls back to the old
+behavior (fill on the page; the Continue-click confirm-capture still learns).
+
+Verified: `node --check` clean; logic tests for `isComboControl` (Bootstrap false positive, BEM /
+emotion react-select, ARIA, readonly trigger) and `isComboPlaceholder` all pass. Live E2E on a real
+Greenhouse/Workday application still needs a human run after the extension reload.
+
+## Update 2026-07-06 — v1.9.0: Job Search (new-tab, Adzuna-backed) — Phase 1
 
 New feature: search for jobs by **title and/or industry**, ranked by résumé fit, in a **full-page
 browser tab** (roomy, uncluttered). Built in phases; this is Phase 1 (search + filters + ranked

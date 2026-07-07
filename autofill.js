@@ -9,10 +9,13 @@
 //      (generating + saving a per-site credential when the page wants an account created),
 //      and attaches the stored resume file to empty resume/CV file inputs.
 //   3. Answers leftover custom questions from the learned bank; anything still unanswered
-//      goes to the free Chatwillow backend in ONE batched AI call.
+//      goes to the free Chatwillow backend in ONE batched AI call. Dropdown-style questions
+//      (native <select>, ARIA/react-select comboboxes, radios) are always answered by
+//      SELECTING an option — never by typing free text into the widget.
 //   4. If the AI answered anything, it STOPS and asks the human to review — the click on
 //      Next/Continue that the human makes is what confirms + saves those answers to the
-//      learned bank (then filling automatically resumes).
+//      learned bank (then filling automatically resumes). Questions the AI could NOT answer
+//      are asked directly in an on-page panel; saved answers are banked and reused next time.
 //   5. Otherwise it advances through the wizard: click Next/Continue (allowlist only),
 //      wait for the SPA to settle, re-fill, repeat — stopping the moment a Submit/Apply/
 //      Create Account button appears. THAT BUTTON IS NEVER CLICKED. A human always submits.
@@ -84,6 +87,89 @@
     el.textContent = text;
     clearTimeout(el.hideTimer);
     el.hideTimer = setTimeout(function () { if (el.parentNode) el.remove(); }, 15000);
+  }
+
+  // ---------- ask-the-human panel ----------
+  // When a question has no learned answer and the AI couldn't answer it, ASK the human directly in
+  // a small on-page panel instead of just hoping they find the field. Dropdown questions get a real
+  // <select> of the harvested options, so the answer always commits as a proper selection. Saving
+  // applies each answer to the form AND banks it in the learned Q&A store — the next application
+  // that asks the same question is answered automatically.
+  function removeQuestionPanel() {
+    var p = document.getElementById('alicia-question-panel');
+    if (p) p.remove();
+  }
+  function showQuestionPanel(items) {
+    removeQuestionPanel();
+    var panel = document.createElement('div');
+    panel.id = 'alicia-question-panel';
+    panel.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;width:360px;max-height:70vh;overflow:auto;background:#1e1e2e;color:#eee;border-radius:12px;padding:14px 16px;font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.45);';
+
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+    var title = document.createElement('strong');
+    title.style.fontSize = '14px';
+    title.textContent = 'Alicia needs ' + items.length + ' answer' + (items.length === 1 ? '' : 's');
+    head.appendChild(title);
+    var x = document.createElement('button');
+    x.textContent = '✕';
+    x.title = 'Dismiss — fill the fields on the page yourself instead';
+    x.style.cssText = 'background:none;border:none;color:#aaa;font-size:14px;cursor:pointer;padding:0 2px;';
+    x.onclick = removeQuestionPanel;
+    head.appendChild(x);
+    panel.appendChild(head);
+
+    var controls = [];
+    items.forEach(function (item) {
+      var block = document.createElement('div');
+      block.style.cssText = 'margin-bottom:10px;';
+      var lab = document.createElement('div');
+      lab.textContent = item.label.length > 160 ? item.label.slice(0, 157) + '…' : item.label;
+      lab.style.cssText = 'margin-bottom:4px;color:#cdd6f4;';
+      block.appendChild(lab);
+      var ctrl;
+      if (item.options && item.options.length) {
+        ctrl = document.createElement('select');
+        ctrl.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:1px solid #444;background:#2a2a3c;color:#eee;box-sizing:border-box;';
+        var ph = document.createElement('option');
+        ph.value = ''; ph.textContent = '— choose —';
+        ctrl.appendChild(ph);
+        item.options.forEach(function (o) {
+          var op = document.createElement('option');
+          op.value = o; op.textContent = o;
+          ctrl.appendChild(op);
+        });
+      } else {
+        ctrl = document.createElement('textarea');
+        ctrl.rows = 2;
+        ctrl.placeholder = 'Your answer…';
+        ctrl.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:1px solid #444;background:#2a2a3c;color:#eee;resize:vertical;box-sizing:border-box;font:inherit;';
+      }
+      block.appendChild(ctrl);
+      panel.appendChild(block);
+      controls.push({ item: item, ctrl: ctrl });
+    });
+
+    var save = document.createElement('button');
+    save.textContent = 'Save answers & continue';
+    save.style.cssText = 'width:100%;padding:8px;border:none;border-radius:8px;background:#4caf50;color:#fff;font-weight:600;cursor:pointer;font:inherit;';
+    save.onclick = async function () {
+      save.disabled = true;
+      save.textContent = 'Filling…';
+      for (var i = 0; i < controls.length; i++) {
+        var v = (controls[i].ctrl.value || '').trim();
+        if (!v) continue;
+        var item = controls[i].item;
+        // Remember FIRST — the human's answer is truth even if applying to this widget fails.
+        upsertLearnedAnswer(item.label, v, item.type, item.options);
+        try { await applyAnswerToItem(item, v); } catch (e) {}
+      }
+      removeQuestionPanel();
+      showBanner('Answers saved — Alicia will remember them for next time.', '#4caf50');
+      setTimeout(function () { window.__aliciaAutofillRun(); }, 800);
+    };
+    panel.appendChild(save);
+    document.body.appendChild(panel);
   }
 
   // ---------- label discovery ----------
@@ -276,6 +362,7 @@
       if (el.disabled || el.readOnly) continue;
       if (el.value && el.value.trim()) continue;
       if (!visible(el)) continue;
+      if (isComboControl(el)) continue; // dropdown widgets are SELECTED (fillStdCombos), never typed into
       var s = signals(el);
       if (!s) continue;
       for (var f = 0; f < STD.length; f++) {
@@ -394,6 +481,7 @@
   async function correctErrors(profile, eeo) {
     var n = 0;
     n += fillStdSelects(profile);
+    try { n += await fillStdCombos(profile); } catch (e) {}
     n += fillEeoSelects(eeo);
     try { n += await fillEeoComboboxes(eeo); } catch (e) {}
     var flagged = document.querySelectorAll(
@@ -462,38 +550,18 @@
     return filled;
   }
 
-  // Workday-style dropdowns: no native <select>, just a button with role=combobox that opens
-  // a portaled listbox. Open it, pick the best-matching option, or Escape out.
+  // EEO/demographic dropdowns rendered as comboboxes: Workday-style listbox buttons AND
+  // react-select inputs (Greenhouse demographic questions — the old pass skipped INPUT triggers,
+  // so those were typed into by nothing and left unanswered). Selects the option from saved prefs.
   async function fillEeoComboboxes(eeo) {
-    var filled = 0;
-    var triggers = document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"]');
-    for (var ti = 0; ti < triggers.length; ti++) {
-      var trig = triggers[ti];
+    var filled = 0, combos = visibleComboTriggers();
+    for (var ti = 0; ti < combos.length; ti++) {
+      var c = combos[ti];
       try {
-        if (trig.tagName === 'SELECT' || trig.tagName === 'INPUT' || trig.disabled || !visible(trig)) continue;
-        var curText = norm(getText(trig) || trig.value || '');
-        if (curText && !/select|choose|--|^$/.test(curText)) continue;
-        var tKey = eeoKey(signals(trig));
+        if (comboValueText(c.trig, c.container)) continue; // already has a real selection
+        var tKey = eeoKey(signals(c.trig));
         if (!tKey || !eeo[tKey]) continue;
-
-        fireClick(trig);
-        await sleep(250);
-
-        var opts = document.querySelectorAll('[role="option"]:not([aria-disabled="true"]), [role="listbox"] li');
-        var tBest = null, tbs = 0;
-        for (var oi = 0; oi < opts.length; oi++) {
-          var opt = opts[oi];
-          if (!visible(opt)) continue;
-          var sc = score(getText(opt), eeo[tKey]);
-          if (sc > tbs) { tbs = sc; tBest = opt; }
-        }
-        if (tBest && tbs >= 45) {
-          fireClick(tBest);
-          await sleep(120);
-          filled++;
-        } else {
-          trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-        }
+        if (await selectFromCombobox(c.trig, eeo[tKey])) filled++;
       } catch (e) { /* one odd widget shouldn't abort the rest */ }
     }
     return filled;
@@ -505,11 +573,28 @@
   // native <select>. Typing an answer into them filters options but never commits a selection, so
   // the form rejects it ("This field is required"). These helpers OPEN the menu and CLICK the
   // matching option instead of typing.
+  // A combo control must be SELECTED-from, never typed-into as free text. Detection uses strong
+  // signals only: ARIA combobox semantics, readonly menu-trigger inputs, or react-select's specific
+  // class shapes. NOTE: a bare [class*="-control"] match is NOT enough — Bootstrap's `form-control`
+  // sits on plain text inputs, and misclassifying those made the engine skip real free-text
+  // questions entirely (field left blank -> "required" error on advance).
   function isComboControl(el) {
-    if (!el) return false;
-    if (el.getAttribute && (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox')) return true;
-    if (el.getAttribute && el.getAttribute('aria-autocomplete') === 'list') return true;
-    return !!(el.closest && el.closest('[role="combobox"], [aria-haspopup="listbox"], [class*="select__control"], [class*="-control"]') && !el.closest('select'));
+    if (!el || !el.getAttribute) return false;
+    if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox') return true;
+    var ac = el.getAttribute('aria-autocomplete');
+    if (ac === 'list' || ac === 'both') return true;
+    if (!el.closest || el.closest('select')) return false;
+    if (el.closest('[role="combobox"], [aria-haspopup="listbox"]')) return true;
+    if (el.tagName === 'INPUT' && el.readOnly && el.closest('[aria-expanded], [class*="dropdown"], [class*="Dropdown"]')) return true;
+    var rs = el.closest('[class*="select__control"], [class*="Select-control"], [class*="-control"]');
+    if (rs) {
+      var cls = String(rs.className || '');
+      if (/select__control|Select-control/.test(cls)) return true; // react-select BEM / legacy classes
+      // react-select emotion classes look like `css-13cymwt-control`; require a dropdown indicator
+      // inside so a random `*-control` styling class on a plain wrapper can't misfire.
+      if (/(^|\s)css-[^\s]*-control(\s|$)/.test(cls) && rs.querySelector('[class*="ndicator"], svg')) return true;
+    }
+    return false;
   }
   function collectMenuOptions() {
     var out = [];
@@ -533,17 +618,20 @@
   function closeComboMenu(trig) {
     try { trig.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); } catch (e) {}
   }
+  // Placeholder texts ("Select…", "Choose an option", "Please select", "--") mean NO value yet.
+  // The old exact-match test treated "Select an option" as a real value, so those dropdowns were
+  // skipped as already-answered and the form errored on advance.
+  function isComboPlaceholder(t) {
+    var n = norm(t);
+    return !n || /^(select|choose|please|pick|search)\b/.test(n) || /^-+$/.test(n.replace(/\s/g, ''));
+  }
   function comboValueText(trig, container) {
     var sv = container && container.querySelector('[class*="singleValue"], [class*="single-value"], [class*="multiValue"]');
     if (sv && getText(sv)) return getText(sv);
     var t = getText(trig) || trig.value || '';
-    return /^(select|choose|--|)$/.test(norm(t)) ? '' : t;
+    return isComboPlaceholder(t) ? '' : t;
   }
-  // Open the combobox, click the option best matching `desired` (string or array of acceptable
-  // strings), and return whether a selection was made. Leaves the menu closed either way.
-  async function selectFromCombobox(trig, desired) {
-    var wants = Array.isArray(desired) ? desired : [desired];
-    var opts = await openComboMenu(trig);
+  function bestMenuOption(opts, wants) {
     var best = null, bs = 0;
     for (var i = 0; i < opts.length; i++) {
       var opt = opts[i]; if (!visible(opt)) continue;
@@ -555,7 +643,39 @@
         if (sc > bs) { bs = sc; best = opt; }
       }
     }
-    if (best && bs >= 45) { fireClick(best); await sleep(150); return true; }
+    return { el: best, score: bs };
+  }
+  // The typeable input inside/behind a combobox trigger (react-select puts it inside the control).
+  function comboTextInput(trig) {
+    if (trig.tagName === 'INPUT') return trig;
+    if (!trig.querySelector) return null;
+    return trig.querySelector('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+  }
+  // Open the combobox, click the option best matching `desired` (string or array of acceptable
+  // strings), and return whether a selection was made. SEARCHABLE combos (long lists that render
+  // no options until you type — locations, schools, countries) get a type-to-filter fallback. On
+  // failure any typed text is CLEARED before closing: stray free text left in a combobox is
+  // exactly what fails form validation. Leaves the menu closed either way.
+  async function selectFromCombobox(trig, desired) {
+    var wants = Array.isArray(desired) ? desired : [desired];
+    var r = bestMenuOption(await openComboMenu(trig), wants);
+    if (!(r.el && r.score >= 45)) {
+      var input = comboTextInput(trig);
+      if (input && visible(input) && !input.disabled && !input.readOnly) {
+        try {
+          input.focus();
+          setNativeValue(input, wants[0]);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await sleep(700);
+          r = bestMenuOption(collectMenuOptions(), wants);
+          if (!(r.el && r.score >= 45)) {
+            setNativeValue(input, '');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        } catch (e) {}
+      }
+    }
+    if (r.el && r.score >= 45) { fireClick(r.el); await sleep(150); return true; }
     closeComboMenu(trig);
     return false;
   }
@@ -572,6 +692,44 @@
       await sleep(60);
       return texts;
     } catch (e) { return []; }
+  }
+
+  // Every dropdown-widget trigger on the page, ONE per widget. Covers ARIA comboboxes, listbox
+  // buttons, aria-autocomplete inputs, and react-select control divs (a react-select matches both
+  // its control div and its inner input — the container dedupe keeps the first).
+  var COMBO_TRIGGER_SELECTOR = '[role="combobox"], [aria-haspopup="listbox"], input[aria-autocomplete="list"], input[aria-autocomplete="both"], [class*="select__control"], [class*="Select-control"]';
+  function comboContainer(trig) {
+    return trig.closest('fieldset,.form-group,[class*="field"],[class*="question"],div') || trig.parentElement;
+  }
+  function visibleComboTriggers() {
+    var seen = [], out = [];
+    var nodes = document.querySelectorAll(COMBO_TRIGGER_SELECTOR);
+    for (var i = 0; i < nodes.length; i++) {
+      var trig = nodes[i];
+      if (trig.tagName === 'SELECT' || trig.disabled || !visible(trig)) continue;
+      var cont = comboContainer(trig);
+      if (cont && seen.indexOf(cont) >= 0) continue;
+      seen.push(cont);
+      out.push({ trig: trig, container: cont });
+    }
+    return out;
+  }
+  // Proactively fill standard dropdowns rendered as comboboxes (State/Country/City) by SELECTING
+  // the option — the combobox twin of fillStdSelects. Typing "Texas" into a State combobox filters
+  // the menu but never commits, so the form rejects it; this picks the option instead.
+  async function fillStdCombos(profile) {
+    var filled = 0, combos = visibleComboTriggers();
+    for (var i = 0; i < combos.length; i++) {
+      var c = combos[i];
+      try {
+        if (comboValueText(c.trig, c.container)) continue; // already has a selection
+        var sig = signals(c.trig);
+        if (eeoKey(sig)) continue; // EEO combos are filled from saved prefs elsewhere
+        var desired = stdSelectDesired(sig, profile);
+        if (desired && desired.length && await selectFromCombobox(c.trig, desired)) filled++;
+      } catch (e) { /* one odd widget shouldn't abort the rest */ }
+    }
+    return filled;
   }
 
   // ---------- resume file attach ----------
@@ -618,11 +776,10 @@
     // react-select / listbox combobox questions that aren't EEO and have no selection yet. These
     // MUST be picked from a menu, not typed, so give each an apply()/getValue() that drives the
     // combobox. Harvest the option texts up front so the AI can return one verbatim.
-    var combos = document.querySelectorAll('[role="combobox"], [aria-haspopup="listbox"]');
+    var combos = visibleComboTriggers();
     for (var ki = 0; ki < combos.length; ki++) {
-      var trig = combos[ki];
-      if (trig.tagName === 'SELECT' || trig.disabled || !visible(trig)) continue;
-      var kcont = trig.closest('fieldset,.form-group,[class*="field"],[class*="question"],div') || trig.parentElement;
+      var trig = combos[ki].trig;
+      var kcont = combos[ki].container;
       if (comboValueText(trig, kcont)) continue; // already has a selection
       var klabel = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       if (!klabel || klabel.length < 8) continue;
@@ -1262,6 +1419,7 @@
         var n = 0;
         n += fillStdFields(profile);
         n += fillStdSelects(profile); // State/Country/City dropdowns → select the option, don't type
+        try { n += await fillStdCombos(profile); } catch (e) {} // same, for combobox-style dropdowns
         if (adapter.fillTypeaheads) { try { n += await adapter.fillTypeaheads(profile); } catch (e) {} }
         n += fillPasswordFields(profile, siteCredentials, state);
         n += fillEeoSelects(eeo);
@@ -1347,7 +1505,10 @@
               attachConfirmCapture();
               if (needHuman.length) {
                 result.status = 'stopped_needs_input';
-                showBanner('New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill in and click Continue. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' and keep going.', '#e0a800');
+                // Ask directly in an interactive panel (dropdowns get a real option list); saving
+                // banks each answer in the learned store and resumes filling automatically. The
+                // confirm-capture above still learns if they dismiss it and edit the page instead.
+                showQuestionPanel(needHuman);
               } else {
                 result.status = 'answered_review';
                 showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.', '#e0a800');
