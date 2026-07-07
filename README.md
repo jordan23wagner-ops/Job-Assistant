@@ -5,6 +5,13 @@ almost any site — LinkedIn Easy Apply, Workday, Greenhouse, Lever, iCIMS, Ashb
 SmartRecruiters, Taleo, BrassRing, Workable, and custom company portals. Free to use: every
 AI feature runs on a free backend, no API key required.
 
+> **Now also in the Wagner-GPT web app.** Job search, the résumé bank, and the application tracker
+> are being folded into [Wagner-GPT](https://wagner-gpt.vercel.app) as a **Jobs** tab so everything
+> lives in one place. The web app's search additionally pulls jobs directly from company career
+> boards (Greenhouse/Lever/Ashby/Workable) in your chosen industry, ranked by résumé fit. This
+> extension remains for what a web page can't do: **on-page application autofill** (LinkedIn Easy
+> Apply + external ATS). See the Wagner-GPT repo's "Jobs" section.
+
 ---
 
 ## Features
