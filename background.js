@@ -1,4 +1,15 @@
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+// Swallow benign MV3 service-worker lifecycle rejections (e.g. "No SW" when the worker is spun
+// down as a promise settles) so they don't surface as scary "Uncaught (in promise)" errors on the
+// extensions page. Real logic errors still surface via their own try/catch/console paths.
+self.addEventListener('unhandledrejection', function (e) {
+  var msg = (e && e.reason && (e.reason.message || e.reason)) || '';
+  if (/No SW|Extension context|message channel closed|Receiving end does not exist/i.test(String(msg))) {
+    e.preventDefault();
+  }
+});
+
+// setPanelBehavior returns a promise that can reject with "No SW" during worker startup — catch it.
+try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(function () {}); } catch (e) {}
 
 // ===== External-ATS application sessions =====
 // When the user clicks "Auto-Fill Open Application" on a non-LinkedIn page, sidepanel.js

@@ -701,14 +701,16 @@
     }
     return null;
   }
-  // From a details page, click through "Apply" up to a couple of hops until a real form appears.
+  // From a details page, click through "Apply" (details -> intermediate -> form) until a real form
+  // appears. The human only steps in for a captcha/bot-check or the final Submit — never for these
+  // navigational "Apply" hops — so click through up to 3 of them.
   async function advanceToApplicationForm() {
-    for (var hop = 0; hop < 2; hop++) {
+    for (var hop = 0; hop < 3; hop++) {
+      if (hasRecognizedForm()) return true;
       var btn = findApplyStartButton();
-      if (!btn) return false;
+      if (!btn) return hasRecognizedForm();
       btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       await waitForDomSettle(4000);
-      if (hasRecognizedForm()) return true;
     }
     return hasRecognizedForm();
   }
