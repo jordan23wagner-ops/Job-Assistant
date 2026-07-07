@@ -92,6 +92,40 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
   }
 });
 
+// ===== Web-app handoff (Wagner-GPT "Jobs" tab -> auto-apply) =====
+// bridge.js (content script on the Wagner-GPT origin) relays the web app's "apply to these jobs"
+// request here. We open each posting in its own tab, paced ~3s apart (human-like, gentle), and
+// register an autofill session for it — the same session the manual button / auto-detect offer
+// create, so the existing onUpdated handler injects autofill.js when each posting loads. As always,
+// the engine stops before the final Submit; a human clicks Submit on each application.
+var WEBAPP_APPLY_PACE_MS = 3000;
+
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (!message || message.type !== 'WEBAPP_APPLY') return;
+  var jobs = Array.isArray(message.jobs) ? message.jobs.slice(0, 5) : [];
+  var i = 0;
+  function openNext() {
+    if (i >= jobs.length) return;
+    var job = jobs[i++];
+    if (!job || !job.url || !/^https?:/i.test(job.url)) { openNext(); return; }
+    var host = '';
+    try { host = new URL(job.url).hostname; } catch (e) {}
+    chrome.tabs.create({ url: job.url, active: i === 1 }, function (tab) {
+      if (!tab) return;
+      chrome.storage.local.get('autofillSessions', function (data) {
+        var sessions = data.autofillSessions || {};
+        // Stash the tailored résumé text on the session so future autofill work can reference it.
+        sessions[String(tab.id)] = { hostname: host, startedAt: Date.now(), tailoredResume: job.resumeText || '' };
+        chrome.storage.local.set({ autofillSessions: sessions });
+      });
+    });
+    setTimeout(openNext, WEBAPP_APPLY_PACE_MS);
+  }
+  openNext();
+  try { sendResponse({ ok: true, count: jobs.length }); } catch (e) {}
+  return true; // async sendResponse
+});
+
 // ===== Self-healing content-script injection on LinkedIn =====
 // Manifest-registered content scripts only reach frames created AFTER the extension load and
 // never heal orphaned copies left behind by an extension reload. That made every fix depend on
