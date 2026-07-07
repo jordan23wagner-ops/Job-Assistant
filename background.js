@@ -9,10 +9,36 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 // never clicks Submit/Apply/Create-Account buttons; the human always does that.
 var ATS_SESSION_TTL_MS = 20 * 60 * 1000;
 var ATS_HOST_RE = /(^|\.)(myworkdayjobs|myworkdaysite|workday|greenhouse|lever|icims|ashbyhq|smartrecruiters|brassring|jobvite|taleo|oraclecloud|successfactors|workable|bamboohr|adp|paylocity|paycom|ultipro|ukg|dayforcehcm|eightfold|phenompeople|avature|breezy|jazz|recruitee|teamtailor)\.(com|io|co|net|hr|ai)$/i;
+// Job aggregators/redirectors that sit BETWEEN a search result and the real employer application
+// (they show email-capture interstitials, then bounce to the employer's ATS). For an explicit
+// web-app apply we auto-advance through these to reach the real form.
+var AGGREGATOR_HOST_RE = /(^|\.)(adzuna|indeed|glassdoor|ziprecruiter|simplyhired|monster|dice|talent|jooble|neuvoo)\.(com|net|co\.uk|ca|com\.au|de|fr)$/i;
 
 function baseDomain(host) {
   var parts = (host || '').split('.');
   return parts.length <= 2 ? host : parts.slice(-2).join('.');
+}
+
+// Injected into an aggregator landing page (Adzuna/Indeed/etc.) during an explicit apply session:
+// dismiss the email-capture modal and click through to the employer's application. Best-effort.
+function skipAggregatorInterstitial() {
+  try {
+    var clickByText = function (patterns) {
+      var els = document.querySelectorAll('a,button,[role="button"]');
+      for (var i = 0; i < els.length; i++) {
+        var t = (els[i].textContent || '').trim();
+        if (!t || t.length > 60) continue;
+        for (var r = 0; r < patterns.length; r++) {
+          if (patterns[r].test(t)) { try { els[i].click(); return true; } catch (e) {} }
+        }
+      }
+      return false;
+    };
+    // 1) dismiss any "leave your email" modal, preferring the option that proceeds to the job
+    clickByText([/take me to the job/i, /^no,?\s*thanks/i, /^skip$/i, /not now/i, /^close$/i]);
+    // 2) then click through to the employer application
+    setTimeout(function () { clickByText([/take me to the job/i, /apply for (this )?job/i, /^apply now$/i, /^apply$/i]); }, 500);
+  } catch (e) {}
 }
 
 chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
@@ -30,9 +56,16 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     var host = '';
     try { host = new URL(tab.url).hostname; } catch (e) {}
     var sameSite = host && s.hostname && baseDomain(host) === baseDomain(s.hostname);
-    if (!sameSite && !ATS_HOST_RE.test(host)) return; // user wandered off — leave the page alone
+    // Explicit web-app applies act on ANY employer page they land on (the user chose this job);
+    // manual/auto-detect sessions stay scoped to same-site or the known-ATS allowlist.
+    if (!sameSite && !ATS_HOST_RE.test(host) && !s.explicit) return; // user wandered off — leave the page alone
     setTimeout(function () {
-      chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
+      if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
+        // On an aggregator landing page: click through to the employer application instead of filling.
+        chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
+      } else {
+        chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
+      }
     }, 800);
   });
 });
@@ -90,6 +123,40 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
   if (message.type === 'ATS_OFFER_DISMISS' && message.host) {
     atsOfferDismissed[message.host] = Date.now();
   }
+});
+
+// ===== Web-app handoff (Wagner-GPT "Jobs" tab -> auto-apply) =====
+// bridge.js (content script on the Wagner-GPT origin) relays the web app's "apply to these jobs"
+// request here. We open each posting in its own tab, paced ~3s apart (human-like, gentle), and
+// register an autofill session for it — the same session the manual button / auto-detect offer
+// create, so the existing onUpdated handler injects autofill.js when each posting loads. As always,
+// the engine stops before the final Submit; a human clicks Submit on each application.
+var WEBAPP_APPLY_PACE_MS = 3000;
+
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (!message || message.type !== 'WEBAPP_APPLY') return;
+  var jobs = Array.isArray(message.jobs) ? message.jobs.slice(0, 5) : [];
+  var i = 0;
+  function openNext() {
+    if (i >= jobs.length) return;
+    var job = jobs[i++];
+    if (!job || !job.url || !/^https?:/i.test(job.url)) { openNext(); return; }
+    var host = '';
+    try { host = new URL(job.url).hostname; } catch (e) {}
+    chrome.tabs.create({ url: job.url, active: i === 1 }, function (tab) {
+      if (!tab) return;
+      chrome.storage.local.get('autofillSessions', function (data) {
+        var sessions = data.autofillSessions || {};
+        // Stash the tailored résumé text on the session so future autofill work can reference it.
+        sessions[String(tab.id)] = { hostname: host, startedAt: Date.now(), explicit: true, tailoredResume: job.resumeText || '' };
+        chrome.storage.local.set({ autofillSessions: sessions });
+      });
+    });
+    setTimeout(openNext, WEBAPP_APPLY_PACE_MS);
+  }
+  openNext();
+  try { sendResponse({ ok: true, count: jobs.length }); } catch (e) {}
+  return true; // async sendResponse
 });
 
 // ===== Self-healing content-script injection on LinkedIn =====

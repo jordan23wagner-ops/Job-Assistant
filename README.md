@@ -5,6 +5,13 @@ almost any site — LinkedIn Easy Apply, Workday, Greenhouse, Lever, iCIMS, Ashb
 SmartRecruiters, Taleo, BrassRing, Workable, and custom company portals. Free to use: every
 AI feature runs on a free backend, no API key required.
 
+> **Now also in the Wagner-GPT web app.** Job search, the résumé bank, and the application tracker
+> are being folded into [Wagner-GPT](https://wagner-gpt.vercel.app) as a **Jobs** tab so everything
+> lives in one place. The web app's search additionally pulls jobs directly from company career
+> boards (Greenhouse/Lever/Ashby/Workable) in your chosen industry, ranked by résumé fit. This
+> extension remains for what a web page can't do: **on-page application autofill** (LinkedIn Easy
+> Apply + external ATS). See the Wagner-GPT repo's "Jobs" section.
+
 ---
 
 ## Features
@@ -133,6 +140,7 @@ open — the content script in an already-open tab doesn't update until the page
 | `content.js` | Runs on linkedin.com: job detection, Scan & Rank, People scraping, Easy Apply auto-fill + auto-advance + custom-question AI answering, Match Score overlay, Apply Queue |
 | `autofill.js` | Self-contained external-ATS fill engine: injected by background.js into any non-LinkedIn ATS page. Handles all adapters, multi-step advance, account creation, resume file attach, learned-answer bank, AI custom questions |
 | `detect.js` | Tiny offer script injected on known ATS pages — checks for an application form and floats "⚡ Auto-fill this application?" |
+| `bridge.js` | Content script on the Wagner-GPT web app origin. Announces the extension to the web app's **Jobs** tab and relays its "apply to these jobs" request to `background.js`, which opens each posting (paced) and starts the normal autofill session — stopping before Submit. |
 | `jobsearch.html` / `jobsearch.js` | Full-page job search tab: Adzuna-backed search, industry/filter UI, résumé-fit ranking, Apply (auto-starts autofill + saves to Tracker), Tailor résumé modal |
 | `sidepanel.html` / `sidepanel.js` | Side panel UI and logic — résumé tools, chat, tracker, universal auto-fill button, Learned Answers, Site Passwords |
 | `parsers.js` | Self-contained PDF/DOCX text extraction (no external libraries) |
