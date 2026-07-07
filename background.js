@@ -27,24 +27,34 @@ function normUrl(u) {
 var PENDING_APPLY_TTL_MS = 10 * 60 * 1000;
 
 // Injected into an aggregator landing page (Adzuna/Indeed/etc.) during an explicit apply session:
-// dismiss the email-capture modal and click through to the employer's application. Best-effort.
+// dismiss the email-capture modal and click through to the employer's application. The pop-up/button
+// can appear a beat after load (or after the first interaction), so POLL for ~12s and click as soon
+// as a matching control shows up — clicking "…take me to the job" / "Apply" navigates to the
+// employer, at which point this page unloads and the engine takes over there. Best-effort.
 function skipAggregatorInterstitial() {
   try {
+    var PROCEED = [/take me to the job/i, /apply (for|on) /i, /apply for (this )?job/i, /^apply now$/i, /^apply$/i, /continue to (apply|application|job)/i, /view (the )?job/i, /go to (the )?job/i];
+    var DISMISS = [/^no,?\s*thanks/i, /^skip$/i, /not now/i, /maybe later/i, /^close$/i, /^dismiss$/i, /×/];
     var clickByText = function (patterns) {
-      var els = document.querySelectorAll('a,button,[role="button"]');
+      var els = document.querySelectorAll('a,button,[role="button"],input[type="submit"]');
       for (var i = 0; i < els.length; i++) {
-        var t = (els[i].textContent || '').trim();
+        var el = els[i];
+        if (!el.offsetParent && el.tagName !== 'A') continue; // visible only
+        var t = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
         if (!t || t.length > 60) continue;
         for (var r = 0; r < patterns.length; r++) {
-          if (patterns[r].test(t)) { try { els[i].click(); return true; } catch (e) {} }
+          if (patterns[r].test(t)) { try { el.click(); return true; } catch (e) {} }
         }
       }
       return false;
     };
-    // 1) dismiss any "leave your email" modal, preferring the option that proceeds to the job
-    clickByText([/take me to the job/i, /^no,?\s*thanks/i, /^skip$/i, /not now/i, /^close$/i]);
-    // 2) then click through to the employer application
-    setTimeout(function () { clickByText([/take me to the job/i, /apply for (this )?job/i, /^apply now$/i, /^apply$/i]); }, 500);
+    var tries = 0;
+    (function attempt() {
+      tries++;
+      // Prefer the control that proceeds to the job; else dismiss the email modal so it reappears cleanly.
+      if (!clickByText(PROCEED)) clickByText(DISMISS);
+      if (tries < 12) setTimeout(attempt, 1000); // poll ~12s; page nav ends this when it works
+    })();
   } catch (e) {}
 }
 

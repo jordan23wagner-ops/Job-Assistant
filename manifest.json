@@ -1,10 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Alicia AI - Job Assistant",
-  "version": "1.11.2",
+  "version": "1.11.3",
   "description": "AI-powered job search assistant for LinkedIn",
-  "permissions": ["sidePanel", "activeTab", "storage", "unlimitedStorage", "tabs", "scripting", "webNavigation"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "sidePanel",
+    "activeTab",
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "scripting",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -13,14 +23,23 @@
   },
   "content_scripts": [
     {
-      "matches": ["*://*.linkedin.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://*.linkedin.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     },
     {
-      "matches": ["https://wagner-gpt.vercel.app/*", "http://localhost/*"],
-      "js": ["bridge.js"],
+      "matches": [
+        "https://wagner-gpt.vercel.app/*",
+        "http://localhost/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     }
