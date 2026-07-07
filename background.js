@@ -51,8 +51,10 @@ function skipAggregatorInterstitial() {
     var tries = 0;
     (function attempt() {
       tries++;
-      // Prefer the control that proceeds to the job; else dismiss the email modal so it reappears cleanly.
-      if (!clickByText(PROCEED)) clickByText(DISMISS);
+      // Dismiss any email/interstitial modal FIRST (the "Apply" button is often behind it and a
+      // no-op while it's open), THEN click through to the employer application on the next tick.
+      clickByText(DISMISS);
+      clickByText(PROCEED);
       if (tries < 12) setTimeout(attempt, 1000); // poll ~12s; page nav ends this when it works
     })();
   } catch (e) {}
