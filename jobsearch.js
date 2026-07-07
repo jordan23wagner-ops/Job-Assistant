@@ -29,6 +29,8 @@
 
   var el = function (id) { return document.getElementById(id); };
   var categories = [];
+  var lastResults = []; // stored so Apply/Tailor buttons can reference jobs by index
+  var tailorState = null; // { job, history, pendingResume }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -112,6 +114,37 @@
     });
   }
 
+  // Multi-turn backend call — history is [{role,content},…]; last entry is the user turn.
+  function backendChat(history) {
+    return new Promise(function (resolve, reject) {
+      chrome.storage.local.get(['alicia_session'], function (stored) {
+        var headers = { 'Content-Type': 'application/json' };
+        var s = stored && stored.alicia_session;
+        if (s && s.access_token && Date.now() < (s.expires_at || 0) - 60000) headers['Authorization'] = 'Bearer ' + s.access_token;
+        var last = history[history.length - 1];
+        fetch(BACKEND + '/chat', {
+          method: 'POST', headers: headers,
+          body: JSON.stringify({ messages: history.slice(0, -1), newMessage: last.content, model: 'auto' })
+        }).then(function (resp) {
+          if (!resp.ok) throw new Error('Backend ' + resp.status);
+          var reader = resp.body.getReader(), dec = new TextDecoder(), buf = '', text = '';
+          (function pump() {
+            reader.read().then(function (ch) {
+              if (ch.done) { if (buf.trim()) { try { var f = JSON.parse(buf.trim()); if (f.delta) text += f.delta; } catch (e) {} } resolve(text); return; }
+              buf += dec.decode(ch.value, { stream: true });
+              var lines = buf.split('\n'); buf = lines.pop();
+              for (var i = 0; i < lines.length; i++) {
+                var ln = lines[i].trim(); if (!ln) continue;
+                try { var ev = JSON.parse(ln); if (ev.delta) text += ev.delta; else if (ev.error) throw new Error(ev.error); } catch (e) {}
+              }
+              pump();
+            }).catch(reject);
+          })();
+        }).catch(reject);
+      });
+    });
+  }
+
   function lexicalRank(results, resume) {
     var rt = (resume || '').toLowerCase();
     var toks = {};
@@ -159,11 +192,12 @@
   }
 
   function render(results) {
+    lastResults = results;
     var wrap = el('results');
     wrap.innerHTML = '';
     el('empty').style.display = results.length ? 'none' : 'block';
     if (!results.length) { el('empty').textContent = 'No jobs found — try broader titles, fewer filters, or a different industry.'; return; }
-    results.forEach(function (j) {
+    results.forEach(function (j, idx) {
       var atsReady = ATS_HOST_RE.test((j.url || '').replace(/^https?:\/\//, ''));
       var card = document.createElement('div');
       card.className = 'card';
@@ -184,13 +218,66 @@
           (j.description ? '<div class="snippet">' + esc(j.description.slice(0, 260)) + '…</div>' : '') +
         '</div>' +
         '<div class="actions">' +
-          '<button class="btn" data-url="' + esc(j.url) + '">Apply</button>' +
+          '<button class="btn apply-btn" data-url="' + esc(j.url) + '" data-idx="' + idx + '">Apply</button>' +
           '<a class="btn ghost" href="' + esc(j.url) + '" target="_blank" rel="noopener" style="text-decoration:none;">View posting</a>' +
+          '<button class="btn ghost tailor-btn" data-idx="' + idx + '">✏ Tailor résumé</button>' +
         '</div>';
       wrap.appendChild(card);
     });
-    Array.prototype.forEach.call(wrap.querySelectorAll('button[data-url]'), function (b) {
-      b.addEventListener('click', function () { if (b.dataset.url) window.open(b.dataset.url, '_blank', 'noopener'); });
+    // Phase 2: Apply opens tab + auto-starts autofill session + saves to Tracker
+    Array.prototype.forEach.call(wrap.querySelectorAll('.apply-btn'), function (b) {
+      b.addEventListener('click', function () {
+        if (!b.dataset.url) return;
+        var url = b.dataset.url;
+        var hostname = '';
+        try { hostname = new URL(url).hostname; } catch (e) {}
+        chrome.tabs.create({ url: url }, function (tab) {
+          chrome.storage.local.get('autofillSessions', function (data) {
+            var sessions = data.autofillSessions || {};
+            sessions[String(tab.id)] = { hostname: hostname, startedAt: Date.now() };
+            chrome.storage.local.set({ autofillSessions: sessions });
+          });
+        });
+        var job = lastResults[parseInt(b.dataset.idx, 10)];
+        if (job) saveToTracker(job);
+        b.textContent = '✓ Opening…';
+        b.disabled = true;
+      });
+    });
+    // Phase 3: Tailor résumé opens the modal
+    Array.prototype.forEach.call(wrap.querySelectorAll('.tailor-btn'), function (b) {
+      b.addEventListener('click', function () {
+        var job = lastResults[parseInt(b.dataset.idx, 10)];
+        if (job) openTailorModal(job);
+      });
+    });
+  }
+
+  function saveToTracker(j) {
+    chrome.storage.local.get('trackedJobs', function (d) {
+      var jobs = d.trackedJobs || [];
+      var url = j.url || '';
+      if (url && jobs.some(function (t) { return t.url === url; })) return;
+      jobs.unshift({
+        id: 'tj_' + Date.now(),
+        title: j.title || 'Untitled role',
+        company: j.company || '',
+        location: j.location || '',
+        url: url,
+        description: (j.description || '').slice(0, 2000),
+        status: 'applied',
+        notes: '',
+        savedAt: Date.now()
+      });
+      chrome.storage.local.set({ trackedJobs: jobs });
+    });
+  }
+
+  function saveResume(text, label) {
+    chrome.storage.local.get('savedResumes', function (d) {
+      var resumes = (d.savedResumes || []).map(function (r) { return Object.assign({}, r, { isActive: false }); });
+      resumes.unshift({ id: 'r_' + Date.now(), label: label, text: text, isActive: true, savedAt: Date.now() });
+      chrome.storage.local.set({ savedResumes: resumes, resumeText: text });
     });
   }
 
@@ -243,6 +330,89 @@
     }).then(function () { el('searchBtn').disabled = false; });
   }
 
+  // ---- Phase 3: Tailor résumé modal ----
+
+  function openTailorModal(j) {
+    tailorState = { job: j, history: [], pendingResume: null };
+    el('tailor-title').textContent = (j.title || 'Tailor résumé') + (j.company ? ' @ ' + j.company : '');
+    el('tailor-msgs').innerHTML = '';
+    el('tailor-save-row').classList.add('hidden');
+    el('tailor-save-btn').textContent = '💾 Save as active résumé';
+    el('tailor-save-btn').disabled = false;
+    el('tailor-input').value = '';
+    el('tailor-modal').classList.remove('hidden');
+
+    getResume().then(function (resume) {
+      var sys = 'You are helping tailor a résumé for a specific job. Rules:\n' +
+        '1. Ask ONE focused question at a time about the candidate\'s real experience that would strengthen their fit for this role.\n' +
+        '2. Focus on gaps: skills, achievements, or scope not clearly shown in the current résumé.\n' +
+        '3. NEVER add or invent anything the candidate hasn\'t explicitly confirmed.\n' +
+        '4. After 3-5 questions — or if the user says "generate", "done", or "ready" — output ONLY the full tailored résumé text with no preamble.\n' +
+        '5. Keep the résumé truthful. If nothing new was confirmed, return the original with only minor rephrasing toward the role.';
+      var intro = 'Job: ' + (j.title || '') + (j.company ? ' at ' + j.company : '') + '\n\n' +
+        'Description:\n' + (j.description || '(not provided)').slice(0, 1500) + '\n\n' +
+        'Current résumé:\n' + (resume || '(no résumé saved — ask the candidate to describe their background)').slice(0, 4000) + '\n\n' +
+        'Begin: review the job requirements vs. the résumé and ask your first targeted question.';
+      tailorState.history = [
+        { role: 'system', content: sys },
+        { role: 'user', content: intro }
+      ];
+      tailorAiTurn();
+    });
+  }
+
+  function closeTailorModal() {
+    el('tailor-modal').classList.add('hidden');
+    tailorState = null;
+  }
+
+  function appendTailorMsg(role, text) {
+    var msgs = el('tailor-msgs');
+    var div = document.createElement('div');
+    var looksLikeResume = role === 'ai' && text.length > 800 &&
+      /\b(EXPERIENCE|EDUCATION|SKILLS|SUMMARY|OBJECTIVE|WORK HISTORY|PROFESSIONAL EXPERIENCE)\b/i.test(text);
+    div.className = 'tailor-msg ' + (role === 'user' ? 'user' : (looksLikeResume ? 'resume' : 'ai'));
+    div.textContent = text;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+    if (looksLikeResume) {
+      tailorState.pendingResume = text;
+      el('tailor-save-row').classList.remove('hidden');
+    }
+  }
+
+  function tailorAiTurn() {
+    var sendBtn = el('tailor-send-btn');
+    sendBtn.disabled = true;
+    var typing = document.createElement('div');
+    typing.className = 'tailor-msg ai'; typing.id = 'tailor-typing'; typing.textContent = '…';
+    el('tailor-msgs').appendChild(typing);
+    el('tailor-msgs').scrollTop = el('tailor-msgs').scrollHeight;
+
+    backendChat(tailorState.history).then(function (raw) {
+      var t = el('tailor-typing'); if (t) t.remove();
+      var text = stripThinking(raw);
+      tailorState.history.push({ role: 'assistant', content: text });
+      appendTailorMsg('ai', text);
+      sendBtn.disabled = false;
+    }).catch(function (err) {
+      var t = el('tailor-typing'); if (t) t.remove();
+      appendTailorMsg('ai', 'Error: ' + (err && err.message || 'unknown'));
+      sendBtn.disabled = false;
+    });
+  }
+
+  function tailorUserSend() {
+    if (!tailorState) return;
+    var input = el('tailor-input');
+    var text = input.value.trim();
+    if (!text) return;
+    appendTailorMsg('user', text);
+    tailorState.history.push({ role: 'user', content: text });
+    input.value = '';
+    tailorAiTurn();
+  }
+
   // ---- init ----
   initIndustries();
   loadCategories();
@@ -250,5 +420,19 @@
   el('country').addEventListener('change', loadCategories);
   ['titles', 'location', 'salaryMin'].forEach(function (id) {
     el(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') doSearch(); });
+  });
+
+  // Tailor modal wiring
+  el('tailor-close').addEventListener('click', closeTailorModal);
+  el('tailor-modal').addEventListener('click', function (e) { if (e.target === this) closeTailorModal(); });
+  el('tailor-send-btn').addEventListener('click', tailorUserSend);
+  el('tailor-input').addEventListener('keydown', function (e) { if (e.key === 'Enter') tailorUserSend(); });
+  el('tailor-save-btn').addEventListener('click', function () {
+    if (!tailorState || !tailorState.pendingResume) return;
+    var label = 'Tailored for ' + (tailorState.job.title || 'role') +
+      (tailorState.job.company ? ' at ' + tailorState.job.company : '');
+    saveResume(tailorState.pendingResume, label);
+    el('tailor-save-btn').textContent = '✓ Saved as active résumé!';
+    el('tailor-save-btn').disabled = true;
   });
 })();
