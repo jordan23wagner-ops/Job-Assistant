@@ -321,6 +321,94 @@
     return filled;
   }
 
+  // ---- Standard fields that are DROPDOWNS (e.g. State, Country) ----
+  // Some forms make State/Country a <select> or ARIA combobox, not a free-text box. Typing "Texas"
+  // there fails validation; the correct move is to SELECT the matching option. These helpers pick the
+  // right option (matching a full name OR its abbreviation), and the correctErrors() pass re-runs on
+  // the specific fields a form flags invalid after you try to advance.
+  var US_STATES = {
+    alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO',
+    connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID',
+    illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA',
+    maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS',
+    missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+    'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH',
+    oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+    'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA',
+    washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC'
+  };
+  var US_ABBR = {}; (function () { for (var k in US_STATES) US_ABBR[US_STATES[k]] = k; })();
+  function titleCase(s) { return String(s || '').replace(/\b\w/g, function (c) { return c.toUpperCase(); }); }
+  function stateVariants(v) {
+    var raw = (v || '').trim(); if (!raw) return [];
+    var low = raw.toLowerCase(), out = [raw];
+    if (US_STATES[low]) out.push(US_STATES[low]);                       // full name -> abbrev
+    else if (US_ABBR[raw.toUpperCase()]) out.push(titleCase(US_ABBR[raw.toUpperCase()])); // abbrev -> full name
+    return out;
+  }
+  function countryVariants(v) {
+    var raw = (v || 'United States').trim(), low = raw.toLowerCase();
+    if (/united states|u\.?s\.?a?|america/.test(low)) return ['United States', 'United States of America', 'USA', 'US'];
+    return [raw];
+  }
+  function selectHasRealValue(sel) {
+    if (sel.selectedIndex <= 0 || !sel.value) return false;
+    var t = norm(getText(sel.options[sel.selectedIndex] || {}));
+    return t !== '' && !/^(select|choose|--|please|pick)/.test(t);
+  }
+  // Pick the option best matching any of desiredArr (exact case-insensitive match wins outright).
+  function pickSelectOption(sel, desiredArr, threshold) {
+    var best = null, bs = 0;
+    for (var o = 0; o < sel.options.length; o++) {
+      var op = sel.options[o]; if (op.value === '' && !getText(op)) continue;
+      for (var d = 0; d < desiredArr.length; d++) {
+        var want = desiredArr[d]; if (!want) continue;
+        var sc = Math.max(score(op.textContent, want), score(op.value, want));
+        if (norm(op.textContent) === norm(want) || (op.value && norm(op.value) === norm(want))) sc = 100;
+        if (sc > bs) { bs = sc; best = op; }
+      }
+    }
+    if (best && bs >= (threshold || 60)) { sel.value = best.value; fire(sel); return true; }
+    return false;
+  }
+  function stdSelectDesired(sig, profile) {
+    if (/\b(address level1|state|province|region)\b/.test(sig) && profile.state) return stateVariants(profile.state);
+    if (/\bcountry\b/.test(sig)) return countryVariants(profile.country);
+    if (/\b(address level2|city|town)\b/.test(sig) && profile.city) return [profile.city];
+    return null;
+  }
+  // Proactively fill standard <select> dropdowns (State/Country/City) by selecting the option.
+  function fillStdSelects(profile) {
+    var filled = 0, selects = document.querySelectorAll('select');
+    for (var si = 0; si < selects.length; si++) {
+      var sel = selects[si];
+      if (sel.disabled || !visible(sel) || selectHasRealValue(sel)) continue;
+      var desired = stdSelectDesired(signals(sel), profile);
+      if (desired && desired.length && pickSelectOption(sel, desired, 65)) filled++;
+    }
+    return filled;
+  }
+  // After a form flags fields invalid (red boxes) on advance, re-select the matching dropdown option
+  // for any unset <select> — both standard (State/Country) and EEO — so a mistyped free-text value
+  // gets corrected to a proper selection. Returns how many it fixed.
+  async function correctErrors(profile, eeo) {
+    var n = 0;
+    n += fillStdSelects(profile);
+    n += fillEeoSelects(eeo);
+    try { n += await fillEeoComboboxes(eeo); } catch (e) {}
+    var flagged = document.querySelectorAll(
+      'select[aria-invalid="true"], .error select, .has-error select, .invalid select, [class*="error"] select, [class*="invalid"] select'
+    );
+    for (var i = 0; i < flagged.length; i++) {
+      var sel = flagged[i];
+      if (sel.tagName !== 'SELECT' || !visible(sel) || selectHasRealValue(sel)) continue;
+      var desired = stdSelectDesired(signals(sel), profile);
+      if (!desired) { var key = eeoKey(signals(sel)); if (key && eeo[key]) desired = [eeo[key]]; }
+      if (desired && pickSelectOption(sel, desired, 55)) n++;
+    }
+    return n;
+  }
+
   function radioLabel(r) {
     var w = r.closest('label');
     if (w) return getText(w);
@@ -1044,6 +1132,7 @@
       async function fillOnePass() {
         var n = 0;
         n += fillStdFields(profile);
+        n += fillStdSelects(profile); // State/Country/City dropdowns → select the option, don't type
         if (adapter.fillTypeaheads) { try { n += await adapter.fillTypeaheads(profile); } catch (e) {} }
         n += fillPasswordFields(profile, siteCredentials, state);
         n += fillEeoSelects(eeo);
@@ -1085,6 +1174,7 @@
         result.status = 'no_fields_found';
       } else {
         for (var step = 0; step < MAX_STEPS; step++) {
+          var correctedThisStep = false; // one dropdown-correction attempt per step
           // A page nav may have landed us on an adapter hard blocker mid-wizard (e.g. Workday's
           // verify-email wall appears right after Create Account) — stop cleanly if so.
           if (adapter.blockingWall) {
@@ -1135,9 +1225,21 @@
             break;
           }
           if (hasVisibleError()) {
-            result.status = 'stopped_needs_input';
-            showBanner('Filled what it could — this step needs your input.', '#e0a800');
-            break;
+            // Validation errors (red boxes) — often a field that wanted a dropdown selection got
+            // free text (e.g. State "Texas"). Try to auto-correct by selecting the right option,
+            // then re-check; only stop for the human if it still can't be resolved.
+            var recovered = false;
+            if (!correctedThisStep) {
+              correctedThisStep = true;
+              var fixed = 0;
+              try { fixed = await correctErrors(profile, eeo); } catch (e) {}
+              if (fixed) { result.filled += fixed; await waitForDomSettle(800); recovered = !hasVisibleError(); }
+            }
+            if (!recovered) {
+              result.status = 'stopped_needs_input';
+              showBanner('Filled what it could — this step needs your input.', '#e0a800');
+              break;
+            }
           }
           var nextBtn = findButton(advancePatterns);
           if (!nextBtn) { result.status = 'done_no_more_fields'; break; }
