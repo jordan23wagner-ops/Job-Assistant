@@ -1,6 +1,19 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.12.3: don't fight Adzuna's login wall
+## Update 2026-07-08 (latest) — v1.12.4: residential-IP Adzuna resolution (Vercel can't)
+
+The v1.12.3 server-side resolver is IP-blocked by Adzuna/Cloudflare on Vercel's datacenter IP (0 of 50
+resolved in live testing). The extension runs on the user's RESIDENTIAL IP + cookies, so it isn't
+blocked: `resolveAdzunaViaFetch(url)` follows the Adzuna redirect to completion and returns the final
+employer URL if it landed on a real employer/ATS host (not another aggregator, not Adzuna's
+login/authenticate wall). Wired into the explicit-apply onUpdated handler: on an adzuna host, resolve
+once per tab (`s.adzunaTried` guards against login-wall loops) and `chrome.tabs.update` straight to the
+employer; on failure fall through to `skipAggregatorInterstitial` (which bails on the login wall).
+`AGGREGATOR_HOST_RE` broadened (jobgether/lensa/whatjobs/…) so a resolved URL that is itself another
+aggregator is rejected. Non-gated Adzuna postings now skip straight to the employer; gated ones (user
+logged out) still can't be bypassed — those are labeled honestly in the web app.
+
+## Update 2026-07-08 — v1.12.3: don't fight Adzuna's login wall
 
 Extension side of the Adzuna-skip work (main fix is in Wagner-GPT — see its HANDOFF). Adzuna now
 login-walls logged-out users (`adzuna.com/details/…?apply=1&after_login` → FB/Google/email modal), so

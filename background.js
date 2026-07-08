@@ -23,7 +23,24 @@ var ATS_HOST_RE = /(^|\.)(myworkdayjobs|myworkdaysite|workday|greenhouse|lever|i
 // Job aggregators/redirectors that sit BETWEEN a search result and the real employer application
 // (they show email-capture interstitials, then bounce to the employer's ATS). For an explicit
 // web-app apply we auto-advance through these to reach the real form.
-var AGGREGATOR_HOST_RE = /(^|\.)(adzuna|indeed|glassdoor|ziprecruiter|simplyhired|monster|dice|talent|jooble|neuvoo)\.(com|net|co\.uk|ca|com\.au|de|fr)$/i;
+var AGGREGATOR_HOST_RE = /(^|\.)(adzuna|indeed|glassdoor|ziprecruiter|simplyhired|monster|dice|talent|jooble|neuvoo|jobgether|lensa|whatjobs|appcast|jobrapido|jobcase|careerjet|careerbuilder|snagajob|jobisjob|joblist|getwork|resume-library)\.(com|net|co\.uk|ca|com\.au|de|fr|io|org)$/i;
+
+// The extension runs on the user's RESIDENTIAL IP (and with their cookies), so unlike the Vercel
+// backend it isn't blocked by Adzuna/Cloudflare and can follow an Adzuna redirect straight to the
+// employer. Given an adzuna URL, follow it to completion and return the final employer URL if it
+// landed on a real employer/ATS host (not another aggregator and not Adzuna's login wall); else null.
+function isEmployerHost(host) {
+  return !!host && !/(^|\.)adzuna\./i.test(host) && !AGGREGATOR_HOST_RE.test(host);
+}
+async function resolveAdzunaViaFetch(url) {
+  try {
+    var r = await fetch(url, { method: 'GET', redirect: 'follow', credentials: 'include', headers: { Accept: 'text/html' } });
+    var finalUrl = r && r.url;
+    if (!finalUrl || /\/authenticate|after_login=|interstitial=/i.test(finalUrl)) return null;
+    var host = ''; try { host = new URL(finalUrl).hostname; } catch (e) { return null; }
+    return isEmployerHost(host) ? finalUrl : null;
+  } catch (e) { return null; }
+}
 
 function baseDomain(host) {
   var parts = (host || '').split('.');
@@ -147,6 +164,20 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
       chrome.storage.local.set({ autofillSessions: sessions });
     } else if (!sameSite && !ATS_HOST_RE.test(host)) {
       return; // user wandered off — leave the page alone
+    }
+    // On an Adzuna page during an explicit apply: resolve to the employer from the residential IP
+    // (Vercel can't — it's IP-blocked) and navigate the tab straight there, skipping Adzuna. One
+    // attempt per tab (s.adzunaTried) so a login-wall result can't loop; on failure fall through to
+    // the aggregator click-through (which itself bails on the login wall).
+    if (s.explicit && /(^|\.)adzuna\./i.test(host) && !s.adzunaTried) {
+      s.adzunaTried = true;
+      sessions[String(tabId)] = s;
+      chrome.storage.local.set({ autofillSessions: sessions });
+      resolveAdzunaViaFetch(tab.url).then(function (employer) {
+        if (employer) { chrome.tabs.update(tabId, { url: employer }).catch(function () {}); }
+        else { chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {}); }
+      });
+      return;
     }
     setTimeout(function () {
       if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
