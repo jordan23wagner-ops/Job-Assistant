@@ -487,6 +487,18 @@
     }
     return null;
   }
+  // A CAPTCHA must NEVER reach the custom-question AI-answer pipeline — a text-only backend call
+  // has no way to actually read the challenge, and asking it anyway risks it answering with some
+  // plausible-looking text (observed: "No image provided." — an honest disclaimer from the model,
+  // but our code had no way to recognize that as "couldn't answer" and typed it into the field
+  // like a real answer). CAPTCHA fields are excluded exactly like EEO/contact fields — never
+  // discovered as a question at all, so they can only ever reach the human via the ask panel.
+  function looksLikeCaptcha(label, container) {
+    var n = norm(label || '');
+    if (/captcha|verify (that )?you.?re? (a )?human|i.?m not a robot|security check|prove (that )?you.?re? human|type the (text|characters|code) (you see|shown|above|below)|enter the code (shown|above|below)/.test(n)) return true;
+    if (container && container.querySelector && container.querySelector('img[alt*="captcha" i], img[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], [class*="recaptcha" i], [class*="hcaptcha" i]')) return true;
+    return false;
+  }
   function generatePassword() {
     var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
     var arr = new Uint32Array(16);
@@ -949,6 +961,7 @@
       var klabel = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       if (!klabel || klabel.length < 8) continue;
       if (eeoKey(norm(klabel))) continue; // EEO comboboxes handled by fillEeoComboboxes
+      if (looksLikeCaptcha(klabel, kcont)) continue; // never AI-answer a CAPTCHA
       var kopts = await harvestComboOptions(trig);
       seenControls.push(trig);
       out.push((function (t, c, lbl, opts) {
@@ -972,11 +985,13 @@
       if (eeoKey(s)) continue;
       var label = labelText(sel) || sel.getAttribute('aria-label') || '';
       if (!label || label.length < 8) continue;
+      var selCont = sel.closest('fieldset,.form-group,div') || sel.parentElement;
+      if (looksLikeCaptcha(label, selCont)) continue; // never AI-answer a CAPTCHA
       var options = [];
       for (var o = 0; o < sel.options.length; o++) { if (sel.options[o].value) options.push(getText(sel.options[o]) || sel.options[o].value); }
       if (!options.length || options.length > 30) continue;
       seenControls.push(sel);
-      pushItem({ type: 'select', control: sel, container: sel.closest('fieldset,.form-group,div') || sel.parentElement, label: label, options: options });
+      pushItem({ type: 'select', control: sel, container: selCont, label: label, options: options });
     }
 
     // Radio groups that aren't EEO and have nothing checked.
@@ -987,9 +1002,11 @@
       var qlabel = groupQuestionLabel(rs);
       if (!qlabel || qlabel.length < 8) return;
       if (eeoKey(norm(qlabel))) return;
+      var rGroupCont = rs[0].closest('fieldset,.form-group,div');
+      if (looksLikeCaptcha(qlabel, rGroupCont)) return; // never AI-answer a CAPTCHA
       var ropts = rs.map(radioLabel).filter(Boolean);
       if (ropts.length < 2 || ropts.length > 15) return;
-      pushItem({ type: 'radio', control: null, radios: rs, container: rs[0].closest('fieldset,.form-group,div'), label: qlabel, options: ropts });
+      pushItem({ type: 'radio', control: null, radios: rs, container: rGroupCont, label: qlabel, options: ropts });
     });
 
     // Text inputs / textareas with a question-looking label, still empty, not contact fields.
@@ -1007,8 +1024,10 @@
       // one-word fields we can't safely interpret (those stay empty for the human).
       var wordy = lbl.split(' ').length >= 4 || /\?/.test(lbl) || /years|experience|salary|notice|available|start date|why|describe|how did you hear/i.test(lbl);
       if (!lbl || lbl.length < 8 || !wordy) continue;
+      var textCont = el.closest('fieldset,.form-group,div') || el.parentElement;
+      if (looksLikeCaptcha(lbl, textCont)) continue; // never AI-answer a CAPTCHA — always ask the human
       seenControls.push(el);
-      pushItem({ type: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', control: el, container: el.closest('fieldset,.form-group,div') || el.parentElement, label: lbl, options: [] });
+      pushItem({ type: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', control: el, container: textCont, label: lbl, options: [] });
     }
 
     return out;
@@ -1154,18 +1173,27 @@
     var label = o.wideLabel || o.aiLabel || '';
     if (!label || label.length < 4) return null; // truly nothing to go on — don't guess, don't spam the human
     var normLabel = norm(label);
-    // The shared phone matcher trusts `el.type === 'tel'` alone, with no label check at all — safe
-    // everywhere else, since this tier is the first one to reach fields with NO discoverable label
-    // via the narrower passes. Observed in practice: Zoho Recruit's "Social Links" section renders
-    // its Facebook field as <input type="tel">, so the phone number got typed into it purely from
-    // the input type, overriding a label that plainly says otherwise. A label unambiguously naming
-    // a social handle/URL must win over that type-based guess.
-    var looksLikeSocialField = /\b(facebook|twitter|instagram|github|social)\b/.test(normLabel);
-    if (!looksLikeSocialField && isKnownContactField(normLabel, o.el)) {
-      var matched = buildStdMatchers(profile).find(function (m) { return m.v && m.t(normLabel, o.el); });
+    var itemCont = (o.radios ? o.radios[0] : o.el).closest && (o.radios ? o.radios[0] : o.el).closest('fieldset,.form-group,div');
+    if (looksLikeCaptcha(label, itemCont)) return null; // never AI-answer a CAPTCHA — always ask the human
+    // Contact/EEO classification is ONLY trusted when the label is GROUNDED — actually read from
+    // the page's own text (o.wideLabel) — never when it's a blind AI GUESS (o.aiLabel) from bare
+    // technical hints alone. Observed in practice: the AI-inference step mislabeled unrelated
+    // fields as "Facebook"/"LinkedIn"/"First Name" (a phone number landed in a Street Address
+    // field, "Texas" landed in a field guessed as "LinkedIn", first/last name got swapped) — a
+    // wrong CONTACT/EEO auto-fill silently inserts wrong PII/demographic data with no visible sign
+    // anything is off. A wrong CUSTOM-QUESTION guess, by contrast, still flows through the
+    // résumé-grounded AI-answer step and is reviewable before submit — a far more benign failure
+    // mode. So an ungrounded guess may only ever become a 'question' item, never 'contact'/'eeo'.
+    // Passing {} (not o.el) also means the phone/email matchers' `el.type==='tel'|'email'` fallback
+    // can never override the label on its own — with a real label already required to reach this
+    // point, that type-only fallback (needed elsewhere for truly unlabeled fields) has no business
+    // deciding anything here.
+    var labelIsGrounded = !!(o.wideLabel && o.wideLabel.length >= 4);
+    if (labelIsGrounded && isKnownContactField(normLabel, {})) {
+      var matched = buildStdMatchers(profile).find(function (m) { return m.v && m.t(normLabel, {}); });
       return matched ? { kind: 'contact', value: matched.v, el: o.el } : null;
     }
-    var eKey = eeoKey(normLabel);
+    var eKey = labelIsGrounded ? eeoKey(normLabel) : null;
     if (eKey) return { kind: 'eeo', key: eKey, el: o.el, radios: o.radios };
     if (o.radios) {
       return { kind: 'question', item: { container: o.radios[0].closest('fieldset,.form-group,div') || o.radios[0].parentElement, control: null, radios: o.radios, type: 'radio', label: label, options: o.radios.map(radioLabel).filter(Boolean) } };
@@ -1246,6 +1274,12 @@
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
       if (el.disabled || !visible(el)) continue;
+      // Workday (and similar adapters) suffix purely-navigational toggle links — Create Account
+      // <-> Sign In, Forgot Password — with "Link" in data-automation-id, distinct from real
+      // submit buttons ("...SubmitButton"). Clicking a toggle just swaps the visible form (can
+      // even reset fields the human/AI already filled) while looking identical to a step
+      // genuinely advancing — exclude these from every advance/stop search.
+      if (/link$/i.test(el.getAttribute('data-automation-id') || '')) continue;
       var t = norm((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || el.value || el.textContent || ''));
       for (var p = 0; p < patterns.length; p++) { if (patterns[p].test(t)) return el; }
     }
@@ -1919,6 +1953,20 @@
           }
           var nextBtn = findButton(advancePatterns);
           if (!nextBtn) { result.status = 'done_no_more_fields'; break; }
+
+          // Defense-in-depth against any allowlisted button that turns out to be a view-toggle
+          // rather than a genuine advance (e.g. an unanticipated ATS quirk like Workday's Sign-In
+          // <-> Create-Account switch) — if the SAME button (same URL + same visible label) gets
+          // clicked repeatedly without the page ever reaching a stop button or losing its
+          // recognized form, stop thrashing and ask the human to take it from here.
+          var advKey = location.href + '|' + norm(getText(nextBtn) || nextBtn.value || '');
+          window.__aliciaAdvanceLog = window.__aliciaAdvanceLog || {};
+          window.__aliciaAdvanceLog[advKey] = (window.__aliciaAdvanceLog[advKey] || 0) + 1;
+          if (window.__aliciaAdvanceLog[advKey] > 2) {
+            result.status = 'stopped_needs_input';
+            showBanner('This step keeps repeating instead of moving forward — please click through it yourself from here.', '#e0a800');
+            break;
+          }
 
           nextBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
           await waitForDomSettle(4000);

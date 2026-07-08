@@ -1,6 +1,75 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.5: duplicate résumé attach + Facebook/phone field mismatch
+## Update 2026-07-08 (latest) — v1.13.6: CAPTCHA safety fix, grounded-label trust boundary, Workday oscillation brake
+
+Round 5 (still on v1.13.5) surfaced a new Workday tenant (Motorola Solutions) and a repeat run on the
+same Zoho job, and reported four issues — one safety-critical, one confirming the v1.13.5 fix was too
+narrow, one new, and one stability bug. All four are addressed here except the résumé-attach fix,
+which Round 5 confirmed already works.
+
+1. **Safety-critical regression: Alicia typed "No image provided." into a CAPTCHA field instead of
+   asking the human.** Root cause: the CAPTCHA's label was AI-inferred (the dynamic-fallback tier's
+   last-resort `aiInferLabels`), passed the generic "wordy" gate, and got treated as an ordinary
+   custom question. The text-only, résumé-grounded answer backend (`callCustomAnswerBackend`, no
+   image data) honestly disclosed it had no image to look at — and that disclosure got typed into the
+   field as if it were a real answer, since nothing in the pipeline recognized "I can't see an image"
+   as "couldn't answer." Fixed with a new `looksLikeCaptcha(label, container)` check (text patterns —
+   "captcha", "verify you're human", "type the characters shown" — plus a DOM check for
+   captcha/recaptcha/hcaptcha-branded images, iframes, and classes), wired into all 4 discovery
+   branches of `findUnansweredCustomQuestions` (combobox/select/radio/text) AND into
+   `classifyDynamicItem` (the dynamic-fallback tier). A CAPTCHA can now only ever reach the human via
+   the existing ask-and-remember panel — it is never offered to any AI-answer path.
+
+2. **The v1.13.5 Facebook/phone fix was too narrow — Round 5 showed the bug just relocated.** The
+   phone number moved from Facebook to Street Address; Facebook then got a zip-code fragment,
+   LinkedIn got "Texas", and (new) First/Last name came back swapped. All four are the same underlying
+   defect: `classifyDynamicItem` trusted contact/EEO classification from a label the AI had *guessed*
+   from bare technical hints (`aiLabel`), with no real page text behind it — v1.13.5's fix only patched
+   the one social-keyword symptom it saw, not the mechanism. Rewritten so contact/EEO classification
+   now requires a **grounded** label (`o.wideLabel` — actual text scraped from the page, e.g. a nearby
+   `<label>` or ancestor text) and is refused whenever the label is a blind AI guess. The shared
+   phone/email matchers are also now called with `{}` instead of the real element, so their
+   `el.type==='tel'|'email'` fallback can never override a label-based decision inside this tier — a
+   wrong guess can now only ever become a reviewable custom *question* (grounded in the résumé,
+   editable before submit), never a silent contact/EEO auto-fill. Applies uniformly, so it also covers
+   the first/last-name swap without a name-specific patch.
+
+3. **Motorola Solutions (Workday) thrashed between Sign-In and Create-Account views for 20+ seconds
+   without settling**, described by the reporter as "the engine lost context and reverted to an
+   earlier stage of its own flow." Root cause: `findButton()` picks the first visible, enabled match
+   for a text pattern in DOM order — and Workday's Sign-In/Create-Account toggle link is *also*
+   labeled "Create Account" (matching `WD_ADVANCE`), automation-id `...Link`-suffixed, distinct from
+   the real submit button (`...SubmitButton`). If the toggle happens to sit earlier in the DOM than the
+   real submit button, the engine clicks the toggle every step instead — which swaps the visible form
+   (looking identical to "advancing") and can reset fields already filled, without ever reaching the
+   real Create Account submit. Fixed two ways: (a) `findButton()` now excludes any candidate whose
+   `data-automation-id` ends in "Link" — Workday's own convention for navigational toggles
+   (`createAccountLink`, `signInLink`, `forgotPasswordLink`, vs. `...SubmitButton` for real submits) —
+   from every advance/stop search; (b) a general oscillation brake: if the exact same button (same URL
+   + same visible label) would be clicked more than twice, Alicia stops and asks the human to continue
+   manually instead of thrashing indefinitely. (b) is defense-in-depth for any other ATS with a similar
+   quirk we haven't seen yet, not just Workday.
+
+4. **Flagged, not a code fix from this repo: Zoho's skills/experience/education data looked like it
+   came from "an entirely different, irrelevant profile"** (healthcare/retail-sector skills and
+   unfamiliar companies, vs. the consistent project-management background used in every earlier
+   round). This repo only relays whatever résumé Wagner-GPT's Jobs tab currently marks "active" — the
+   most likely explanation is that a different résumé was active in Wagner-GPT during that specific
+   test run, not a bug in this extension. A less likely alternative — cross-user response caching on
+   the separate, multi-user Chatwillow backend (`chatwillow.com/api/chat`) that this extension calls
+   for custom-question answering — can't be ruled out from this repo, since that backend's source
+   isn't in scope here. Recommend checking which résumé is marked active under Wagner-GPT's Jobs >
+   Résumés tab before the next test round.
+
+Verified: new logic tests (`test-round5-fixes.js`) reproduce all three Round-5 bugs explicitly against
+the OLD logic shape and confirm the new code prevents them — CAPTCHA text/DOM patterns correctly
+identified without false-positiving on ordinary fields; an ungrounded "Facebook"/"LinkedIn" AI-guess on
+a `type=tel`/text field no longer classifies as contact (while a genuinely page-grounded "First Name"/
+"Last Name" label still resolves to the correct value, unswapped); `findButton` now skips a
+`...Link`-suffixed toggle in favor of the real `...SubmitButton`; the oscillation brake halts on the
+3rd identical click on the same URL. `node --check` clean.
+
+## Update 2026-07-08 — v1.13.5: duplicate résumé attach + Facebook/phone field mismatch
 
 Round 4 (v1.13.4) was the strongest result yet: Capital One's Sign In page got real Email/Password
 values filled in and correctly stopped rather than auto-signing-in (Sign In isn't in WD_ADVANCE, by
