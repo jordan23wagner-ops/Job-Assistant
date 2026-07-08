@@ -1,6 +1,50 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.12.4: residential-IP Adzuna resolution (Vercel can't)
+## Update 2026-07-08 (latest) — v1.13.0: dynamic fallback tier for arbitrary company career sites
+
+Reported gap: once off a known ATS (Workday/Greenhouse/Lever/...), autofill "struggles with company
+sites due to them all being different." Root cause: static label discovery (`labelText`/`signals`)
+only finds a field's meaning when the page exposes it via `<label for>`, `aria-label`/
+`aria-labelledby`, or a close ancestor `<label>` — conventions major ATS platforms mostly follow but
+bespoke career sites routinely don't (caption sits in an unrelated sibling `<div>`, or nowhere
+discoverable via accessible-name APIs at all). Those fields were invisible to every existing pass.
+
+Before building anything, ran a deep-research pass on competing autofill tools (Simplify Copilot,
+Skyvern, others) to check whether this is a solved problem elsewhere. Verified findings: **Simplify**
+(the closest direct competitor) admits only 80% site coverage and its named "100+ supported" list is
+the SAME major-ATS set we already adapt for — no distinct custom-site mechanism, same "fill what we
+can" degradation. **Skyvern** (YC-backed, dedicated "Jobs Agent" product) markets "vision instead of
+DOM," but its own engineering blog/docs/founder statements (independently verified) reveal a HYBRID:
+scrape the page into a structured "interactable element list" (id/tag/aria-label/etc.) → feed that as
+text + a screenshot to an LLM → execute via Playwright DOM element handles, not blind pixel clicks.
+Verdict: known-hard, industry-wide unsolved problem, not something we're behind on — and the validated
+next tier (used by the one outfit actually targeting this) is LLM-driven dynamic DOM/accessibility-tree
+mapping, not full vision/computer-use.
+
+**Shipped that tier in `autofill.js`** (new functions after `callCustomAnswerBackend`):
+- `widerLabelGuess(el)`: free, no-AI widening of label discovery — scrapes preceding sibling/ancestor
+  text up to 4 levels up, catching captions `labelText()`'s stricter accessible-name search misses.
+- `scrapeOrphanControls(claimedEls)`: finds visible/enabled/empty input|textarea|select controls (and
+  unclaimed radio groups) NOT already claimed by the standard passes or `findUnansweredCustomQuestions`.
+- `aiInferLabels(items)`: for controls that STILL have no discoverable caption after the free widening,
+  ONE bounded backend call infers a short label from technical hints only (type/name/id/class/options)
+  — a scoped labeling task, never asked to invent PII/EEO content.
+- `classifyDynamicItem(o, profile)`: routes the (real or AI-inferred) label through the SAME trust
+  boundary as everywhere else — contact fields fill from the trusted profile value (never AI text),
+  EEO fields fill from saved prefs only if backed by a real `<select>`/radio-group (never free-typed),
+  everything else becomes an ordinary custom-question item flowing through the EXISTING learned-bank
+  → AI-answer → ask-and-remember pipeline. A "wordy" gate stops one-word non-question labels (e.g. a
+  stray "Search" box) from being promoted into a spurious question.
+- `findDynamicFallbackItems(...)` orchestrates the above; wired into `fillOnePass`'s discovery step,
+  gated to `atsName === 'generic'` only (known ATS adapters already have good structural coverage, so
+  this only spends effort where the gap actually is).
+
+Verified: `node --check` clean; logic tests for the classifier's full decision tree (contact/EEO/
+question/drop routing, the wordy gate, trust-boundary preservation) and `widerLabelGuess`'s ancestor-
+text aggregation (1-level, 2-level, and no-signal-found cases) all pass. Live E2E on a real bespoke
+career site still needs a human run.
+
+## Update 2026-07-08 — v1.12.4: residential-IP Adzuna resolution (Vercel can't)
 
 The v1.12.3 server-side resolver is IP-blocked by Adzuna/Cloudflare on Vercel's datacenter IP (0 of 50
 resolved in live testing). The extension runs on the user's RESIDENTIAL IP + cookies, so it isn't

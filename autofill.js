@@ -1047,6 +1047,143 @@
     return parseAnswersJson(text);
   }
 
+  // ---------- dynamic fallback: label unrecognized controls, then reuse the normal pipeline ----------
+  // Static heuristics (labelText/signals) only find a field's meaning when the page exposes it via
+  // <label for>, aria-label/aria-labelledby, or a close ancestor <label> — conventions major ATS
+  // platforms (Workday, Greenhouse, Lever, ...) mostly follow, but arbitrary company career sites
+  // routinely don't (caption sits in a sibling <div> two levels up, or nowhere discoverable at all).
+  // Those fields are invisible to every pass above — this is the reported "we struggle with company
+  // sites because they're all different" gap. This tier widens label discovery for FREE (ancestor/
+  // sibling text scrape, not just accessible-name APIs), and only for controls that STILL have no
+  // caption spends ONE bounded AI call inferring what the control represents from its attributes/
+  // options/page context. The inferred label is then run through the SAME contact/EEO matchers
+  // (filled from the trusted profile/prefs — never AI-invented) or added as an ordinary custom
+  // question, flowing through the identical learned-bank -> AI-answer -> ask-and-remember pipeline
+  // as everything else. Only runs on non-ATS ('generic') pages — known ATS adapters already have
+  // good structural coverage, so this only spends effort where it's actually needed.
+  function widerLabelGuess(el) {
+    var texts = [];
+    var node = el;
+    for (var depth = 0; depth < 4 && node && node !== document.body; depth++) {
+      var parent = node.parentElement;
+      if (!parent) break;
+      for (var i = 0; i < parent.childNodes.length; i++) {
+        var child = parent.childNodes[i];
+        if (child === node) break; // only text that appears BEFORE the control at this level
+        var t = child.nodeType === 3 ? child.textContent : (child.nodeType === 1 ? getText(child) : '');
+        t = (t || '').replace(/\s+/g, ' ').trim();
+        if (t && t.length >= 2 && t.length <= 150) texts.push(t);
+      }
+      node = parent;
+    }
+    return texts.slice(-3).join(' ').trim(); // nearest few text fragments, closest-first order lost is fine
+  }
+  function scrapeOrphanControls(claimedEls) {
+    var out = [];
+    var nodes = document.querySelectorAll('input, textarea, select');
+    for (var i = 0; i < nodes.length && out.length < 20; i++) {
+      var el = nodes[i];
+      var ty = (el.tagName === 'INPUT') ? (el.type || 'text').toLowerCase() : '';
+      if (['hidden', 'password', 'file', 'submit', 'button', 'image', 'reset', 'checkbox', 'radio', 'search'].indexOf(ty) >= 0) continue;
+      if (el.disabled || el.readOnly || !visible(el)) continue;
+      if (claimedEls.indexOf(el) >= 0) continue;
+      if (isComboControl(el)) continue; // handled by the existing generic combobox discovery
+      if (el.tagName === 'SELECT') { if (selectHasRealValue(el)) continue; }
+      else if (el.value && el.value.trim()) continue;
+      var existingLabel = labelText(el) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
+      var wide = existingLabel && existingLabel.length >= 4 ? existingLabel : widerLabelGuess(el);
+      out.push({ el: el, wideLabel: wide });
+    }
+    var groups = radioGroups();
+    Object.keys(groups).forEach(function (nm) {
+      var rs = groups[nm];
+      if (rs.some(function (r) { return r.checked; })) return;
+      if (rs.some(function (r) { return claimedEls.indexOf(r) >= 0; })) return;
+      var lbl = groupQuestionLabel(rs);
+      out.push({ el: rs[0], radios: rs, wideLabel: lbl && lbl.length >= 4 ? lbl : widerLabelGuess(rs[0]) });
+    });
+    return out;
+  }
+  // For controls with NO discoverable caption at all, ask the AI to infer one from technical hints
+  // only (type/name/id/class/options) — a scoped labeling task, not a PII/EEO-invention risk, since
+  // the inferred label only ever routes into the SAME trusted contact/EEO/custom-question pipeline.
+  async function aiInferLabels(items) {
+    if (!items.length) return {};
+    var sys = 'You are looking at an unfamiliar job application form whose fields have no visible caption our tool could detect. For each numbered UI control below (given only its technical attributes — you are never shown real page text), infer the SHORT question/label it most likely represents (e.g. "First name", "Phone number", "Years of experience with Python", "How did you hear about us?"). If you cannot reasonably infer anything specific, respond with an empty string for that item — do NOT guess wildly. Respond ONLY with a strict JSON array, no prose, no markdown fences: [{"i":<1-based index>,"label":"<short label, or empty string if unknown>"}]';
+    var lines = items.map(function (it, i) {
+      var el = it.el;
+      var parts = ['type=' + (it.radios ? 'radio-group' : (el.tagName.toLowerCase() + (el.type ? ':' + el.type : '')))];
+      if (el.name) parts.push('name="' + el.name + '"');
+      if (el.id) parts.push('id="' + el.id + '"');
+      var cls = String(el.className || '').slice(0, 100); if (cls) parts.push('class="' + cls + '"');
+      if (el.tagName === 'SELECT') {
+        var opts = []; for (var o = 0; o < el.options.length && opts.length < 8; o++) { var t = getText(el.options[o]); if (t) opts.push(t); }
+        if (opts.length) parts.push('options=[' + opts.join('|') + ']');
+      }
+      if (it.radios) parts.push('options=[' + it.radios.map(radioLabel).filter(Boolean).slice(0, 8).join('|') + ']');
+      return (i + 1) + '. ' + parts.join(' ');
+    }).join('\n');
+    var user = pageJobContext() + '\n\nControls (no visible caption detected):\n' + lines;
+    try {
+      var text = await fetchBackendText(sys, user);
+      var arr = parseAnswersJson(text); // shape-agnostic array extractor — reused as-is
+      var byIndex = {};
+      arr.forEach(function (a) { if (a && typeof a.i === 'number' && typeof a.label === 'string') byIndex[a.i] = a.label.trim(); });
+      return byIndex;
+    } catch (e) { return {}; }
+  }
+  function classifyDynamicItem(o, profile) {
+    var label = o.wideLabel || o.aiLabel || '';
+    if (!label || label.length < 4) return null; // truly nothing to go on — don't guess, don't spam the human
+    var normLabel = norm(label);
+    if (isKnownContactField(normLabel, o.el)) {
+      var matched = buildStdMatchers(profile).find(function (m) { return m.v && m.t(normLabel, o.el); });
+      return matched ? { kind: 'contact', value: matched.v, el: o.el } : null;
+    }
+    var eKey = eeoKey(normLabel);
+    if (eKey) return { kind: 'eeo', key: eKey, el: o.el, radios: o.radios };
+    if (o.radios) {
+      return { kind: 'question', item: { container: o.radios[0].closest('fieldset,.form-group,div') || o.radios[0].parentElement, control: null, radios: o.radios, type: 'radio', label: label, options: o.radios.map(radioLabel).filter(Boolean) } };
+    }
+    if (o.el.tagName === 'SELECT') {
+      var options = []; for (var oi = 0; oi < o.el.options.length; oi++) { if (o.el.options[oi].value) options.push(getText(o.el.options[oi]) || o.el.options[oi].value); }
+      if (!options.length) return null;
+      return { kind: 'question', item: { container: o.el.closest('fieldset,.form-group,div') || o.el.parentElement, control: o.el, type: 'select', label: label, options: options } };
+    }
+    // Plain text/textarea: only treat as a real question if the label actually READS like one —
+    // same "wordy" gate the normal generic-text discovery already applies, so a stray one-word
+    // guess ("Search", "Filter") can't get promoted into an AI-answered/asked question.
+    var wordy = label.split(' ').length >= 4 || /\?/.test(label) || /years|experience|salary|notice|available|start date|why|describe|how did you hear/i.test(label);
+    if (!wordy) return null;
+    return { kind: 'question', item: { container: o.el.closest('fieldset,.form-group,div') || o.el.parentElement, control: o.el, type: (o.el.tagName === 'TEXTAREA' ? 'textarea' : 'text'), label: label, options: [] } };
+  }
+  async function findDynamicFallbackItems(profile, eeo, claimedEls) {
+    var orphans = scrapeOrphanControls(claimedEls);
+    if (!orphans.length) return { contactFilled: 0, eeoFilled: 0, questionItems: [] };
+    var needAi = orphans.filter(function (o) { return !o.wideLabel || o.wideLabel.length < 4; });
+    if (needAi.length) {
+      var aiLabels = await aiInferLabels(needAi);
+      needAi.forEach(function (o, idx) { o.aiLabel = aiLabels[idx + 1] || ''; });
+    }
+    var contactFilled = 0, eeoFilled = 0, questionItems = [];
+    orphans.forEach(function (o) {
+      var c = classifyDynamicItem(o, profile);
+      if (!c) return;
+      if (c.kind === 'contact') {
+        setNativeValue(c.el, c.value); fire(c.el); contactFilled++;
+      } else if (c.kind === 'eeo') {
+        if (!eeo[c.key]) return;
+        if (c.radios) { if (pickRadio(c.radios, eeo[c.key])) eeoFilled++; }
+        else if (c.el.tagName === 'SELECT') { if (pickSelectOption(c.el, [eeo[c.key]], 45)) eeoFilled++; }
+        // Plain-text EEO fields are intentionally left alone — demographic answers come from a
+        // controlled selection, never typed free text, to avoid a mismatched/garbled answer.
+      } else if (c.kind === 'question') {
+        questionItems.push(c.item);
+      }
+    });
+    return { contactFilled: contactFilled, eeoFilled: eeoFilled, questionItems: questionItems };
+  }
+
   // When the human clicks any advance/submit-looking button after reviewing AI answers,
   // capture whatever is in those fields (including their edits) as the confirmed, learned
   // answer — then resume auto-filling for the following steps.
@@ -1594,6 +1731,22 @@
         var items = await findUnansweredCustomQuestions(eeo);
         if (adapter.findDropdownQuestions) {
           try { items = items.concat(await adapter.findDropdownQuestions(eeo)); } catch (e) {}
+        }
+        // Non-ATS company sites: static label discovery routinely finds nothing for a control at
+        // all (no <label for>/aria-label, caption sits in an unrelated sibling) — the reported
+        // "every company site is different" gap. Only spends effort here (known ATS pages already
+        // have good structural coverage via the passes above).
+        if (atsName === 'generic') {
+          try {
+            var claimedEls = [];
+            items.forEach(function (it) {
+              if (it.control) claimedEls.push(it.control);
+              if (it.radios) claimedEls = claimedEls.concat(it.radios);
+            });
+            var dyn = await findDynamicFallbackItems(profile, eeo, claimedEls);
+            n += dyn.contactFilled + dyn.eeoFilled;
+            items = items.concat(dyn.questionItems);
+          } catch (e) {}
         }
         if (items.length > CUSTOM_QA_MAX_PER_STEP) items = items.slice(0, CUSTOM_QA_MAX_PER_STEP);
         var unanswered = [];
