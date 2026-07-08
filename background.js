@@ -19,7 +19,7 @@ try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(
 // in that tab, as long as the page is the same site or a known ATS domain. The engine itself
 // never clicks Submit/Apply/Create-Account buttons; the human always does that.
 var ATS_SESSION_TTL_MS = 20 * 60 * 1000;
-var ATS_HOST_RE = /(^|\.)(myworkdayjobs|myworkdaysite|workday|greenhouse|lever|icims|ashbyhq|smartrecruiters|brassring|jobvite|taleo|oraclecloud|successfactors|workable|bamboohr|adp|paylocity|paycom|ultipro|ukg|dayforcehcm|eightfold|phenompeople|avature|breezy|jazz|recruitee|teamtailor)\.(com|io|co|net|hr|ai)$/i;
+var ATS_HOST_RE = /(^|\.)(myworkdayjobs|myworkdaysite|workday|greenhouse|lever|icims|ashbyhq|smartrecruiters|brassring|jobvite|taleo|oraclecloud|successfactors|workable|bamboohr|adp|paylocity|paycom|ultipro|ukg|dayforcehcm|eightfold|phenompeople|avature|breezy|jazz|recruitee|teamtailor|zohorecruit)\.(com|io|co|net|hr|ai)$/i;
 // Job aggregators/redirectors that sit BETWEEN a search result and the real employer application
 // (they show email-capture interstitials, then bounce to the employer's ATS). For an explicit
 // web-app apply we auto-advance through these to reach the real form.

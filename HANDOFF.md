@@ -1,6 +1,26 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.1: generalize SPA re-injection (the REAL "goes dark" bug)
+## Update 2026-07-08 (latest) — v1.13.2: add zohorecruit.com to ATS_HOST_RE (all 3 copies)
+
+Second re-test round (post-v1.13.1) showed Zoho Recruit (novalink-solutions.zohorecruit.com) with
+ZERO signal — no banner, no fills, in either the before or after diagnostic. Root cause: `zohorecruit`
+was missing from `ATS_HOST_RE` in all three places it's duplicated (`background.js`, Wagner-GPT's
+`api/jobs.js`, and `src/Jobs.jsx`) — so Zoho pages were invisible to background.js's auto-detect/offer
+mechanism (`detect.js` injection requires `ATS_HOST_RE.test(host)`), the iframe-injection gate, and
+the web app's "✓ direct apply" / "⚡ auto-fill ready" badges. Added `zohorecruit` to all three. Also
+clarified in the diagnosis (see below) that the same re-test showed a DIFFERENT, unrelated mechanism
+firing on the Capital One Workday tenant — the passive ATS auto-detect banner ("Let Alicia auto-fill
+it? Auto-fill / Not now", from `detect.js`), not the explicit apply-session engine (autofill.js) — and
+by design that banner does nothing until clicked, so "no fields filled without a click" there was
+CORRECT behavior, not a failure of the v1.13.1 fix. The re-test methodology (navigating to
+already-open tabs/history instead of a fresh Apply click from Wagner-GPT) likely never established an
+explicit `autofillSessions` entry at all, meaning the SPA re-injection fix was never actually exercised
+in that round — a proper re-test needs a FRESH Apply click per job so `pendingApplyUrls`/
+`autofillSessions` actually populate. See conversation for the next diagnostic prompt sent to verify
+this directly (inspects `chrome.storage.local` via the extension's own service-worker console for
+ground truth, rather than inferring purely from banner text).
+
+## Update 2026-07-08 — v1.13.1: generalize SPA re-injection (the REAL "goes dark" bug)
 
 User ran a 5-job diagnostic (Claude in Chrome, full console + redirect-chain trace) hoping to justify
 filtering out 3rd-party aggregators. The data said the opposite: Adzuna and Jobgether were NOT the
