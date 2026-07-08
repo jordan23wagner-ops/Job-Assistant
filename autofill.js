@@ -1929,5 +1929,48 @@
     }
   };
 
+  // ---------- self-triggering re-scan on DOM content changes ----------
+  // background.js's navigation-based re-injection (full page loads, and SPA route changes via
+  // history.pushState) covers most transitions, but two real gaps remain — both observed in
+  // testing: (1) some SPA route changes never call pushState at all (a plain in-memory view swap),
+  // so no navigation event fires for them at all (Zoho Recruit's "I'm interested" → Basic Info
+  // form); (2) even when a real navigation IS detected, a heavy SPA form can take longer to
+  // actually render its fields than the fixed re-injection delay, so a scan run at that instant
+  // correctly finds "no form yet" and shows the nav panel — which then never re-evaluates once the
+  // real form finally mounts a moment later (Workday's Create Account page). A MutationObserver
+  // watching the page's own content for real changes closes both gaps, mirroring content.js's
+  // existing polling approach for LinkedIn. Debounced + rate-floored to bound cost, and skipped
+  // entirely while a custom-question ask panel is up (that one needs a human ANSWER — re-running
+  // would just re-ask the same unanswerable question via a wasted AI call). The nav panel is NOT a
+  // reason to skip: it only means "no form found yet," which is exactly what a genuine content
+  // change should re-evaluate, so we also reset its one-shot guard and clear it before rerunning.
+  var mutationRerunTimer = null;
+  var lastMutationRerunAt = 0;
+  var MUTATION_RERUN_MIN_INTERVAL_MS = 4000;
+  function scheduleMutationRerun() {
+    clearTimeout(mutationRerunTimer);
+    mutationRerunTimer = setTimeout(function () {
+      if (document.getElementById('alicia-question-panel')) return;
+      var now = Date.now();
+      if (now - lastMutationRerunAt < MUTATION_RERUN_MIN_INTERVAL_MS) return;
+      lastMutationRerunAt = now;
+      window.__aliciaNavHandled = false;
+      try { removeNavPanel(); } catch (e) {}
+      try { window.__aliciaAutofillRun(); } catch (e) {}
+    }, 700);
+  }
+  try {
+    var aliciaMutationObserver = new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var t = mutations[i].target;
+        var el = t && t.nodeType === 1 ? t : (t && t.parentElement);
+        if (el && isInAliciaUi(el)) continue; // ignore our own banner/panel DOM churn
+        scheduleMutationRerun();
+        return;
+      }
+    });
+    aliciaMutationObserver.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+
   window.__aliciaAutofillRun();
 })();

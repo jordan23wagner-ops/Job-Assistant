@@ -1,6 +1,56 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.3: nav panel goes stale across SPA steps + candidate hardening
+## Update 2026-07-08 (latest) — v1.13.4: self-triggering re-scan on DOM content changes
+
+Fourth re-test round confirmed v1.13.3's fix works exactly as designed — AND surfaced two remaining,
+genuinely different root causes for the same "stuck" symptom, both requiring one more fix:
+
+1. **Capital One (Workday)**: the nav panel now correctly refreshes per real navigation (step 1 → 2
+   showed a fresh, context-aware option list — the v1.13.3 fix working as intended). But the panel
+   still fired on the Create Account page even though real password fields were present there
+   (confirmed by the tester: "this is also the real fillable form"). Diagnosis: Workday's account-
+   creation form renders ASYNCHRONOUSLY after the route change — slower than the fixed ~500ms
+   re-injection delay — so `hasRecognizedForm()` correctly returned false AT THAT INSTANT, and
+   nothing ever re-checked once the real fields mounted a moment later (no new URL, so the v1.13.3
+   URL-change reset never fires again).
+2. **Novalink (Zoho Recruit)**: the panel stayed byte-for-byte stale across "Job Details" → "Job
+   application" — a DIFFERENT root cause: Zoho's transition likely never calls `history.pushState`
+   at all (a plain in-memory view swap), so `onHistoryStateUpdated` never fires and autofill.js is
+   simply never re-injected/re-run for that step at all.
+
+Both are the same underlying gap: autofill.js only re-scans when **background.js** tells it to via a
+navigation event; it has no way to notice "the page's content just changed" on its own. This is
+exactly the class of problem `content.js` already solves for LinkedIn with a MutationObserver-driven
+polling loop — autofill.js had no equivalent.
+
+**Fix:** added a `MutationObserver` (watching `document.body`, `childList`+`subtree`) that debounces
+(700ms) and re-invokes `window.__aliciaAutofillRun()` whenever the page's own content changes,
+independent of any navigation event. Guards to keep this safe and cheap:
+- **Ignores mutations from Alicia's own UI** (banner/question-panel/nav-panel insertions) so its own
+  DOM writes can't create a re-trigger feedback loop.
+- **Hard 4-second rate floor** regardless of mutation frequency, bounding worst-case backend-call cost
+  on pages with ambient DOM churn (chat widgets, animations, carousels).
+- **Never reruns while the custom-question ask panel is up** — that one specifically means "we need a
+  human ANSWER"; re-running would just re-ask the same unanswerable question via a wasted AI call.
+- **Does NOT skip while the nav panel is up** — that one only means "no form found yet," which is
+  exactly what a genuine content change should re-evaluate; the rerun also resets
+  `window.__aliciaNavHandled` and clears the stale nav panel first, so a real form appearing (Capital
+  One) or a route change with no pushState (Zoho) both get a fresh, correct evaluation.
+
+Verified: mocked-clock logic tests for the gating rules (first-fire runs, floor suppresses a
+too-soon refire, floor-elapsed allows a refire, question-panel presence fully blocks reruns, reruns
+resume once the panel clears) — 5/5 pass. `node --check` clean. Live re-test needed to confirm
+Workday's Create Account step now actually completes (password fill + agreement tick + auto-click)
+once its fields render, and that Zoho's Basic Info form gets discovered at all.
+
+On the recurring Zoho console exception (`{"code":"ERR19","message":"Model not defined",
+"data":"skillsets"}`): the tester's own read — that this matches Zoho's own internal "Lyte"
+framework's model-registration warnings seen elsewhere on the same page, and reproduces purely from
+clicking Zoho's own "I'm interested" button — is the more likely explanation; nothing in Alicia's own
+code path was implicated by the evidence gathered. Flagged as a probable pre-existing Zoho-side issue,
+not an Alicia regression, though this can't be fully confirmed without Zoho's own source.
+
+## Update 2026-07-08 — v1.13.3: nav panel goes stale across SPA steps + candidate hardening
 
 Third re-test round (fresh Apply clicks this time) confirmed v1.13.1's SPA re-injection DOES work —
 the nav panel now fires immediately after a fresh Apply click and survives at least one SPA
