@@ -1,6 +1,50 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.0: dynamic fallback tier for arbitrary company career sites
+## Update 2026-07-08 (latest) — v1.13.1: generalize SPA re-injection (the REAL "goes dark" bug)
+
+User ran a 5-job diagnostic (Claude in Chrome, full console + redirect-chain trace) hoping to justify
+filtering out 3rd-party aggregators. The data said the opposite: Adzuna and Jobgether were NOT the
+blockers (clean pass-through both times); the real friction was Workday requiring account creation
+and Oracle Cloud requiring an email step — i.e. the EMPLOYER'S OWN official ATS, exactly the
+"direct company link" destination filtering would supposedly get you to. Filtering 3rd-party sites
+would not have fixed anything here.
+
+Root cause, found by re-reading `autofill.js`'s own header comment ("Real page navigations end this
+script's life; background.js re-injects it on the next page load") against `background.js`'s actual
+listeners: the ONLY re-injection for client-side ("SPA") route changes — `onHistoryStateUpdated`, no
+full page load, just history.pushState — was scoped EXCLUSIVELY to `linkedin.com`. Workday, Zoho
+Recruit, and Oracle Cloud Recruiting are all SPAs; "Apply Manually" / "I'm interested" / the
+email-capture step are client-side route changes, not full navigations. Alicia ran once on the FIRST
+load of each site (exactly where the diagnostic saw the nav panel), then went permanently dark for
+every subsequent in-app step — no console output, no fill attempt, nothing. This single gap explains
+all 5 "blocked" outcomes in the diagnostic, including the mystery pre-filled Oracle Cloud email
+(almost certainly Chrome's own native autofill, unrelated to Alicia, since Alicia's script wasn't
+even running on that screen).
+
+**Fix (`background.js`):** generalized the LinkedIn-only `onHistoryStateUpdated` re-injection to any
+tab with a live `autofillSessions` entry — on a client-side route change, if the tab has a
+non-expired session, re-inject `autofill.js` (pre-seeding the tailored résumé first, same as the
+full-navigation path). Re-injection is a safe no-op / re-invoke if the script is already alive in
+that frame (the existing `if (window.__aliciaAutofillRun) { window.__aliciaAutofillRun(); return; }`
+guard at the top of autofill.js already handles this correctly — it re-runs the full scan against
+the NEW SPA-rendered DOM, it doesn't just no-op). Factored the "pre-seed tailored résumé, then
+inject" logic into a shared `injectAutofillWithTailoredResume()` used by both the full-navigation and
+SPA-navigation listeners, so the two paths can't drift.
+
+Verified: loaded the REAL `background.js` into a `vm.runInContext` sandbox with mocked `chrome.*` APIs
+(including a filter-respecting `onHistoryStateUpdated` mock, since Chrome's own `hostSuffix` URL
+filter had to be faithfully emulated to test the LinkedIn-exclusion case correctly) and exercised 6
+scenarios: re-injects on a live session, pre-seeds the tailored résumé, excludes LinkedIn (owned by
+the pre-existing listener), no-ops with no session / an expired session / a non-top-frame update. All
+pass. Live re-test on an actual Workday account-creation page still needs a human run to confirm the
+password-fill/Create-Account auto-click now fires.
+
+**On "filter out 3rd-party sites"**: not recommended based on this data. 3 of 5 jobs in the diagnostic
+reached a real application form through paths that included Adzuna/Jobgether; blanket-filtering them
+would shrink the results pool for no measurable benefit, since the actual friction lives on employer
+ATS platforms themselves (no aggregator-avoidance dodges a Workday account-creation requirement).
+
+## Update 2026-07-08 — v1.13.0: dynamic fallback tier for arbitrary company career sites
 
 Reported gap: once off a known ATS (Workday/Greenhouse/Lever/...), autofill "struggles with company
 sites due to them all being different." Root cause: static label discovery (`labelText`/`signals`)

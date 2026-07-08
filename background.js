@@ -184,22 +184,45 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
         // On an aggregator landing page: click through to the employer application instead of filling.
         chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
       } else {
-        // Deliver the web app's per-job TAILORED résumé to the engine before it runs — autofill.js
-        // prefers window.__aliciaTailoredResume over the stored generic resumeText.
-        var inject = function () {
-          chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
-        };
-        if (s.tailoredResume) {
-          chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: function (t) { window.__aliciaTailoredResume = t; },
-            args: [s.tailoredResume],
-          }).then(inject, inject);
-        } else {
-          inject();
-        }
+        injectAutofillWithTailoredResume(tabId, s);
       }
     }, 800);
+  });
+});
+
+// Deliver the web app's per-job TAILORED résumé to the engine before it runs — autofill.js prefers
+// window.__aliciaTailoredResume over the stored generic resumeText — then inject/re-run autofill.js.
+function injectAutofillWithTailoredResume(tabId, s) {
+  var inject = function () {
+    chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
+  };
+  if (s && s.tailoredResume) {
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: function (t) { window.__aliciaTailoredResume = t; },
+      args: [s.tailoredResume],
+    }).then(inject, inject);
+  } else {
+    inject();
+  }
+}
+
+// Client-side ("SPA") route changes — e.g. clicking "Apply Manually" inside Workday, or "I'm
+// interested" in Zoho Recruit — swap the page's content via history.pushState with NO full page
+// navigation. chrome.webNavigation.onCompleted / chrome.tabs.onUpdated never fire for these, so
+// without this listener autofill.js runs once on the FIRST load of an ATS site and then goes
+// permanently silent for every subsequent in-app step (account creation, the real application
+// form, ...) — exactly the "it works on the first page, then nothing happens" pattern on modern
+// SPA-based ATS platforms (Workday, Zoho Recruit, Oracle Cloud, ...). This generalizes the
+// LinkedIn-only version above to any tab with a live autofill session. Re-injection is a safe
+// no-op if the script is already alive in that frame — see the run-once guard at the top of
+// autofill.js, which just re-invokes the existing run function instead of re-declaring anything.
+chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
+  if (details.frameId !== 0 || /(^|\.)linkedin\.com/i.test(details.url || '')) return; // LinkedIn handled above
+  chrome.storage.local.get('autofillSessions', function (data) {
+    var s = (data.autofillSessions || {})[String(details.tabId)];
+    if (!s || Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) return;
+    setTimeout(function () { injectAutofillWithTailoredResume(details.tabId, s); }, 500); // let the SPA render the new view first
   });
 });
 
