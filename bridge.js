@@ -29,6 +29,19 @@
   window.addEventListener('message', function (e) {
     if (e.source !== window || !e.data || e.data.source !== 'wagner-jobs') return;
     if (e.data.type === 'ALICIA_PING') { announce(); return; }
+    if (e.data.type === 'ALICIA_SYNC') {
+      // Web app pushes its résumé/profile into the extension (Wagner-GPT is the source of truth).
+      var sNonce = e.data.nonce;
+      try {
+        chrome.runtime.sendMessage({ type: 'WEBAPP_SYNC', data: e.data.data || {} }, function (resp) {
+          var sok = !chrome.runtime.lastError && resp && resp.ok;
+          try { window.postMessage({ source: 'alicia-ext', type: 'SYNC_ACK', nonce: sNonce, ok: !!sok, synced: (resp && resp.synced) || [] }, '*'); } catch (e2) {}
+        });
+      } catch (err) {
+        try { window.postMessage({ source: 'alicia-ext', type: 'SYNC_ACK', nonce: sNonce, ok: false }, '*'); } catch (e2) {}
+      }
+      return;
+    }
     if (e.data.type !== 'ALICIA_APPLY') return;
     var nonce = e.data.nonce;
     var jobs = Array.isArray(e.data.jobs) ? e.data.jobs.slice(0, 5) : []; // cap 5 per batch
@@ -36,10 +49,19 @@
       chrome.runtime.sendMessage({ type: 'WEBAPP_APPLY', jobs: jobs, options: e.data.options || {} }, function (resp) {
         // ok=true only if the background worker actually handled it (so the web app's status is honest).
         var ok = !chrome.runtime.lastError && resp && resp.ok;
-        try { window.postMessage({ source: 'alicia-ext', type: 'APPLY_ACK', nonce: nonce, ok: !!ok }, '*'); } catch (e2) {}
+        try { window.postMessage({ source: 'alicia-ext', type: 'APPLY_ACK', nonce: nonce, ok: !!ok, count: (resp && resp.count) || 0, requested: (resp && resp.requested) || jobs.length }, '*'); } catch (e2) {}
       });
     } catch (err) {
       try { window.postMessage({ source: 'alicia-ext', type: 'APPLY_ACK', nonce: nonce, ok: false, error: String(err) }, '*'); } catch (e2) {}
     }
   });
+
+  // Fill-status feedback: background forwards autofill results here; relay them to the page so
+  // the Jobs tracker can show live application state (filled / needs input / ready to submit).
+  try {
+    chrome.runtime.onMessage.addListener(function (message) {
+      if (!message || message.type !== 'ALICIA_STATUS') return;
+      try { window.postMessage({ source: 'alicia-ext', type: 'FILL_STATUS', payload: message.payload || {} }, '*'); } catch (e2) {}
+    });
+  } catch (e) {}
 })();

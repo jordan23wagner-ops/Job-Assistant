@@ -1,6 +1,51 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-07 (latest) — v1.11.8: dropdown vs free-text classification + ask-and-remember panel
+## Update 2026-07-08 (latest) — v1.12.0: LinkedIn dropdown parity, handoff v2, extension slimming
+
+Deep-dive review follow-up. Three thrusts:
+
+**1. LinkedIn Easy Apply gets the same dropdown fixes as autofill.js (content.js):**
+- `selectHasRealAnswer`/`isPlaceholderValue`: "Select an option" no longer counts as answered — those
+  dropdowns were skipped by learned/AI answering AND banked as the learned answer, poisoning the
+  shared `customQA` bank autofill.js reads. Both engines now purge placeholder records on load.
+- `modal.__aliciaLearnItems` is finally SET (it was only ever read), so an unanswered question no
+  longer re-triggers the batched AI backend call every ~1.2s poll tick while the human answers.
+- `applyAnswerToItem` is async and resolves typeahead/combobox picks (`resolveTypeaheadSelection`)
+  for custom questions — typed-but-never-picked answers failed validation on Next.
+- The ask-and-remember panel (`showEasyApplyQuestionPanel`) ported from autofill.js: dropdown
+  questions get a real option list, answers are banked FIRST, auto-advance resumes on save.
+- autofill.js: learned-but-unappliable answers now flow to the AI/ask panel instead of being
+  silently dropped (a stale bank entry could make a dropdown permanently unfillable).
+
+**2. Apply handoff v2 (web app ⇄ extension):**
+- The web app's per-job TAILORED résumé is now actually used: background injects it as
+  `window.__aliciaTailoredResume` before autofill.js (previously written to `session.tailoredResume`
+  and never read — the generic résumé was filled instead). Résumé file uploads attach the tailored
+  text as .txt when the input accepts it, else the stored original file.
+- Redirect-proof adoption: `webNavigation.onBeforeNavigate` binds a registered apply URL to its tab
+  on the FIRST navigation (aggregator/short links 302'd before `complete` and were never adopted).
+- Fill-status feedback: background forwards `UNIVERSAL_FILL_RESULT` to open Wagner-GPT tabs → bridge
+  → `FILL_STATUS` postMessage → Jobs tracker shows live state (filled / needs input / ready to
+  submit). Explicit sessions END on `ready_to_submit` and cap at 10 navigations (they used to shadow
+  the tab anywhere for 20 minutes).
+- Web→ext sync channel: `ALICIA_SYNC` pushes the web app's active résumé (text + file) and profile
+  into extension storage — Wagner-GPT is the résumé source of truth now. `APPLY_ACK` carries
+  accepted/requested counts (the silent 5-job cap is surfaceable).
+
+**3. Slimming + hardening:**
+- Deleted `jobsearch.html`/`jobsearch.js` (full duplicate of the web app's Jobs tab calling the same
+  backend); the side panel button now opens `wagner-gpt.vercel.app/?tab=jobs`. Tracker panel links to
+  the web app tracker. Deleted `resume.txt` (real PII shipping in the repo/unpacked extension —
+  consider scrubbing git history).
+- `injectAtsFrames` now requires a known ATS host (any-direct-child injection could fill contact
+  info and even generate+save a password inside e.g. a survey iframe on LinkedIn).
+- Removed the duplicate `JOB_DETECTED` re-broadcast (displayJob ran twice); guarded null messages.
+- Queue Start now targets a LinkedIn tab instead of hijacking whatever tab was focused.
+
+Verified: `node --check` clean on all extension JS; manifest parses; wagner-gpt builds. Live E2E
+(reload extension → web-app search → tailor → apply → watch tracker status) needs a human run.
+
+## Update 2026-07-07 — v1.11.8: dropdown vs free-text classification + ask-and-remember panel
 
 Fixes the reported failure where autofill treated dropdown questions as free text (typed value never
 commits → "required"/validation error on advance) or skipped fields outright. Four root causes fixed

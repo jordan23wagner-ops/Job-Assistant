@@ -1238,6 +1238,27 @@ var CUSTOM_QA_MATCH_THRESHOLD = 65;
 var CUSTOM_QA_MAX_PER_STEP = 6;
 var pendingReviewModal = null;
 
+// LinkedIn dropdowns default to a truthy placeholder value ("Select an option"), so a bare
+// `sel.value` check reads every unanswered dropdown as already-answered — it then never gets
+// learned/AI-answered, auto-advance errors on the required field, and worse, the placeholder
+// itself gets banked as the "learned answer", poisoning the shared customQA bank that
+// autofill.js also reads. These helpers make placeholder-vs-real explicit everywhere.
+function isPlaceholderValue(v) {
+  var n = normTxt(v);
+  return !n || /^(select|choose|please|pick)\b/.test(n) || /^-+$/.test(n.replace(/\s/g, ''));
+}
+// Stricter variant for BANKED ANSWERS (a real answer like "Please see résumé" must survive).
+function isPlaceholderAnswer(v) {
+  var n = normTxt(v);
+  return !n || /^-+$/.test(n.replace(/\s/g, '')) ||
+    (n.length < 30 && /^(select|choose|pick|please select|please choose)\b/.test(n));
+}
+function selectHasRealAnswer(sel) {
+  if (!sel || !sel.value) return false;
+  var optText = sel.selectedIndex >= 0 && sel.options[sel.selectedIndex] ? getText(sel.options[sel.selectedIndex]) : '';
+  return !isPlaceholderValue(sel.value) && !isPlaceholderValue(optText);
+}
+
 // Common filler words stripped before comparing questions, so "How many years of experience
 // do you have with Python?" and "Years of experience with Python?" are recognized as the same
 // question (denominator uses the SHORTER question's token count so a trimmed rephrasing still
@@ -1289,11 +1310,17 @@ function upsertLearnedAnswer(question, answer, fieldType, options) {
   });
 }
 
-function applyAnswerToItem(item, answerText) {
+async function applyAnswerToItem(item, answerText) {
   if (!answerText) return false;
   if (item.type === 'select') return selectBestOption(item.control, answerText);
   if (item.type === 'radio') return clickBestRadio(item.container, answerText);
-  return fillTextInput(item.control, answerText);
+  var ok = fillTextInput(item.control, answerText);
+  // Typeahead custom questions (location/school comboboxes) reject plain typed text — a
+  // suggestion must be PICKED or validation fails on Next, same combobox rule as autofill.js.
+  if (ok && item.control && isTypeaheadInput(item.control)) {
+    try { await resolveTypeaheadSelection(answerText); } catch (e) { /* leave typed value */ }
+  }
+  return ok;
 }
 
 // Resume / cover-letter / document selection steps must be left entirely alone: LinkedIn
@@ -1337,9 +1364,12 @@ function findCustomQuestions(modal, includeAnswered) {
     if (isKnownContactField(normTxt(label), text)) return; // handled by autoFillContactFields
 
     if (sel) {
-      if (!includeAnswered && sel.value) return;
+      if (!includeAnswered && selectHasRealAnswer(sel)) return; // placeholder "Select an option" = NOT answered
       var options = [];
-      for (var o = 0; o < sel.options.length; o++) { if (sel.options[o].value) options.push(getText(sel.options[o]) || sel.options[o].value); }
+      for (var o = 0; o < sel.options.length; o++) {
+        var oTxt = getText(sel.options[o]) || sel.options[o].value;
+        if (sel.options[o].value && !isPlaceholderValue(oTxt)) options.push(oTxt); // never offer the placeholder to the AI
+      }
       if (options.length) out.push({ container: container, control: sel, type: 'select', label: label, options: options });
     } else if (radios.length) {
       var anyChecked = Array.prototype.some.call(radios, function (r) { return r.checked; });
@@ -1364,11 +1394,13 @@ function findUnansweredCustomQuestions(modal) {
 function bankAllCustomAnswers(modal) {
   findCustomQuestions(modal, true).forEach(function (item) {
     var v = itemIsAnswered(item)
-      ? (item.type === 'select' ? item.control.value
+      ? (item.type === 'select' ? (getText(item.control.options[item.control.selectedIndex]) || item.control.value)
          : item.type === 'radio' ? (item.container.querySelector('input[type="radio"]:checked') ? radioLabelText(item.container.querySelector('input[type="radio"]:checked')) : '')
          : (item.control && item.control.value))
       : '';
-    if (v && String(v).trim()) upsertLearnedAnswer(item.label, String(v).trim(), item.type, item.options);
+    // Never bank a placeholder — one banked "Select an option" would auto-"answer" (and break)
+    // this question on every future application, here AND in the external-ATS engine.
+    if (v && String(v).trim() && !isPlaceholderAnswer(v)) upsertLearnedAnswer(item.label, String(v).trim(), item.type, item.options);
   });
 }
 
@@ -1417,17 +1449,21 @@ async function handleCustomQuestions(modal) {
   customQuestionsResolving = true;
   try {
     var data = await safeStorageGetAsync('customQA');
-    var bank = Array.isArray(data.customQA) ? data.customQA : [];
+    // Purge poisoned records (a banked "Select an option" would forever "answer" — and break —
+    // this dropdown on every application, here and in the external-ATS engine).
+    var rawBank = Array.isArray(data.customQA) ? data.customQA : [];
+    var bank = rawBank.filter(function (rec) { return rec && !isPlaceholderAnswer(rec.answer); });
     var remaining = [];
-    items.forEach(function (item) {
+    for (var li = 0; li < items.length; li++) {
+      var item = items[li];
       var learned = findLearnedAnswer(bank, item.label);
-      if (learned && applyAnswerToItem(item, learned.answer)) {
+      if (learned && await applyAnswerToItem(item, learned.answer)) {
         learned.lastUsedAt = Date.now();
       } else {
         remaining.push(item);
       }
-    });
-    safeStorageSet({ customQA: bank }); // persist lastUsedAt bumps
+    }
+    safeStorageSet({ customQA: bank }); // persist lastUsedAt bumps + the purge
     if (!remaining.length) return;
 
     // Try the AI on what the learned bank couldn't cover (needs a saved resume to reason from).
@@ -1439,26 +1475,28 @@ async function handleCustomQuestions(modal) {
         var answers = await callCustomAnswerBackend(remaining, lastDetectedJob, resumeText);
         var byIndex = {};
         answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
-        remaining.forEach(function (item, i) {
-          var answer = byIndex[i + 1];
-          if (answer && applyAnswerToItem(item, answer)) answeredAny = true;
-        });
+        for (var ri = 0; ri < remaining.length; ri++) {
+          var answer = byIndex[ri + 1];
+          if (answer && await applyAnswerToItem(remaining[ri], answer)) answeredAny = true;
+        }
       } catch (aiErr) {
         console.log('[Alicia] AI answer call failed, falling back to ask-the-human:', aiErr);
       }
     }
 
     // The Jobright loop: only STOP for questions Alicia genuinely couldn't answer (never seen,
-    // not derivable from the resume) — the human fills those, and their answer is banked on the
-    // advance click for next time. If learned answers + the AI covered everything, DON'T pause:
-    // keep auto-advancing autonomously (banking still happens via attachAnswerCapture on the
-    // advance click). This is what the user wants — stop only when it can't proceed.
+    // not derivable from the resume) — the human answers those in the panel (or on the page),
+    // and the answer is banked for next time. If learned answers + the AI covered everything,
+    // DON'T pause: keep auto-advancing autonomously.
     var needHuman = remaining.filter(function (item) { return !itemIsAnswered(item); });
 
     if (needHuman.length) {
       pendingReviewModal = modal;
-      modal.__aliciaPendingMsg = 'New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — fill it in to continue. Alicia will remember your answer' + (needHuman.length === 1 ? '' : 's') + ' for next time.';
-      showEasyApplyBanner(modal.__aliciaPendingMsg, '#e0a800');
+      // Register them as pending so the ~1.2s poll loop doesn't re-run the AI (and re-panel)
+      // for the same questions on every mutation cycle while the human is answering.
+      modal.__aliciaLearnItems = (modal.__aliciaLearnItems || []).concat(needHuman);
+      modal.__aliciaPendingMsg = 'New question' + (needHuman.length === 1 ? '' : 's') + ' here (' + needHuman.length + ') — answer in the Alicia panel (or on the page) to continue.';
+      showEasyApplyQuestionPanel(modal, needHuman);
     } else if (answeredAny) {
       showEasyApplyBanner('Alicia filled this step — continuing…', '#4caf50');
     }
@@ -1469,8 +1507,90 @@ async function handleCustomQuestions(modal) {
   }
 }
 
+// ---------- ask-the-human panel (parity with autofill.js's showQuestionPanel) ----------
+// Dropdown questions get a real <select> of their options so the answer always commits as a
+// proper selection; free text gets a textarea. Saving banks each answer FIRST (the human's
+// answer is truth even if applying to the widget fails), applies it, and lets the auto-advance
+// loop continue. Dismissing falls back to answering on the page (banked on the Next click).
+function removeEasyApplyQuestionPanel() {
+  var p = document.getElementById('alicia-question-panel');
+  if (p) p.remove();
+}
+function showEasyApplyQuestionPanel(modal, items) {
+  removeEasyApplyQuestionPanel();
+  var panel = document.createElement('div');
+  panel.id = 'alicia-question-panel';
+  panel.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;width:360px;max-height:70vh;overflow:auto;background:#1e1e2e;color:#eee;border-radius:12px;padding:14px 16px;font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.45);';
+
+  var head = document.createElement('div');
+  head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+  var title = document.createElement('strong');
+  title.style.fontSize = '14px';
+  title.textContent = 'Alicia needs ' + items.length + ' answer' + (items.length === 1 ? '' : 's');
+  head.appendChild(title);
+  var x = document.createElement('button');
+  x.textContent = '✕';
+  x.title = 'Dismiss — answer the fields on the page instead';
+  x.style.cssText = 'background:none;border:none;color:#aaa;font-size:14px;cursor:pointer;padding:0 2px;';
+  x.onclick = removeEasyApplyQuestionPanel;
+  head.appendChild(x);
+  panel.appendChild(head);
+
+  var controls = [];
+  items.forEach(function (item) {
+    var block = document.createElement('div');
+    block.style.cssText = 'margin-bottom:10px;';
+    var lab = document.createElement('div');
+    lab.textContent = item.label.length > 160 ? item.label.slice(0, 157) + '…' : item.label;
+    lab.style.cssText = 'margin-bottom:4px;color:#cdd6f4;';
+    block.appendChild(lab);
+    var ctrl;
+    if (item.options && item.options.length) {
+      ctrl = document.createElement('select');
+      ctrl.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:1px solid #444;background:#2a2a3c;color:#eee;box-sizing:border-box;';
+      var ph = document.createElement('option');
+      ph.value = ''; ph.textContent = '— choose —';
+      ctrl.appendChild(ph);
+      item.options.forEach(function (o) {
+        var op = document.createElement('option');
+        op.value = o; op.textContent = o;
+        ctrl.appendChild(op);
+      });
+    } else {
+      ctrl = document.createElement('textarea');
+      ctrl.rows = 2;
+      ctrl.placeholder = 'Your answer…';
+      ctrl.style.cssText = 'width:100%;padding:6px;border-radius:6px;border:1px solid #444;background:#2a2a3c;color:#eee;resize:vertical;box-sizing:border-box;font:inherit;';
+    }
+    block.appendChild(ctrl);
+    panel.appendChild(block);
+    controls.push({ item: item, ctrl: ctrl });
+  });
+
+  var save = document.createElement('button');
+  save.textContent = 'Save answers & continue';
+  save.style.cssText = 'width:100%;padding:8px;border:none;border-radius:8px;background:#4caf50;color:#fff;font-weight:600;cursor:pointer;font:inherit;';
+  save.onclick = async function () {
+    save.disabled = true;
+    save.textContent = 'Filling…';
+    for (var i = 0; i < controls.length; i++) {
+      var v = (controls[i].ctrl.value || '').trim();
+      if (!v) continue;
+      var item = controls[i].item;
+      upsertLearnedAnswer(item.label, v, item.type, item.options); // remember FIRST
+      try { await applyAnswerToItem(item, v); } catch (e) {}
+    }
+    removeEasyApplyQuestionPanel();
+    if (pendingReviewModal === modal) pendingReviewModal = null;
+    showEasyApplyBanner('Answers saved — Alicia will remember them next time.', '#4caf50');
+    scheduleAutoFill();
+  };
+  panel.appendChild(save);
+  document.body.appendChild(panel);
+}
+
 function itemIsAnswered(item) {
-  if (item.type === 'select') return !!(item.control && item.control.value);
+  if (item.type === 'select') return selectHasRealAnswer(item.control);
   if (item.type === 'radio') return !!item.container.querySelector('input[type="radio"]:checked');
   return !!(item.control && item.control.value && item.control.value.trim());
 }
@@ -1491,6 +1611,8 @@ function attachAnswerCapture(modal) {
     if (!isAction) return;
     bankAllCustomAnswers(modal);
     if (pendingReviewModal === modal) pendingReviewModal = null;
+    modal.__aliciaLearnItems = []; // step advanced — next step's questions are fresh
+    removeEasyApplyQuestionPanel();
   }, true);
 }
 

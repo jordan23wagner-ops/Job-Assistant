@@ -71,6 +71,34 @@ function skipAggregatorInterstitial() {
   } catch (e) {}
 }
 
+// Cap how many page navigations an explicit (web-app) apply session may follow. Explicit sessions
+// deliberately bypass the same-site/known-ATS scoping (redirect chains land anywhere), but without
+// a bound the engine would follow that TAB to unrelated sites for the full 20-minute TTL.
+var EXPLICIT_SESSION_MAX_NAVS = 10;
+
+// Bind a web-app-registered apply URL to its tab on the FIRST navigation — aggregator/short-link
+// postings often 302 before the first 'complete', so matching only the final URL never adopted
+// the tab and nothing filled (silently, since APPLY_ACK had already reported ok).
+chrome.webNavigation.onBeforeNavigate.addListener(function (details) {
+  if (details.frameId !== 0 || !/^https?:/i.test(details.url || '')) return;
+  chrome.storage.local.get(['autofillSessions', 'pendingApplyUrls'], function (data) {
+    var sessions = data.autofillSessions || {};
+    if (sessions[String(details.tabId)]) return; // already adopted
+    var pending = data.pendingApplyUrls || {};
+    var key = normUrl(details.url);
+    var match = pending[key];
+    if (!match || Date.now() - (match.ts || 0) > PENDING_APPLY_TTL_MS) return;
+    var mHost = '';
+    try { mHost = new URL(details.url).hostname; } catch (e) {}
+    sessions[String(details.tabId)] = {
+      hostname: mHost, startedAt: Date.now(), explicit: true,
+      tailoredResume: match.resumeText || '', origUrl: key, navs: 0,
+    };
+    delete pending[key];
+    chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
+  });
+});
+
 chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
   if (info.status !== 'complete' || !tab || !tab.url) return;
   if (!/^https?:/i.test(tab.url) || /(^|\.)linkedin\.com/i.test(tab.url)) return;
@@ -79,14 +107,13 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     var pending = data.pendingApplyUrls || {};
     var s = sessions[String(tabId)];
     if (!s) {
-      // Adopt a tab the web app opened for an apply: if this URL was registered by the Jobs tab,
-      // turn it into an explicit autofill session so the engine fills it (and follows redirects).
+      // Late adoption fallback (final URL matched directly, or onBeforeNavigate missed it).
       var key = normUrl(tab.url);
       var match = pending[key];
       if (match && Date.now() - (match.ts || 0) < PENDING_APPLY_TTL_MS) {
         var mHost = '';
         try { mHost = new URL(tab.url).hostname; } catch (e) {}
-        s = { hostname: mHost, startedAt: Date.now(), explicit: true, tailoredResume: match.resumeText || '' };
+        s = { hostname: mHost, startedAt: Date.now(), explicit: true, tailoredResume: match.resumeText || '', origUrl: key, navs: 0 };
         sessions[String(tabId)] = s;
         delete pending[key];
         chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
@@ -102,15 +129,39 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     var host = '';
     try { host = new URL(tab.url).hostname; } catch (e) {}
     var sameSite = host && s.hostname && baseDomain(host) === baseDomain(s.hostname);
-    // Explicit web-app applies act on ANY employer page they land on (the user chose this job);
-    // manual/auto-detect sessions stay scoped to same-site or the known-ATS allowlist.
-    if (!sameSite && !ATS_HOST_RE.test(host) && !s.explicit) return; // user wandered off — leave the page alone
+    // Explicit web-app applies act on ANY employer page they land on (the user chose this job) —
+    // but only for a bounded number of navigations; manual/auto-detect sessions stay scoped to
+    // same-site or the known-ATS allowlist.
+    if (s.explicit) {
+      s.navs = (s.navs || 0) + 1;
+      if (s.navs > EXPLICIT_SESSION_MAX_NAVS && !sameSite && !ATS_HOST_RE.test(host)) {
+        delete sessions[String(tabId)];
+        chrome.storage.local.set({ autofillSessions: sessions });
+        return;
+      }
+      chrome.storage.local.set({ autofillSessions: sessions });
+    } else if (!sameSite && !ATS_HOST_RE.test(host)) {
+      return; // user wandered off — leave the page alone
+    }
     setTimeout(function () {
       if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
         // On an aggregator landing page: click through to the employer application instead of filling.
         chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
       } else {
-        chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
+        // Deliver the web app's per-job TAILORED résumé to the engine before it runs — autofill.js
+        // prefers window.__aliciaTailoredResume over the stored generic resumeText.
+        var inject = function () {
+          chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
+        };
+        if (s.tailoredResume) {
+          chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            func: function (t) { window.__aliciaTailoredResume = t; },
+            args: [s.tailoredResume],
+          }).then(inject, inject);
+        } else {
+          inject();
+        }
       }
     }, 800);
   });
@@ -179,6 +230,7 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
 // As always, the engine stops before the final Submit; a human clicks Submit on each application.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message || message.type !== 'WEBAPP_APPLY') return;
+  var requested = Array.isArray(message.jobs) ? message.jobs.length : 0;
   var jobs = Array.isArray(message.jobs) ? message.jobs.slice(0, 5) : [];
   chrome.storage.local.get('pendingApplyUrls', function (data) {
     var pending = data.pendingApplyUrls || {};
@@ -188,10 +240,68 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (j && j.url && /^https?:/i.test(j.url)) pending[normUrl(j.url)] = { ts: now, resumeText: j.resumeText || '' };
     });
     chrome.storage.local.set({ pendingApplyUrls: pending }, function () {
-      try { sendResponse({ ok: true, count: jobs.length }); } catch (e) {}
+      // accepted vs requested lets the web app surface the 5-per-batch cap instead of silently
+      // never filling job 6+.
+      try { sendResponse({ ok: true, count: jobs.length, requested: requested }); } catch (e) {}
     });
   });
   return true; // async sendResponse
+});
+
+// ===== Web-app sync (Wagner-GPT is the source of truth for the résumé/profile) =====
+// The Jobs tab pushes its active (or tailored) résumé + contact profile through bridge.js; store
+// them under the same keys the fill engines already read, so the extension always fills with
+// what the web app currently has — no more split-brain between the two résumé stores.
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (!message || message.type !== 'WEBAPP_SYNC' || !message.data) return;
+  var d = message.data;
+  var updates = {};
+  if (typeof d.resumeText === 'string' && d.resumeText.trim().length > 40) updates.resumeText = d.resumeText;
+  if (d.resumeFile && d.resumeFile.b64 && d.resumeFile.name) {
+    updates.resumeFile = { name: d.resumeFile.name, type: d.resumeFile.type || 'application/pdf', b64: d.resumeFile.b64 };
+  }
+  chrome.storage.local.get('profile', function (cur) {
+    if (d.profile && typeof d.profile === 'object' && Object.keys(d.profile).length) {
+      var merged = cur.profile || {};
+      Object.keys(d.profile).forEach(function (k) { if (d.profile[k]) merged[k] = d.profile[k]; });
+      updates.profile = merged;
+    }
+    if (Object.keys(updates).length) chrome.storage.local.set(updates);
+    try { sendResponse({ ok: true, synced: Object.keys(updates) }); } catch (e) {}
+  });
+  return true; // async sendResponse
+});
+
+// ===== Fill-status feedback to the web app =====
+// autofill.js reports UNIVERSAL_FILL_RESULT after each pass (to the side panel); ALSO forward it
+// to any open Wagner-GPT tab so the Jobs tracker can show live application state (filled / needs
+// input / ready to submit) instead of going dark after the handoff.
+chrome.runtime.onMessage.addListener(function (message, sender) {
+  if (!message || message.type !== 'UNIVERSAL_FILL_RESULT' || !sender || !sender.tab) return;
+  var tabId = sender.tab.id;
+  chrome.storage.local.get('autofillSessions', function (data) {
+    var sessions = data.autofillSessions || {};
+    var s = sessions[String(tabId)];
+    var payload = {
+      result: message.result || {},
+      url: sender.tab.url || '',
+      origUrl: (s && s.origUrl) || '',
+      explicit: !!(s && s.explicit),
+    };
+    // The application reached its final screen — the human submits from here, so stop following
+    // this tab around (an explicit session used to shadow the tab for the full 20-minute TTL).
+    if (s && s.explicit && message.result && message.result.status === 'ready_to_submit') {
+      delete sessions[String(tabId)];
+      chrome.storage.local.set({ autofillSessions: sessions });
+    }
+    chrome.tabs.query({ url: ['https://wagner-gpt.vercel.app/*', 'http://localhost/*'] }, function (tabs) {
+      (tabs || []).forEach(function (t) {
+        chrome.tabs.sendMessage(t.id, { type: 'ALICIA_STATUS', payload: payload }, function () {
+          void chrome.runtime.lastError; // no bridge in that tab — fine
+        });
+      });
+    });
+  });
 });
 
 // ===== Self-healing content-script injection on LinkedIn =====
@@ -243,11 +353,10 @@ function injectAtsFrames(tabId) {
       var host = '';
       try { host = new URL(f.url).hostname; } catch (e) { return; }
       if (/(^|\.)linkedin\.com$|(^|\.)licdn\.com$/i.test(host)) return; // LinkedIn's own subframes
-      // Inject into recognized ATS domains OR any direct child frame of the top page (the
-      // embedded employer application is a direct child; nested tracking/ad frames are not).
-      // autofill.js self-guards: it does nothing on a frame with no recognized form and never
-      // clicks Submit/Apply, so injecting into a non-application frame is harmless.
-      if (!ATS_HOST_RE.test(host) && f.parentFrameId !== 0) return;
+      // Inject ONLY into recognized ATS domains. (Any-direct-child was too loose: autofill.js's
+      // "self-guard" is just ≥3 visible inputs, and inside e.g. a survey/newsletter iframe it
+      // would fill contact info and even generate + save a password.)
+      if (!ATS_HOST_RE.test(host)) return;
       chrome.scripting.executeScript({ target: { tabId: tabId, frameIds: [f.frameId] }, files: ['autofill.js'] }).catch(function () {});
     });
   });
@@ -264,9 +373,9 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'JOB_DETECTED') {
-    chrome.runtime.sendMessage(message).catch(() => {});
-  }
+  if (!message || !message.type) return;
+  // (JOB_DETECTED needs no relay: the content script's runtime.sendMessage already reaches the
+  // side panel directly — re-broadcasting it here made displayJob run twice per detection.)
   if (message.type === 'DETECT_JOB') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
@@ -408,11 +517,19 @@ function queueMarkAndAdvance(jobId, newStatus, incrementSession) {
 chrome.runtime.onMessage.addListener(function (message, sender) {
   if (!message) return;
   if (message.type === 'QUEUE_START') {
-    chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-      var tabId = (tabs && tabs[0]) ? tabs[0].id : (sender.tab ? sender.tab.id : null);
-      chrome.storage.local.set({
-        queueActive: true, queuePaused: false, queueSessionCount: 0, queueStatusMsg: '', queueTabId: tabId
-      }, function () { queueOpenNext(); });
+    // Drive the queue in a LinkedIn tab. Grabbing whatever tab was focused used to hijack and
+    // navigate an unrelated page if the user started the queue while looking elsewhere.
+    chrome.tabs.query({ url: '*://*.linkedin.com/*' }, function (liTabs) {
+      var pick = (liTabs || []).find(function (t) { return t.active; }) || (liTabs && liTabs[0]);
+      var start = function (tabId) {
+        chrome.storage.local.set({
+          queueActive: true, queuePaused: false, queueSessionCount: 0, queueStatusMsg: '', queueTabId: tabId
+        }, function () { queueOpenNext(); });
+      };
+      if (pick) { start(pick.id); return; }
+      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        start((tabs && tabs[0]) ? tabs[0].id : (sender.tab ? sender.tab.id : null));
+      });
     });
   }
   if (message.type === 'QUEUE_ITEM_SUBMITTED') queueMarkAndAdvance(message.jobId, 'done', true);

@@ -2106,11 +2106,13 @@ ivPracticeInput.addEventListener('keydown', function (e) { if (e.key === 'Enter'
 const searchPrefsToggle = document.getElementById('search-prefs-toggle');
 const searchPrefs = document.getElementById('search-prefs');
 
-// Open the full-page job search (Adzuna-backed) in a new browser tab — roomy and uncluttered.
+// Job search lives in the Wagner-GPT web app's Jobs tab now (multi-source scraping search,
+// tailoring, tracker — one place for everything). The old extension page (jobsearch.html) was a
+// full duplicate calling the same backend and has been removed.
 const openJobSearchBtn = document.getElementById('open-job-search');
 if (openJobSearchBtn) {
   openJobSearchBtn.addEventListener('click', function () {
-    chrome.tabs.create({ url: chrome.runtime.getURL('jobsearch.html') });
+    chrome.tabs.create({ url: 'https://wagner-gpt.vercel.app/?tab=jobs' });
   });
 }
 const searchRun = document.getElementById('search-run');

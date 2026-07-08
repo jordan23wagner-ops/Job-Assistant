@@ -739,8 +739,13 @@
     for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     return new File([bytes], rec.name || 'resume.pdf', { type: rec.type || 'application/pdf' });
   }
-  function attachResume(resumeFileRec) {
-    if (!resumeFileRec || !resumeFileRec.b64) return 0;
+  function acceptsTxt(el) {
+    var a = (el.getAttribute('accept') || '').toLowerCase();
+    return !a || a.indexOf('.txt') >= 0 || a.indexOf('text/plain') >= 0 || a.indexOf('*') >= 0;
+  }
+  function attachResume(resumeFileRec, tailoredText) {
+    var hasStored = !!(resumeFileRec && resumeFileRec.b64);
+    if (!hasStored && !tailoredText) return 0;
     var attached = 0;
     var fileInputs = document.querySelectorAll('input[type="file"]');
     for (var i = 0; i < fileInputs.length; i++) {
@@ -757,7 +762,11 @@
       if (/cover letter|coverletter/.test(s)) continue;
       try {
         var dt = new DataTransfer();
-        dt.items.add(b64ToFile(resumeFileRec));
+        // With a per-job tailored résumé, attach THAT (as .txt) when the input accepts it, so
+        // the uploaded document matches the tailored answers — otherwise the stored original.
+        if (tailoredText && acceptsTxt(el)) dt.items.add(new File([tailoredText], 'Resume.txt', { type: 'text/plain' }));
+        else if (hasStored) dt.items.add(b64ToFile(resumeFileRec));
+        else continue; // tailored-only but this input rejects .txt — leave it for the human
         el.files = dt.files;
         el.dispatchEvent(new Event('change', { bubbles: true }));
         attached++;
@@ -1393,8 +1402,19 @@
       var profile = data.profile || {};
       var eeo = data.eeoPrefs || {};
       var siteCredentials = data.siteCredentials || {};
-      var bank = Array.isArray(data.customQA) ? data.customQA : [];
-      var resumeText = data.resumeText || '';
+      // Drop poisoned records (older builds could bank a "Select an option" placeholder as a
+      // learned answer, permanently mis-answering that dropdown everywhere).
+      var bank = (Array.isArray(data.customQA) ? data.customQA : []).filter(function (rec) {
+        if (!rec) return false;
+        var n = norm(rec.answer);
+        return n && !/^-+$/.test(n.replace(/\s/g, '')) && !(n.length < 30 && /^(select|choose|pick|please select|please choose)\b/.test(n));
+      });
+      // A web-app apply session delivers the per-job TAILORED résumé via a window var (set by
+      // background.js just before injection). Prefer it — the whole point of tailoring in the
+      // Jobs tab is that THIS text answers the questions, not the stored generic résumé.
+      var tailoredResume = (typeof window.__aliciaTailoredResume === 'string' && window.__aliciaTailoredResume.trim().length > 40)
+        ? window.__aliciaTailoredResume.trim() : '';
+      var resumeText = tailoredResume || data.resumeText || '';
       var resumeFile = data.resumeFile || null;
 
       if (!Object.keys(profile).length && !Object.keys(eeo).length) {
@@ -1426,7 +1446,7 @@
         n += fillEeoRadios(eeo);
         if (adapter.fillDropdowns) { try { n += await adapter.fillDropdowns(eeo, profile); } catch (e) {} }
         n += await fillEeoComboboxes(eeo);
-        var ra = attachResume(resumeFile);
+        var ra = attachResume(resumeFile, tailoredResume);
         result.resumeAttached += ra;
         n += ra;
 
@@ -1446,7 +1466,9 @@
             learned.lastUsedAt = Date.now();
             result.learnedUsed++;
             n++;
-          } else if (!learned) {
+          } else {
+            // Includes learned-but-unappliable: a bank hit whose apply failed (option renamed,
+            // widget changed) must still flow to the AI/ask panel — never silently dropped.
             unanswered.push(qItem);
           }
         }
