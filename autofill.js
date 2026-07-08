@@ -329,7 +329,17 @@
     } catch (e) {}
     if (!t) {
       var lbAttr = el.getAttribute('aria-labelledby');
-      if (lbAttr) { var lb = document.getElementById(lbAttr.split(' ')[0]); if (lb) t = getText(lb); }
+      if (lbAttr) {
+        // The ARIA accessible-name algorithm concatenates the text of EVERY id listed, not just the
+        // first — enterprise component libraries commonly split a field's label across a separate
+        // "label" node and a "required"/hint node referenced together (e.g. aria-labelledby="lbl hint").
+        // Reading only the first token silently drops labels built this way.
+        var lbText = lbAttr.split(/\s+/).map(function (id) {
+          var node = document.getElementById(id);
+          return node ? getText(node) : '';
+        }).filter(Boolean).join(' ');
+        if (lbText) t = lbText;
+      }
     }
     if (!t) { var p = el.closest('label'); if (p) t = getText(p); }
     if (!t) {

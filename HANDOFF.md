@@ -1,6 +1,67 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.8: generated-password class coverage, honeypot exclusion
+## Update 2026-07-08 (latest) — v1.13.9: aria-labelledby multi-id fix (from a deeper investigation pass on the two open ADP/Zoho items)
+
+Ran a higher-effort, multi-agent investigation (two independent deep-dive passes on the ADP
+field-recognition gap and the Zoho total-fill regression, each followed by an adversarial verification
+pass that re-read the actual current code rather than trusting the investigation's claims) to see
+whether more compute could unblock the two items v1.13.8 left as "needs a live diagnostic." Result:
+mostly confirms the earlier conclusion rather than overturning it, plus one small, genuinely new fix.
+
+- **Zoho total-fill regression: still NEEDS-LIVE-DATA, and now with stronger evidence.** The
+  investigation traced the exact execution order in `fillOnePass` and confirmed `fillStdFields`/
+  `fillStdSelects` (name, email, phone, etc.) run, synchronously, *before* any of the CAPTCHA/honeypot/
+  dedupe logic added in v1.13.7 — so even a hypothetical bug in that new code could only ever explain a
+  *partial* failure (custom questions), never the reported *total* blank result (not even name/email).
+  That rules out the v1.13.6→v1.13.7 diff as the cause with fairly high confidence. The adversarial
+  pass independently re-verified every line/commit reference and agreed. Conclusion stands: the most
+  likely explanation is a Zoho-side rendering/timing hiccup, or an injection failure silently swallowed
+  by the pre-existing `.catch(function(){})` pattern on every `chrome.scripting.executeScript` call in
+  background.js — not a code bug this repo can fix blind. The two diagnostics requested in v1.13.8
+  (`document.querySelectorAll('input,select,textarea').length` and `typeof window.__aliciaAutofillRun`
+  on the stuck page) are still the right next step.
+
+- **ADP field-recognition gap: one real, generic bug found and fixed; two more targeted fixes proposed
+  but NOT shipped after adversarial review found real problems with them.** The investigation
+  correctly noted the tester's confirmed `document.querySelectorAll('iframe').length === 0` means this
+  is a *different* cause than the v1.13.7 iframe fix (which only ever applied to a same-tab-iframe
+  scenario) — call it ADP gap #2. Three candidate root causes were proposed (Angular/Kendo-style
+  components not mirroring field names onto DOM attributes, a custom-element label wrapper that
+  `labelText()`'s hardcoded tag whitelist can't traverse, and — flagged as a structural gap regardless
+  of ADP — zero shadow-DOM traversal anywhere in this codebase), all correctly hedged as "plausible for
+  ADP's known technology history, not confirmed for this specific page." Of the three proposed code
+  changes:
+  - **Shipped:** `labelText()`'s `aria-labelledby` handling only ever read the FIRST id in a
+    space-separated list, but the ARIA accessible-name algorithm concatenates the text of every
+    referenced id — a real, generic bug (not an ADP guess) since component libraries commonly split a
+    label across a separate label node and a hint/required-marker node referenced together. Fixed to
+    join text from every listed id. Verified independently safe (purely additive — only fires when
+    `aria-labelledby` is present, only overrides the label when it finds a non-empty result).
+  - **Not shipped:** a proposed rewrite of the last-resort ancestor-walk fallback was caught by the
+    adversarial pass containing inert dead code (a condition computed and then discarded — a sign it
+    was never actually run) AND a real regression path: it stops walking as soon as it hits a container
+    with more than one form control, *before* checking that container for a label — which breaks the
+    common compound-field pattern (e.g. a country-code select + phone input sharing one labeled
+    wrapper) that the current code already handles correctly. Reworking this safely needs either a live
+    DOM sample or much more careful edge-case handling than the first pass produced — left for a future
+    round rather than shipped on a guess.
+  - **Not shipped, correctly gated:** a shadow-DOM traversal helper, since this codebase has zero
+    shadow-DOM awareness anywhere (confirmed by grep) — a real structural gap in general, but shipping
+    a deep-query rewrite of every field-discovery call site without confirming ADP's page actually uses
+    shadow DOM would be exactly the kind of speculative fix this project has been trying to avoid.
+
+Bottom line on the meta-question that prompted this pass: extra reasoning depth and independent
+verification caught one real bug and, just as usefully, stopped an unsafe-looking fix from shipping —
+but it did not unblock either open item, because both are blocked on missing live-DOM data, not on
+insufficient analysis. The next actionable step for both is still a human pasting console output from
+the actual stuck page, not more code archaeology.
+
+Verified: `test-round8-fixes.js` reproduces the old first-id-only behavior and confirms the new code
+recovers a label from a later id when the first one doesn't resolve, without changing the single-id
+case. `node --check` clean; all prior round test suites (`test-round5/6/7-fixes.js`) still pass
+unchanged.
+
+## Update 2026-07-08 — v1.13.8: generated-password class coverage, honeypot exclusion
 
 Round 7 re-tested v1.13.7 across the Zoho posting again, a fresh Workday tenant (Owens & Minor), the
 same ADP/MEI site, and a brand-new BambooHR site (Solid Light). Confirmed working: the CAPTCHA
