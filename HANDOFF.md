@@ -1,6 +1,23 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.12.1: aggregator new-tab sessions + navigation ask-and-remember
+## Update 2026-07-08 (latest) — v1.12.2: broaden apply-button capture + autonomous single-button click
+
+Follow-up to v1.12.1's nav panel: on an Oracle Recruiting Cloud details page the panel appeared but
+MISSED the "APPLY NOW" button (it's a styled non-`<a href>`/non-`<button>` element) and instead listed
+account/nav noise (Manage profile, Sign Out, View More Jobs, PRIVACY STATEMENT…). Fixes in `autofill.js`:
+
+- `navCandidates` broadened: primary selector now includes bare `<a>`, `[role=link]`, `[onclick]`,
+  `[class*=btn|button|apply|cta]`, `[data-automation-id]`; plus a backstop text-sweep over leaf
+  elements whose own short text reads like a forward action, resolved to the nearest clickable
+  ancestor (`isClickableEl`/`nearestClickable`) — catches Apply buttons that are plain divs/custom
+  components. `NAV_NOISE_RE` filters account/legal/nav chrome as whole-label matches.
+- **Autonomous when unambiguous:** if exactly ONE candidate scores as a clear Apply (score ≥ 6), the
+  engine clicks it automatically (and remembers it) instead of asking — Apply only opens the form,
+  never submits, so it's safe/recoverable. The panel is now reserved for genuinely ambiguous pages
+  (multiple forward buttons, or none dominant). Verified by a logic test against the real Oracle and
+  jobgether button sets (both collapse to a single autonomous APPLY/APPLY NOW).
+
+## Update 2026-07-08 — v1.12.1: aggregator new-tab sessions + navigation ask-and-remember
 
 Real-world failure (jobgether.com): the web app opened an AGGREGATOR page that opened the real
 employer application (jobs.prometeotalent.com) in a SEPARATE tab. That new tab had no autofill

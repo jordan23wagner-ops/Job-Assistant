@@ -195,19 +195,58 @@
     if (/\bapply\b/.test(n)) return 3;
     return 2;
   }
+  // Buttons on real ATS pages aren't always <button>/<a href> — Oracle Recruiting Cloud, Workday,
+  // etc. render "Apply Now" as a styled <a> without href, a role=button div, or a custom component.
+  function isClickableEl(el) {
+    if (!el || !el.tagName) return false;
+    if (el.tagName === 'A' || el.tagName === 'BUTTON') return true;
+    var role = el.getAttribute && el.getAttribute('role');
+    if (role === 'button' || role === 'link' || role === 'menuitem' || role === 'tab') return true;
+    if (el.getAttribute && (el.getAttribute('onclick') || el.hasAttribute('jsaction'))) return true;
+    if (el.tagName === 'INPUT' && /^(submit|button)$/i.test(el.type || '')) return true;
+    var cls = el.className;
+    cls = String((cls && cls.baseVal !== undefined) ? cls.baseVal : (cls || ''));
+    return /\b(btn|button|apply|cta)\b/i.test(cls);
+  }
+  function nearestClickable(el) {
+    var cur = el;
+    for (var i = 0; i < 5 && cur && cur !== document.body; i++) {
+      if (isClickableEl(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return el;
+  }
+  // Noise that is never the "move the application forward" button — account/nav/legal chrome that
+  // clutters (and could mislead) the choice list. Matched as the WHOLE normalized label.
+  var NAV_NOISE_RE = /^(close|dismiss|cancel|back|menu|open menu|share|save|like|report|home|go to home page|help|blog|about us|for talent|for companies|privacy statement|terms of use|cookie[a-z ]*|sign out|log out|sign in|log in|manage profile|profile|my profile|account|settings|view more jobs|similar jobs|search jobs|save job|save to favorites)$/;
   function navCandidates() {
-    var els = document.querySelectorAll('a[href], button, [role="button"], input[type="submit"], input[type="button"]');
-    var out = [], seen = {};
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      if (!visible(el) || el.disabled || isInAliciaUi(el)) continue;
-      var t = (getText(el) || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
-      if (!t || t.length > 60) continue;
+    var out = [], seen = {}, seenEl = [];
+    var push = function (el, t) {
+      if (!el || !visible(el) || el.disabled || isInAliciaUi(el)) return;
+      t = (t || getText(el) || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 60) return;
       var key = norm(t);
-      if (!key || seen[key]) continue;
-      if (/^(close|dismiss|cancel|back|menu|share|save|like|report|home|help|blog|about us|for talent|for companies)$/.test(key)) continue;
-      seen[key] = 1;
+      if (!key || seen[key] || seenEl.indexOf(el) >= 0 || NAV_NOISE_RE.test(key)) return;
+      seen[key] = 1; seenEl.push(el);
       out.push({ el: el, text: t, score: navScore(t) });
+    };
+    // Primary: broad clickable selector (covers custom/styled buttons, not just <button>/<a href>).
+    document.querySelectorAll('a, button, [role="button"], [role="link"], input[type="submit"], input[type="button"], [onclick], [class*="btn"], [class*="button"], [class*="apply"], [class*="cta"], [data-automation-id]')
+      .forEach(function (el) { push(el); });
+    // Backstop: if nothing clearly forward-looking surfaced, sweep leaf-ish elements whose own short
+    // text reads like a forward action and resolve each to its nearest clickable ancestor. Catches
+    // Apply buttons the selector missed entirely (plain div/span with a click handler).
+    if (!out.some(function (c) { return c.score >= 5; })) {
+      var all = document.querySelectorAll('div, span, a, p, li, td');
+      for (var i = 0; i < all.length && out.length < 40; i++) {
+        var e = all[i];
+        if (e.children && e.children.length > 2) continue;
+        var tx = (e.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!tx || tx.length > 40) continue;
+        if (!/\bapply\b|continue to (apply|application|job)|start application|go to (the )?job|view (the )?job|proceed/i.test(tx)) continue;
+        if (/i applied|didn.?t (actually )?apply|engage/i.test(tx)) continue;
+        push(nearestClickable(e), tx);
+      }
     }
     out.sort(function (a, b) { return b.score - a.score; });
     return out.slice(0, 8);
@@ -1595,19 +1634,23 @@
           window.__aliciaNavHandled = true;
           var navClicked = false;
           try { navClicked = await tryLearnedNavClick(); } catch (e) {}
-          if (navClicked) {
+          var cands = navClicked ? [] : navCandidates();
+          var strong = cands.filter(function (c) { return c.score >= 6; }); // clear Apply/Apply Now
+          if (navClicked || strong.length === 1) {
+            // A learned choice, OR exactly ONE clear Apply button — proceed autonomously (Apply just
+            // opens the form, it never submits, so a click here is safe and recoverable).
+            if (!navClicked) { saveNavChoice(location.hostname, strong[0].text); try { fireClick(strong[0].el); } catch (e) {} }
             result.status = 'advancing';
-            showBanner('Continuing to the application…', '#4caf50');
-            setTimeout(function () { window.__aliciaNavHandled = false; window.__aliciaAutofillRun(); }, 3000);
+            showBanner('Opening the application…', '#4caf50');
+            setTimeout(function () { window.__aliciaNavHandled = false; window.__aliciaAutofillRun(); }, 2800);
+          } else if (cands.length >= 1) {
+            // Ambiguous — several forward-looking buttons, or none clearly dominant. Ask the human
+            // which one moves forward and remember it for this host.
+            result.status = 'stopped_needs_input';
+            showNavChoicePanel(cands);
           } else {
-            var cands = navCandidates();
-            if (cands.length >= 2) {
-              result.status = 'stopped_needs_input';
-              showNavChoicePanel(cands);
-            } else {
-              result.status = 'no_fields_found';
-              showBanner('On the job page. Click "Apply" to open the form and I\'ll fill it in.', '#e0a800');
-            }
+            result.status = 'no_fields_found';
+            showBanner('On the job page. Click "Apply" to open the form and I\'ll fill it in.', '#e0a800');
           }
         } else {
           result.status = 'no_fields_found';
