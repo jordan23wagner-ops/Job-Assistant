@@ -190,11 +190,37 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
   });
 });
 
+// Some ATS platforms (notably ADP Workforce Now career sites) render the actual application form
+// inside a same-tab iframe rather than the top-level document — top-frame-only injection then sees
+// no recognized form at all and silently does nothing (First/Last/Email/Phone all stay blank, with
+// no error). Mirrors injectAtsFrames' existing safe pattern (used for LinkedIn's embedded-ATS case):
+// only inject into a child frame whose hostname is the SAME as the top frame's (near-certainly part
+// of the same application) or matches a known ATS host — never an arbitrary third-party ad/chat/
+// newsletter iframe, since autofill.js's own self-guard (>=3 visible inputs) isn't a strong enough
+// filter on its own to make that safe.
+function injectIntoRecognizedChildFrames(tabId, topHost) {
+  if (!chrome.webNavigation || !chrome.webNavigation.getAllFrames || !topHost) return;
+  chrome.webNavigation.getAllFrames({ tabId: tabId }, function (frames) {
+    if (!frames) return;
+    frames.forEach(function (f) {
+      if (f.frameId === 0 || !/^https?:/i.test(f.url || '')) return;
+      var host = ''; try { host = new URL(f.url).hostname; } catch (e) { return; }
+      if (host !== topHost && !ATS_HOST_RE.test(host)) return;
+      chrome.scripting.executeScript({ target: { tabId: tabId, frameIds: [f.frameId] }, files: ['autofill.js'] }).catch(function () {});
+    });
+  });
+}
+
 // Deliver the web app's per-job TAILORED résumé to the engine before it runs — autofill.js prefers
 // window.__aliciaTailoredResume over the stored generic resumeText — then inject/re-run autofill.js.
 function injectAutofillWithTailoredResume(tabId, s) {
   var inject = function () {
     chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
+    chrome.tabs.get(tabId, function (tab) {
+      if (chrome.runtime.lastError || !tab || !tab.url) return;
+      var host = ''; try { host = new URL(tab.url).hostname; } catch (e) { return; }
+      injectIntoRecognizedChildFrames(tabId, host);
+    });
   };
   if (s && s.tailoredResume) {
     chrome.scripting.executeScript({
@@ -294,6 +320,7 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
       sessions[String(tab.id)] = { hostname: host, startedAt: Date.now() };
       chrome.storage.local.set({ autofillSessions: sessions }, function () {
         chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }).catch(function () {});
+        injectIntoRecognizedChildFrames(tab.id, host);
       });
     });
   }

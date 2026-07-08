@@ -495,9 +495,27 @@
   // discovered as a question at all, so they can only ever reach the human via the ask panel.
   function looksLikeCaptcha(label, container) {
     var n = norm(label || '');
-    if (/captcha|verify (that )?you.?re? (a )?human|i.?m not a robot|security check|prove (that )?you.?re? human|type the (text|characters|code) (you see|shown|above|below)|enter the code (shown|above|below)/.test(n)) return true;
+    if (/captcha|verify (that )?you.?re? (a )?human|i.?m not a robot|security check|security code|verification code|confirmation code|prove (that )?you.?re? human|type the (text|characters|code) (you see|shown|above|below)|enter the code (shown|above|below)|are you (a )?human|are you a robot|anti.?spam|bot check|human (check|verification)|prove you.?re? not a robot|solve (the )?(following|this|below)|type what you see/.test(n)) return true;
+    // A simple arithmetic challenge ("3 + 5 = ?", "What is 4 x 2?") has no "captcha" wording at all —
+    // catch it by shape instead, checking the RAW label (norm() strips +/=/? entirely, so the check
+    // has to run before that normalization). A short label with an explicit operator AND "=" or "?"
+    // is not something a real job-application question ever looks like.
+    if (label && label.length <= 40 && /\d\s*[+\-×x]\s*\d.{0,10}(=|\?)/i.test(label)) return true;
     if (container && container.querySelector && container.querySelector('img[alt*="captcha" i], img[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], [class*="recaptcha" i], [class*="hcaptcha" i]')) return true;
     return false;
+  }
+  // Second, content-based safety net independent of label wording: if the AI-answer backend hands
+  // back something that reads like "I couldn't actually answer this" (observed twice now, in two
+  // different literal forms — "No image provided." and "N/A" — both from a CAPTCHA-style challenge
+  // looksLikeCaptcha's label/DOM check didn't catch), never type that in as if it were a real answer.
+  // Leaving the field empty routes it into the existing needHuman/ask-panel path instead.
+  function looksLikeRefusalAnswer(ans) {
+    var n = norm(ans);
+    if (!n || n.length > 60) return false;
+    var img = '( (the |an? |any )?image)?';
+    return new RegExp('^(n ?a|not applicable|no image( provided| was provided)?|no image available|' +
+      'unable to (view|see|access|answer)' + img + '|cannot (see|view|access)' + img + '|can ?t (see|view|access)' + img + '|' +
+      'i (do not|don.?t|cannot|can.?t) (have|see|view|access)' + img + '|no access to (an? )?image|i.?m unable to (see|view|access)' + img + ')$').test(n);
   }
   function generatePassword() {
     var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
@@ -1819,6 +1837,27 @@
             items = items.concat(dyn.questionItems);
           } catch (e) {}
         }
+        // Two different discovery passes can legitimately notice the SAME on-page question via
+        // different code paths — e.g. Workday's "How Did You Hear About Us?" prompt dropdown was
+        // observed picked up by BOTH the generic ARIA-combobox scan (findUnansweredCustomQuestions)
+        // and the adapter's own wdFindDropdownQuestions scan, asking the human the identical question
+        // twice, each rendered as a free-text box even though the field is really a dropdown. De-dupe
+        // by normalized label before anything reaches the human or the AI, keeping whichever version
+        // carries real options (a proper dropdown) over one that fell back to free text.
+        (function dedupeByLabel() {
+          var byLabel = {}, ordered = [];
+          items.forEach(function (it) {
+            var key = norm(it.label);
+            if (!key) { ordered.push(it); return; }
+            if (!byLabel[key]) { byLabel[key] = it; ordered.push(it); }
+            else if ((it.options || []).length > (byLabel[key].options || []).length) {
+              var idx = ordered.indexOf(byLabel[key]);
+              if (idx >= 0) ordered[idx] = it;
+              byLabel[key] = it;
+            }
+          });
+          items = ordered;
+        })();
         if (items.length > CUSTOM_QA_MAX_PER_STEP) items = items.slice(0, CUSTOM_QA_MAX_PER_STEP);
         var unanswered = [];
         for (var qi = 0; qi < items.length; qi++) {
@@ -1903,6 +1942,7 @@
               for (var ui = 0; ui < pass.unanswered.length; ui++) {
                 var aiItem = pass.unanswered[ui];
                 var ans = byIndex[ui + 1];
+                if (ans && looksLikeRefusalAnswer(ans)) continue; // "No image provided."/"N/A"-style non-answer -> leave empty, ask the human instead
                 if (ans && await applyAnswerToItem(aiItem, ans)) answeredItems.push(aiItem);
               }
             }

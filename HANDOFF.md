@@ -1,6 +1,65 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.6: CAPTCHA safety fix, grounded-label trust boundary, Workday oscillation brake
+## Update 2026-07-08 (latest) — v1.13.7: CAPTCHA safety net hardened, duplicate-question de-dupe, iframe-embedded ATS forms
+
+Round 6 re-tested v1.13.6 across a fresh Workday tenant (Qnity/DuPont), a repeat Zoho run, and a
+brand-new custom-ATS site (MEI Industrial via ADP Workforce Now). The good news first: résumé
+duplicate-attach, Facebook/LinkedIn field mis-fill, and the first/last-name swap are all confirmed
+fixed — the grounded-label rewrite held. Three issues remained or were newly found:
+
+1. **CAPTCHA safety regression persisted — same class of bug, new literal text ("N/A" this round,
+   "No image provided." last round).** v1.13.6's `looksLikeCaptcha` is a keyword/DOM-signature
+   check, and this particular Zoho form's challenge apparently doesn't say "captcha" anywhere in its
+   label or DOM (most likely a math-style challenge, e.g. "3 + 5 = ?", which has zero CAPTCHA
+   vocabulary) — so it slipped past discovery and reached the AI-answer step, whose honest
+   "I can't do this" reply got typed in as if it were real. Fixed two ways: (a) broadened
+   `looksLikeCaptcha`'s keyword list (security/verification code, "are you human", bot/anti-spam
+   check, etc.) and added a shape-based check for a short arithmetic expression ending in `=`/`?`,
+   which no real job-application question looks like; (b) added `looksLikeRefusalAnswer()` as a
+   content-based safety net independent of *why* a field wasn't recognized — if the AI's answer
+   itself reads like a non-answer ("N/A", "no image provided", "I can't see/view/access…", short and
+   nothing else), it is never typed in; the field is left empty and falls through to the existing
+   ask-the-human path instead. (b) is deliberately the backstop for whatever (a) still doesn't catch,
+   rather than betting everything on ever-more label patterns.
+
+2. **New: Workday's "How Did You Hear About Us?" dropdown got asked twice, both as free-text boxes,
+   on a fresh tenant (Qnity/DuPont).** Root cause: the field was independently discovered by BOTH the
+   generic ARIA-combobox scan (`findUnansweredCustomQuestions`) and the Workday adapter's own
+   `wdFindDropdownQuestions` scan, and the two lists were simply concatenated with no de-duplication —
+   each rendered as its own free-text-shaped item since the generic scan's version had no options.
+   Fixed with a de-dupe pass in `fillOnePass` keyed on normalized label text, keeping whichever
+   discovery carries real dropdown options over one that fell back to free text (this is a general
+   fix, not Workday-specific, since any adapter + generic scan overlap can now hit the same field
+   twice). It correctly still stopped and asked rather than guessing either time, so this was a
+   duplication/UX bug, not a safety one.
+
+3. **New: a custom ADP Workforce Now career site (MEI Industrial) got zero autofill at all** —
+   First/Last/Email/Mobile stayed blank after 13+ seconds, while Wagner-GPT's own status line still
+   claimed "auto-filling." Root cause: ADP's actual application form is rendered inside a same-tab
+   iframe, and every injection path in `background.js` only targeted the tab's TOP frame
+   (`chrome.scripting.executeScript({ target: { tabId } })`, `allFrames` unset) — autofill.js ran in
+   the parent document, saw no recognized form, and did nothing. There was already a safe pattern for
+   exactly this shape (`injectAtsFrames`, built for ATS forms embedded in a LinkedIn iframe), just
+   never applied to the general apply-session case. Added `injectIntoRecognizedChildFrames()`,
+   wired into every autofill.js injection point (`injectAutofillWithTailoredResume` — covering both
+   the initial inject and the SPA re-injection path — and the passive ATS-offer-accept path): it
+   injects into a child frame only when that frame's hostname matches the top frame's own hostname
+   (same-site embed, the ADP case) or a recognized ATS host — never an arbitrary third-party ad/chat/
+   tracking iframe, since autofill.js's own self-guard (≥3 visible inputs) isn't a strong enough
+   filter to make that safe on its own. The false "auto-filling" status line is a Wagner-GPT-side
+   optimistic-UI issue (reports the action as started rather than confirmed) — flagged for that repo,
+   not fixed here.
+
+Verified: `test-round6-fixes.js` covers all three — broadened CAPTCHA detection (arithmetic-shape
+challenge, security/verification-code phrasing) without false-positiving on ordinary fields with
+numbers or dashes; `looksLikeRefusalAnswer` correctly flags both literal regressions ("N/A", "No image
+provided.") plus other disclaimer phrasings while passing real, longer answers through unmodified; the
+duplicate-question de-dupe collapses two same-label items to one, keeping the options-bearing version;
+the child-frame injection selector picks only a same-host or known-ATS child frame, never a 3rd-party
+tracking iframe (tested against both the new ADP case and the pre-existing LinkedIn+Lever-iframe case).
+`node --check` clean on both `autofill.js` and `background.js`.
+
+## Update 2026-07-08 — v1.13.6: CAPTCHA safety fix, grounded-label trust boundary, Workday oscillation brake
 
 Round 5 (still on v1.13.5) surfaced a new Workday tenant (Motorola Solutions) and a repeat run on the
 same Zoho job, and reported four issues — one safety-critical, one confirming the v1.13.5 fix was too
