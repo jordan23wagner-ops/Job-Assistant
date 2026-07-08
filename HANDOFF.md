@@ -1,6 +1,46 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.2: add zohorecruit.com to ATS_HOST_RE (all 3 copies)
+## Update 2026-07-08 (latest) — v1.13.3: nav panel goes stale across SPA steps + candidate hardening
+
+Third re-test round (fresh Apply clicks this time) confirmed v1.13.1's SPA re-injection DOES work —
+the nav panel now fires immediately after a fresh Apply click and survives at least one SPA
+transition. But it then goes STALE: on Capital One the panel stayed present with the SAME
+page-specific options two steps deep instead of refreshing; on RTX and Novalink the options froze
+("Follow Us / Facebook / X", "I'm interested") through the Sign-In/Basic-Info transition instead of
+updating for the new page.
+
+Root cause: `window.__aliciaNavHandled` latches `true` the first time the nav panel is shown, and
+since `window` persists across SPA route changes (no full reload resets it), every LATER
+re-injection on that same tab silently no-ops (`result.status = 'no_fields_found'`) without ever
+re-evaluating the page — leaving the ORIGINAL panel DOM node (appended straight to `document.body`,
+which itself survives SPA route changes) sitting there displaying stale options from the page it was
+built for.
+
+**Fix:** `window.__aliciaAutofillRun` now tracks `window.__aliciaLastUrl` and, whenever the current
+`location.href` differs from the last-evaluated one, resets `__aliciaNavHandled = false` and clears
+any stale panel before proceeding — so each distinct page/step (real navigation or SPA route change)
+gets a fresh, independent evaluation instead of being silently swallowed by a guard meant only to
+stop repeat re-asking on the SAME unchanged page.
+
+**Also hardened while re-reading this code:** the nav panel's candidate list had no exclusion for
+final-submission or account-creation button text — a `NAV_NEVER_RE` now blocks "Submit Application",
+"Finish/Complete Application", "Create Account", "Sign Up", "Register" from ever appearing as a
+nav-panel option (whether for a human choice OR the autonomous single-candidate auto-click path).
+Those require either the app's own "never auto-submit" rule, or the dedicated password-generation +
+agreement-tick groundwork only the Workday/account-gate adapters do first — the generic panel has no
+business clicking them blind. "Apply"/"Apply Now" are deliberately still eligible — recognizing and
+clicking those to OPEN an application (never submit one) is the panel's entire purpose.
+
+Verified: logic tests confirm (1) `NAV_NEVER_RE` blocks all 9 submission/account-creation phrasings
+while leaving Apply/Apply Now/Continue untouched, extracted and eval'd directly from the shipped
+regex; (2) the URL-change guard-reset only fires on an actual URL change, not on a same-page
+re-evaluation. `node --check` clean. Live re-test still needed to confirm the panel now refreshes
+per-step and that a human clicking its "My Information"/step-forward option actually advances past
+Workday's Create Account gate (last round's testers were told not to click any panel option at all —
+next round should explicitly test clicking a genuine navigation option, since that's the one thing
+never yet exercised).
+
+## Update 2026-07-08 — v1.13.2: add zohorecruit.com to ATS_HOST_RE (all 3 copies)
 
 Second re-test round (post-v1.13.1) showed Zoho Recruit (novalink-solutions.zohorecruit.com) with
 ZERO signal — no banner, no fills, in either the before or after diagnostic. Root cause: `zohorecruit`

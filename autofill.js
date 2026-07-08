@@ -219,6 +219,14 @@
   // Noise that is never the "move the application forward" button — account/nav/legal chrome that
   // clutters (and could mislead) the choice list. Matched as the WHOLE normalized label.
   var NAV_NOISE_RE = /^(close|dismiss|cancel|back|menu|open menu|share|save|like|report|home|go to home page|help|blog|about us|for talent|for companies|privacy statement|terms of use|cookie[a-z ]*|sign out|log out|sign in|log in|manage profile|profile|my profile|account|settings|view more jobs|similar jobs|search jobs|save job|save to favorites)$/;
+  // Never offer these as a nav-panel option, regardless of score. Final-submission text
+  // (Submit/Finish/Complete Application) should never be clicked by this generic panel — that's
+  // the whole point of the app never auto-submitting. Account-creation text (Create Account/Sign
+  // Up/Register) is excluded too: clicking it blind, without the dedicated password-generation +
+  // agreement-tick groundwork the Workday/account-gate ADAPTERS do first, can submit a signup with
+  // an empty password. "Apply"/"Apply Now" are deliberately NOT here — recognizing and clicking
+  // those to OPEN an application (never submit one) is this panel's entire purpose.
+  var NAV_NEVER_RE = /submit application|submit your application|^submit$|finish application|complete application|create (my |your )?(account|profile)|^sign up$|^register$/i;
   function navCandidates() {
     var out = [], seen = {}, seenEl = [];
     var push = function (el, t) {
@@ -226,7 +234,7 @@
       t = (t || getText(el) || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       if (!t || t.length > 60) return;
       var key = norm(t);
-      if (!key || seen[key] || seenEl.indexOf(el) >= 0 || NAV_NOISE_RE.test(key)) return;
+      if (!key || seen[key] || seenEl.indexOf(el) >= 0 || NAV_NOISE_RE.test(key) || NAV_NEVER_RE.test(key)) return;
       seen[key] = 1; seenEl.push(el);
       out.push({ el: el, text: t, score: navScore(t) });
     };
@@ -1663,6 +1671,18 @@
   // ---------- main ----------
   window.__aliciaAutofillRun = async function () {
     if (busy) return;
+    // `window.__aliciaNavHandled` latches true once the nav panel is shown, and — since `window`
+    // persists across SPA route changes (no full reload) — it stays true on every later
+    // re-injection, even on a COMPLETELY DIFFERENT page reached by clicking that panel's own
+    // "next" option. That silently no-ops all future runs on this tab ("no fields found", nothing
+    // shown) and leaves the OLD panel sitting on screen with stale, page-specific options from the
+    // page it was originally built for. Detecting a real URL change resets the guard (and clears
+    // any stale panel) so each distinct page/step gets its own fresh evaluation.
+    if (window.__aliciaLastUrl !== location.href) {
+      window.__aliciaLastUrl = location.href;
+      window.__aliciaNavHandled = false;
+      try { removeNavPanel(); } catch (e) {}
+    }
     busy = true;
     var state = { generatedCredential: null };
     var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, ats: 'generic' };
