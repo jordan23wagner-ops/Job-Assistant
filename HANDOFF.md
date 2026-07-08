@@ -1,6 +1,17 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.12.2: broaden apply-button capture + autonomous single-button click
+## Update 2026-07-08 (latest) — v1.12.3: don't fight Adzuna's login wall
+
+Extension side of the Adzuna-skip work (main fix is in Wagner-GPT — see its HANDOFF). Adzuna now
+login-walls logged-out users (`adzuna.com/details/…?apply=1&after_login` → FB/Google/email modal), so
+the apply chain dead-ended there. `skipAggregatorInterstitial` now BAILS on an Adzuna
+login/authenticate wall instead of fruitlessly clicking "Apply" (which just reopens the modal). The
+real fix is upstream: the backend resolves Adzuna links to the employer URL before they're ever used,
+and the web app defaults to "Direct apply only", so this wall is now a rare edge case. Deliberately did
+NOT synthesize `/land/ad/<id>` URLs in the extension (a workflow adversary pass showed tokenless
+synthesis 403s and can infinite-loop through `/authenticate?redirect_to=`).
+
+## Update 2026-07-08 — v1.12.2: broaden apply-button capture + autonomous single-button click
 
 Follow-up to v1.12.1's nav panel: on an Oracle Recruiting Cloud details page the panel appeared but
 MISSED the "APPLY NOW" button (it's a styled non-`<a href>`/non-`<button>` element) and instead listed

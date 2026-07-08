@@ -44,6 +44,11 @@ var PENDING_APPLY_TTL_MS = 10 * 60 * 1000;
 // employer, at which point this page unloads and the engine takes over there. Best-effort.
 function skipAggregatorInterstitial() {
   try {
+    // Adzuna login/authenticate wall — a logged-out user can't get through it, and clicking "Apply"
+    // just reopens the login modal. Don't fight it (the backend resolves Adzuna links to the employer
+    // up front, so this only appears for the rare unresolved row). Bail rather than spam clicks.
+    if (/adzuna\./i.test(location.hostname) && /\/authenticate|after_login=|interstitial=/i.test(location.href) &&
+        /log ?in|sign ?in|password/i.test((document.body && document.body.innerText) || '')) return;
     var PROCEED = [/take me to the job/i, /apply (for|on) /i, /apply for (this )?job/i, /^apply now$/i, /^apply$/i, /continue to (apply|application|job)/i, /view (the )?job/i, /go to (the )?job/i];
     var DISMISS = [/^no,?\s*thanks/i, /^skip$/i, /not now/i, /maybe later/i, /^close$/i, /^dismiss$/i, /×/];
     var clickByText = function (patterns) {
