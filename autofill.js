@@ -898,6 +898,15 @@
       var el = fileInputs[i];
       if (el.disabled) continue;
       if (el.files && el.files.length) continue;
+      // The DOM's own `.files.length` guard above isn't enough on its own: some ATS upload
+      // widgets (observed on Zoho Recruit) clear the underlying input's files after "parsing" the
+      // résumé for their own preview UI — which looks identical to "never attached" to the check
+      // above. With the mutation-driven re-scan now re-running fillOnePass repeatedly on content
+      // changes (the parse itself IS a content change), that defeat re-triggered a fresh attach
+      // every time, uploading 3+ duplicates. This marker is OUR OWN property on the element, which
+      // the page's own JS has no reason to touch, so it survives regardless of what happens to
+      // `.files`.
+      if (el.__aliciaResumeAttached) continue;
       var s = signals(el);
       // Only target inputs that look like resume/CV uploads; if the page has exactly one
       // file input and the page text mentions a resume, assume it's the one. Cover letters
@@ -914,6 +923,7 @@
         else if (hasStored) dt.items.add(b64ToFile(resumeFileRec));
         else continue; // tailored-only but this input rejects .txt — leave it for the human
         el.files = dt.files;
+        el.__aliciaResumeAttached = true;
         el.dispatchEvent(new Event('change', { bubbles: true }));
         attached++;
       } catch (e) {}
@@ -1144,7 +1154,14 @@
     var label = o.wideLabel || o.aiLabel || '';
     if (!label || label.length < 4) return null; // truly nothing to go on — don't guess, don't spam the human
     var normLabel = norm(label);
-    if (isKnownContactField(normLabel, o.el)) {
+    // The shared phone matcher trusts `el.type === 'tel'` alone, with no label check at all — safe
+    // everywhere else, since this tier is the first one to reach fields with NO discoverable label
+    // via the narrower passes. Observed in practice: Zoho Recruit's "Social Links" section renders
+    // its Facebook field as <input type="tel">, so the phone number got typed into it purely from
+    // the input type, overriding a label that plainly says otherwise. A label unambiguously naming
+    // a social handle/URL must win over that type-based guess.
+    var looksLikeSocialField = /\b(facebook|twitter|instagram|github|social)\b/.test(normLabel);
+    if (!looksLikeSocialField && isKnownContactField(normLabel, o.el)) {
       var matched = buildStdMatchers(profile).find(function (m) { return m.v && m.t(normLabel, o.el); });
       return matched ? { kind: 'contact', value: matched.v, el: o.el } : null;
     }

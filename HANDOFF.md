@@ -1,6 +1,44 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.4: self-triggering re-scan on DOM content changes
+## Update 2026-07-08 (latest) — v1.13.5: duplicate résumé attach + Facebook/phone field mismatch
+
+Round 4 (v1.13.4) was the strongest result yet: Capital One's Sign In page got real Email/Password
+values filled in and correctly stopped rather than auto-signing-in (Sign In isn't in WD_ADVANCE, by
+design — a human should trigger their own account login). Novalink's Zoho form got a NEAR-COMPLETE
+fill — last/first name, email, skill set + level, department, education duration, and all 7
+experience entries with the "currently work here" checkbox correctly ticked — and it correctly
+recognized the CAPTCHA at the end and asked the human instead of attempting anything risky, stopping
+without submitting. Two real, narrow bugs surfaced in that otherwise-strong Zoho run:
+
+1. **Résumé attached 3 duplicate times.** `attachResume`'s only "already done" guard was the file
+   input's own `.files.length` — but Zoho's upload widget apparently CLEARS that after "parsing" the
+   résumé for its own preview UI, which looks identical to "never attached" to that check. The new
+   v1.13.4 mutation-driven re-scan now calls `fillOnePass` (and therefore `attachResume`) repeatedly
+   on content changes — and the parse itself IS a content change — so each re-run re-attached. Fixed
+   with `el.__aliciaResumeAttached`, a marker WE control that the page's own JS has no reason to
+   touch, checked before `.files.length` and set right after a successful attach — survives the page
+   resetting `.files` regardless of the reason.
+2. **A "Facebook" field got typed with the phone number.** The shared phone matcher (used everywhere,
+   including the original std-fields pass) trusts `el.type === 'tel'` alone with no label check —
+   safe historically, since no prior pass reached a field with no discoverable label at all. The new
+   dynamic-fallback tier (v1.13.0) is the first to reach such fields, and Zoho's Social Links section
+   apparently renders its Facebook input as `type="tel"`. Fixed in `classifyDynamicItem`: a label
+   unambiguously naming a social handle/URL (facebook/twitter/instagram/github/social) now overrides
+   the type-based phone guess, leaving the field unfilled (routes to nothing rather than a wrong
+   guess) instead of typing the phone number into it.
+
+Verified: logic tests reproduce the OLD duplicate-attach bug explicitly (confirming the `.files.length`-
+only guard fails once `.files` is externally reset) and confirm the NEW marker guard blocks it; the
+social-field guard is tested against Facebook/Twitter/Instagram/GitHub/generic-"social" labels (all
+now correctly skip contact-matching) while a genuinely unlabeled `type=tel` field still gets the real
+phone value. `node --check` clean.
+
+On Capital One specifically: this round landed on Sign In rather than Create Account because the test
+identity now already exists in Workday's system from earlier rounds — a site-side state artifact, not
+something this round could isolate. A clean Create Account re-test needs a fresh email/identity or
+clearing whatever session Workday is keying off.
+
+## Update 2026-07-08 — v1.13.4: self-triggering re-scan on DOM content changes
 
 Fourth re-test round confirmed v1.13.3's fix works exactly as designed — AND surfaced two remaining,
 genuinely different root causes for the same "stuck" symptom, both requiring one more fix:
