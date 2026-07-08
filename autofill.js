@@ -504,6 +504,23 @@
     if (container && container.querySelector && container.querySelector('img[alt*="captcha" i], img[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], [class*="recaptcha" i], [class*="hcaptcha" i]')) return true;
     return false;
   }
+  // Anti-spam honeypot fields (BambooHR and others) instruct a human — or, in practice, an
+  // automation reading the label — to leave the field EMPTY; a real applicant never sees it (it's
+  // hidden or off-screen) and a bot that dutifully fills in every labeled field is exactly what it's
+  // designed to catch. Observed: Alicia surfaced one in the ask panel as "Alicia needs 1 answer" for
+  // a field literally labeled "Please leave this field blank" — treating a trap as a real question.
+  // Must never be answered by the AI or the human via the panel; excluded identically to CAPTCHA so
+  // it's simply left exactly as found (empty).
+  function looksLikeHoneypot(label) {
+    var n = norm(label || '');
+    return /leave (this )?(field |box |one )?(blank|empty)|do not (fill|complete|enter)|don.?t (fill|complete|enter)|for (anti.?spam|spam prevention|bot detection) purposes|if you.?re? human,? leave|leave blank if you/.test(n);
+  }
+  // Single gate for every "never let the AI or the ask-panel touch this" category — CAPTCHA (can't
+  // actually see it) and honeypots (typing anything trips the anti-bot trap) are excluded the exact
+  // same way: never discovered as a question, so they can only ever be left exactly as found.
+  function mustNeverAnswer(label, container) {
+    return looksLikeCaptcha(label, container) || looksLikeHoneypot(label);
+  }
   // Second, content-based safety net independent of label wording: if the AI-answer backend hands
   // back something that reads like "I couldn't actually answer this" (observed twice now, in two
   // different literal forms — "No image provided." and "N/A" — both from a CAPTCHA-style challenge
@@ -517,13 +534,26 @@
       'unable to (view|see|access|answer)' + img + '|cannot (see|view|access)' + img + '|can ?t (see|view|access)' + img + '|' +
       'i (do not|don.?t|cannot|can.?t) (have|see|view|access)' + img + '|no access to (an? )?image|i.?m unable to (see|view|access)' + img + ')$').test(n);
   }
+  // Pure random sampling from a mixed character pool (the old approach) has a real chance of
+  // landing zero characters from some required class — with a 5-in-62 special-character density
+  // over 16 picks, about a 1-in-4 chance of generating NO special character at all. Workday (and
+  // many other sites) reject that outright ("Password must include: - A special character"),
+  // which then fails Create Account validation every single time until the oscillation brake stops
+  // the loop and asks a human to fix it manually. Guaranteeing one pick from each class up front
+  // removes that failure mode entirely; the rest of the length is filled from the full pool and the
+  // whole thing is shuffled so the guaranteed characters aren't predictably in the same positions.
   function generatePassword() {
-    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
-    var arr = new Uint32Array(16);
-    crypto.getRandomValues(arr);
-    var pw = '';
-    for (var i = 0; i < arr.length; i++) pw += chars[arr[i] % chars.length];
-    return pw;
+    var classes = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%'];
+    var all = classes.join('');
+    function randPick(set) { var a = new Uint32Array(1); crypto.getRandomValues(a); return set[a[0] % set.length]; }
+    var pw = classes.map(randPick);
+    for (var i = pw.length; i < 16; i++) pw.push(randPick(all));
+    for (var j = pw.length - 1; j > 0; j--) {
+      var r = new Uint32Array(1); crypto.getRandomValues(r);
+      var k = r[0] % (j + 1);
+      var tmp = pw[j]; pw[j] = pw[k]; pw[k] = tmp;
+    }
+    return pw.join('');
   }
 
   // ---------- fill passes ----------
@@ -979,7 +1009,7 @@
       var klabel = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       if (!klabel || klabel.length < 8) continue;
       if (eeoKey(norm(klabel))) continue; // EEO comboboxes handled by fillEeoComboboxes
-      if (looksLikeCaptcha(klabel, kcont)) continue; // never AI-answer a CAPTCHA
+      if (mustNeverAnswer(klabel, kcont)) continue; // never AI-answer a CAPTCHA/honeypot
       var kopts = await harvestComboOptions(trig);
       seenControls.push(trig);
       out.push((function (t, c, lbl, opts) {
@@ -1004,7 +1034,7 @@
       var label = labelText(sel) || sel.getAttribute('aria-label') || '';
       if (!label || label.length < 8) continue;
       var selCont = sel.closest('fieldset,.form-group,div') || sel.parentElement;
-      if (looksLikeCaptcha(label, selCont)) continue; // never AI-answer a CAPTCHA
+      if (mustNeverAnswer(label, selCont)) continue; // never AI-answer a CAPTCHA/honeypot
       var options = [];
       for (var o = 0; o < sel.options.length; o++) { if (sel.options[o].value) options.push(getText(sel.options[o]) || sel.options[o].value); }
       if (!options.length || options.length > 30) continue;
@@ -1021,7 +1051,7 @@
       if (!qlabel || qlabel.length < 8) return;
       if (eeoKey(norm(qlabel))) return;
       var rGroupCont = rs[0].closest('fieldset,.form-group,div');
-      if (looksLikeCaptcha(qlabel, rGroupCont)) return; // never AI-answer a CAPTCHA
+      if (mustNeverAnswer(qlabel, rGroupCont)) return; // never AI-answer a CAPTCHA/honeypot
       var ropts = rs.map(radioLabel).filter(Boolean);
       if (ropts.length < 2 || ropts.length > 15) return;
       pushItem({ type: 'radio', control: null, radios: rs, container: rGroupCont, label: qlabel, options: ropts });
@@ -1043,7 +1073,7 @@
       var wordy = lbl.split(' ').length >= 4 || /\?/.test(lbl) || /years|experience|salary|notice|available|start date|why|describe|how did you hear/i.test(lbl);
       if (!lbl || lbl.length < 8 || !wordy) continue;
       var textCont = el.closest('fieldset,.form-group,div') || el.parentElement;
-      if (looksLikeCaptcha(lbl, textCont)) continue; // never AI-answer a CAPTCHA — always ask the human
+      if (mustNeverAnswer(lbl, textCont)) continue; // never AI-answer a CAPTCHA/honeypot — always leave as-is
       seenControls.push(el);
       pushItem({ type: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', control: el, container: textCont, label: lbl, options: [] });
     }
@@ -1192,7 +1222,7 @@
     if (!label || label.length < 4) return null; // truly nothing to go on — don't guess, don't spam the human
     var normLabel = norm(label);
     var itemCont = (o.radios ? o.radios[0] : o.el).closest && (o.radios ? o.radios[0] : o.el).closest('fieldset,.form-group,div');
-    if (looksLikeCaptcha(label, itemCont)) return null; // never AI-answer a CAPTCHA — always ask the human
+    if (mustNeverAnswer(label, itemCont)) return null; // never AI-answer a CAPTCHA/honeypot — always leave as-is
     // Contact/EEO classification is ONLY trusted when the label is GROUNDED — actually read from
     // the page's own text (o.wideLabel) — never when it's a blind AI GUESS (o.aiLabel) from bare
     // technical hints alone. Observed in practice: the AI-inference step mislabeled unrelated

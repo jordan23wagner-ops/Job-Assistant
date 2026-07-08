@@ -1,6 +1,63 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.7: CAPTCHA safety net hardened, duplicate-question de-dupe, iframe-embedded ATS forms
+## Update 2026-07-08 (latest) — v1.13.8: generated-password class coverage, honeypot exclusion
+
+Round 7 re-tested v1.13.7 across the Zoho posting again, a fresh Workday tenant (Owens & Minor), the
+same ADP/MEI site, and a brand-new BambooHR site (Solid Light). Confirmed working: the CAPTCHA
+stop-and-ask behavior generalized to a second site (a real Google reCAPTCHA on the BambooHR posting was
+correctly left untouched), and the Workday oscillation brake fired correctly rather than thrashing.
+Two real, root-caused issues surfaced, plus two items that need more data before they can be fixed here.
+
+1. **Root cause found for the Round 6/7 Workday Create-Account failures: the generated password can
+   fail the site's own complexity policy.** Owens & Minor's Workday tenant kept rejecting the
+   generated password with "Password must include: - A special character," so Create Account never
+   succeeded — that's exactly what tripped the (correctly-firing) oscillation brake, asking the human
+   to take over. `generatePassword()` sampled 16 characters uniformly at random from a mixed 62-char
+   pool (5 of which were special characters) — with no guarantee every required class actually shows
+   up, that's roughly a 1-in-4 chance of generating zero special characters at all. Rewritten to draw
+   one guaranteed character from each class (upper/lower/digit/special) first, fill the rest of the
+   16 characters from the full pool, then shuffle — every generated password now satisfies upper +
+   lower + digit + special, which covers Workday's policy and the vast majority of real-world
+   corporate password rules.
+
+2. **New: a BambooHR anti-spam honeypot field ("Please leave this field blank.") was surfaced as a
+   real question** ("Alicia needs 1 answer") instead of being recognized and left untouched. Honeypot
+   fields exist specifically to catch bots that dutifully fill in every labeled field — even routing
+   it through the ask-panel (let alone answering it with real text) defeats the point and risks
+   flagging a genuine human application as spam. Added `looksLikeHoneypot()` (matches "leave this
+   field blank," "do not fill," anti-spam-purpose phrasing) and a combined `mustNeverAnswer()` gate
+   (CAPTCHA OR honeypot) now used at all 5 places `looksLikeCaptcha` used to be called directly —
+   honeypots are excluded exactly like CAPTCHAs: never discovered as a question, so they're simply
+   left exactly as found.
+
+3. **Not fixed — needs one more diagnostic, not a guess:** the Zoho posting that filled correctly in
+   Round 6 filled NOTHING at all in Round 7 (not even name/email), with the only console line being
+   an unhandled-rejection "Model not defined." Confirmed by searching this repo that no `Model`
+   reference exists anywhere in `autofill.js` — that error is Zoho's own page code (matches the
+   recurring "ERR19: Model not defined: skillsets" / `getSuggestedSkills` exceptions reported in
+   earlier rounds), not this extension. Whether the total non-fill was a one-off Zoho rendering
+   hiccup or an extension-side injection failure on that specific run can't be told apart from the
+   report alone — the next test round should check `document.querySelectorAll('input,select,textarea').length`
+   and `typeof window.__aliciaAutofillRun` directly in the console on that page to tell which it was.
+
+4. **Not fixed — MEI/ADP still has zero autofill, and the iframe fix from v1.13.7 does not apply
+   here.** Round 7 explicitly confirmed `document.querySelectorAll('iframe').length === 0` on that
+   page — there's no embedded frame, so last round's iframe-injection fix (still valid for whatever
+   case originally motivated it) isn't the relevant mechanism for MEI specifically. The real cause is
+   most likely that ADP's field markup doesn't match anything the label/signal-based field matchers
+   recognize, but fixing that responsibly needs an actual DOM snippet (e.g. the First Name input's
+   outerHTML) from that page rather than a guess. Also still open: Wagner-GPT's status line claims
+   "Filled what it could" on this page even though nothing filled — that's a Wagner-GPT-side
+   optimistic-status issue, out of scope for this repo (Wagner-GPT isn't in this session's repo scope).
+
+Verified: `test-round7-fixes.js` — `generatePassword` produces all 4 required character classes
+across 20 trials seeded with byte streams engineered to reproduce the OLD bug (a stream that would
+have produced zero special characters under the old uniform-sampling scheme); `looksLikeHoneypot`/
+`mustNeverAnswer` catch the exact BambooHR label plus several phrasing variants without false-
+positiving on ordinary fields, while still catching CAPTCHA through the same combined gate.
+`node --check` clean.
+
+## Update 2026-07-08 — v1.13.7: CAPTCHA safety net hardened, duplicate-question de-dupe, iframe-embedded ATS forms
 
 Round 6 re-tested v1.13.6 across a fresh Workday tenant (Qnity/DuPont), a repeat Zoho run, and a
 brand-new custom-ATS site (MEI Industrial via ADP Workforce Now). The good news first: résumé
