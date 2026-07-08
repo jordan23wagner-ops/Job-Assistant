@@ -172,6 +172,105 @@
     document.body.appendChild(panel);
   }
 
+  // ---------- navigation decision ask-and-remember ----------
+  // Some pages BETWEEN the job posting and the application form present ambiguous choices the
+  // allowlist can't resolve: aggregator "Did you apply?" modals (jobgether, etc.), multi-button
+  // landing pages, consent gates. Rather than stall with "click Apply yourself", surface the
+  // prominent clickable options and let the human pick which one moves the application forward —
+  // then remember that choice (keyed by host + normalized button text) so the NEXT time we hit the
+  // same site we click it automatically. This is the field ask-and-remember, applied to navigation.
+  function isInAliciaUi(el) {
+    return !!(el.closest && el.closest('#alicia-question-panel, #alicia-apply-banner, #alicia-nav-panel'));
+  }
+  // Rank a candidate by how likely it moves an application FORWARD (apply/continue high; the
+  // aggregator "I applied / engage" engagement buttons low — those are dark-pattern dead-ends).
+  function navScore(text) {
+    var n = norm(text);
+    // Dead-ends FIRST — the aggregator engagement buttons ("I applied…", "I didn't actually
+    // apply") contain the word "apply", so they'd otherwise tie the real Apply button.
+    if (/i applied|contact hiring|engage later|didn.?t (actually )?apply|try premium|^premium$|sign in|log ?in|review \w/.test(n)) return 1;
+    if (/apply now|apply for|apply on|^apply$|^apply .{0,20}$/.test(n)) return 6;
+    if (/continue to (apply|application|job)|start application|begin application|proceed|go to (the )?job|view (the )?job|take me to/.test(n)) return 5;
+    if (/^continue$|^next$|^start$/.test(n)) return 4;
+    if (/\bapply\b/.test(n)) return 3;
+    return 2;
+  }
+  function navCandidates() {
+    var els = document.querySelectorAll('a[href], button, [role="button"], input[type="submit"], input[type="button"]');
+    var out = [], seen = {};
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (!visible(el) || el.disabled || isInAliciaUi(el)) continue;
+      var t = (getText(el) || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 60) continue;
+      var key = norm(t);
+      if (!key || seen[key]) continue;
+      if (/^(close|dismiss|cancel|back|menu|share|save|like|report|home|help|blog|about us|for talent|for companies)$/.test(key)) continue;
+      seen[key] = 1;
+      out.push({ el: el, text: t, score: navScore(t) });
+    }
+    out.sort(function (a, b) { return b.score - a.score; });
+    return out.slice(0, 8);
+  }
+  function saveNavChoice(host, text) {
+    storageGet('navChoices').then(function (d) {
+      var bank = (d && d.navChoices) || {};
+      bank[host] = { pattern: norm(text), text: text, savedAt: Date.now() };
+      storageSet({ navChoices: bank });
+    });
+  }
+  // If we've learned which button proceeds on this host, click it. Returns whether it clicked.
+  async function tryLearnedNavClick() {
+    var data = await storageGet('navChoices');
+    var rec = (data && data.navChoices || {})[location.hostname];
+    if (!rec || !rec.pattern) return false;
+    var cands = navCandidates();
+    for (var i = 0; i < cands.length; i++) {
+      var n = norm(cands[i].text);
+      if (n && (n.indexOf(rec.pattern) >= 0 || rec.pattern.indexOf(n) >= 0)) { fireClick(cands[i].el); return true; }
+    }
+    return false;
+  }
+  function removeNavPanel() { var p = document.getElementById('alicia-nav-panel'); if (p) p.remove(); }
+  function showNavChoicePanel(cands) {
+    removeNavPanel();
+    var panel = document.createElement('div');
+    panel.id = 'alicia-nav-panel';
+    panel.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;width:340px;max-height:70vh;overflow:auto;background:#1e1e2e;color:#eee;border-radius:12px;padding:14px 16px;font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 4px 24px rgba(0,0,0,.45);';
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;';
+    var title = document.createElement('strong');
+    title.style.fontSize = '14px';
+    title.textContent = 'Which button opens the application?';
+    head.appendChild(title);
+    var x = document.createElement('button');
+    x.textContent = '✕'; x.title = 'Dismiss';
+    x.style.cssText = 'background:none;border:none;color:#aaa;font-size:14px;cursor:pointer;padding:0 2px;';
+    x.onclick = removeNavPanel;
+    head.appendChild(x);
+    panel.appendChild(head);
+    var hint = document.createElement('div');
+    hint.style.cssText = 'font-size:11px;color:#9aa;margin-bottom:10px;';
+    hint.textContent = "This page is between the listing and the form. Pick the button that moves forward — Alicia will click it here and remember it for " + location.hostname + " next time.";
+    panel.appendChild(hint);
+    cands.forEach(function (c, i) {
+      var b = document.createElement('button');
+      b.textContent = String.fromCharCode(97 + i) + ')  ' + c.text;
+      b.style.cssText = 'display:block;width:100%;text-align:left;margin-bottom:6px;padding:8px 10px;border:1px solid #3a3a4c;border-radius:8px;background:#2a2a3c;color:#eee;cursor:pointer;font:inherit;';
+      b.onmouseenter = function () { b.style.background = '#33334a'; };
+      b.onmouseleave = function () { b.style.background = '#2a2a3c'; };
+      b.onclick = function () {
+        saveNavChoice(location.hostname, c.text); // remember FIRST — the click may navigate away
+        removeNavPanel();
+        showBanner('Opening the application…', '#4caf50');
+        try { fireClick(c.el); } catch (e) {}
+        setTimeout(function () { window.__aliciaAutofillRun(); }, 2500);
+      };
+      panel.appendChild(b);
+    });
+    document.body.appendChild(panel);
+  }
+
   // ---------- label discovery ----------
   function labelText(el) {
     var t = '';
@@ -1489,8 +1588,30 @@
       result.filled += pass.filled;
 
       if (!hasRecognizedForm()) {
-        result.status = 'no_fields_found';
-        showBanner('On the job page. Click "Apply" to open the form and I\'ll fill it in.', '#e0a800');
+        // No form here — this is a listing/aggregator/interstitial page. Try a learned "click this
+        // button to proceed" choice for this host; else ask the human which button moves forward
+        // (and remember it). window.__aliciaNavHandled stops us re-asking on a re-injection.
+        if (!window.__aliciaNavHandled) {
+          window.__aliciaNavHandled = true;
+          var navClicked = false;
+          try { navClicked = await tryLearnedNavClick(); } catch (e) {}
+          if (navClicked) {
+            result.status = 'advancing';
+            showBanner('Continuing to the application…', '#4caf50');
+            setTimeout(function () { window.__aliciaNavHandled = false; window.__aliciaAutofillRun(); }, 3000);
+          } else {
+            var cands = navCandidates();
+            if (cands.length >= 2) {
+              result.status = 'stopped_needs_input';
+              showNavChoicePanel(cands);
+            } else {
+              result.status = 'no_fields_found';
+              showBanner('On the job page. Click "Apply" to open the form and I\'ll fill it in.', '#e0a800');
+            }
+          }
+        } else {
+          result.status = 'no_fields_found';
+        }
       } else {
         for (var step = 0; step < MAX_STEPS; step++) {
           var correctedThisStep = false; // one dropdown-correction attempt per step

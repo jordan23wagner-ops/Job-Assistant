@@ -176,6 +176,27 @@ chrome.tabs.onRemoved.addListener(function (tabId) {
   });
 });
 
+// A new tab opened FROM an explicit apply-session tab inherits that session. Aggregators
+// (jobgether/Adzuna/etc.) routinely open the real employer application in a NEW tab — which had no
+// session, so the engine never ran there and "nothing happened". The child tab now continues the
+// same session (tailored résumé + status reporting included), so autofill.js runs on the real form.
+chrome.tabs.onCreated.addListener(function (tab) {
+  if (!tab || !tab.id || !tab.openerTabId) return;
+  chrome.storage.local.get('autofillSessions', function (data) {
+    var sessions = data.autofillSessions || {};
+    var parent = sessions[String(tab.openerTabId)];
+    if (!parent || !parent.explicit) return;
+    if (Date.now() - (parent.startedAt || 0) > ATS_SESSION_TTL_MS) return;
+    if (sessions[String(tab.id)]) return;
+    sessions[String(tab.id)] = {
+      hostname: '', startedAt: parent.startedAt, explicit: true,
+      tailoredResume: parent.tailoredResume || '', origUrl: parent.origUrl || '',
+      navs: 0, inherited: true,
+    };
+    chrome.storage.local.set({ autofillSessions: sessions });
+  });
+});
+
 // ===== Auto-detect + offer on known ATS pages =====
 // On a completed load of a known-ATS page (Workday/Greenhouse/Lever/etc.) with no active autofill
 // session for that tab, inject detect.js — a tiny script that offers to auto-fill if the page

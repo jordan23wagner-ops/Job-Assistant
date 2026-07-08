@@ -1,6 +1,27 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.12.0: LinkedIn dropdown parity, handoff v2, extension slimming
+## Update 2026-07-08 (latest) — v1.12.1: aggregator new-tab sessions + navigation ask-and-remember
+
+Real-world failure (jobgether.com): the web app opened an AGGREGATOR page that opened the real
+employer application (jobs.prometeotalent.com) in a SEPARATE tab. That new tab had no autofill
+session and the employer host isn't a known ATS, so nothing ran on the page that actually had the
+form; jobgether's "Did you submit?" modal blocked progress. Two fixes:
+
+1. **Child tabs inherit the apply session (`background.js` `chrome.tabs.onCreated`):** a new tab
+   opened FROM an explicit apply-session tab (via `openerTabId`) inherits the session (tailored
+   résumé + status reporting included). Aggregator→employer new-tab hops now autofill.
+
+2. **Navigation ask-and-remember (`autofill.js`):** on a page with no recognized form, instead of
+   just "click Apply yourself", the engine tries a learned "click this button to proceed" choice for
+   the host; if none, it surfaces the prominent clickable options (ranked — real Apply/Continue
+   first, aggregator "I applied / engage later" dead-ends last) in a panel and asks which one moves
+   forward. The pick is clicked AND remembered (`navChoices` storage, keyed by hostname + normalized
+   button text), so the next visit to that aggregator auto-clicks. `window.__aliciaNavHandled` guards
+   against re-asking on re-injection. New tracker status `advancing`. navScore ordering verified by a
+   logic test against the actual jobgether button set (APPLY ranks alone at top; "I didn't actually
+   apply" no longer ties it despite containing "apply").
+
+## Update 2026-07-08 — v1.12.0: LinkedIn dropdown parity, handoff v2, extension slimming
 
 Deep-dive review follow-up. Three thrusts:
 
