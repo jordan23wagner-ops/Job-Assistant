@@ -1,6 +1,48 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.27: EEO multi-select comboboxes were never classified as EEO at all (same label-discovery gap, different call site), and a new checkbox-group ("select all that apply") question type is now discovered and answered
+## Update 2026-07-09 (latest) — v1.13.28: self-inflicted bug fix — v1.13.27's checkbox-group question label lookup was defeated by the exact closest()-stops-too-early anti-pattern that had already been fixed elsewhere in this file
+
+Round 25 verification caught that the checkbox-group fix shipped last round did nothing at all on
+live re-test. Re-reading it against the EXACT markup already captured in round 23 found the bug
+immediately, with no live access needed: `checkboxGroupQuestionLabel()`'s
+`ul.closest('.application-question, fieldset, li, div')` returns the NEAREST ancestor matching ANY
+clause in a comma-separated selector — and on Lever's real markup, the checkbox `<ul>`'s immediate
+parent is itself a plain `<div class="application-field...">`, which matches the bare `div` clause
+instantly, before ever reaching the outer `<li class="application-question...">` that actually
+contains the sibling `.application-label`. This is the identical anti-pattern already fixed twice
+before in this file (`comboLabelText`'s wide-wrapper climb, and `comboContainer`'s wide-vs-narrow
+selector ordering) — reintroduced here by not applying the same lesson. Fixed by trying the specific
+`.application-question` class first, falling back to `fieldset, li`, and only then to a bare `div`,
+in both `checkboxGroupQuestionLabel()` and the discovery loop's `cgCont` computation.
+
+**Still open, pending a live diagnostic before any fix is attempted (see round 25's report for
+detail):**
+- EEO race/ethnicity multi-select combobox (Smartsheet/Greenhouse) — confirmed the user's EEO profile
+  IS fully configured (verified working on Lever's native equivalent fields for the same categories),
+  so this is a genuine Greenhouse-specific widget-recognition gap, not a missing-preference
+  situation. v1.13.27's `comboLabelText` fold-in did not fix it — need the full upward ancestor chain
+  and the actual tag/class of the visible question text (may not be a real `<label>` element, same
+  as Lever's `.application-label` div-not-label pattern).
+- SPA in-page navigation (Smartsheet) — the passive offer banner now appears correctly (v1.13.26/27
+  progress confirmed), but clicking "Auto-fill" after the SPA-routed form loads does nothing at all —
+  every field stays blank. Need to check, right after clicking Auto-fill: does
+  `typeof window.__aliciaAutofillRun` come back `'function'` in the page console (confirms autofill.js
+  actually executed), and does `document.getElementById('alicia-apply-banner')` exist anywhere in the
+  DOM? This distinguishes "never ran" from "ran but found nothing."
+- ADP Workforce Now — still a total miss past the consent gate, unchanged from round 24. Need to
+  check for iframes specifically on the real (post-consent) form page — `document.querySelectorAll('iframe').length` and each one's `src`/`title` — since a DOM query on the top document alone
+  can't see into an iframe's own document.
+- Ashby date-picker — interaction mechanism now confirmed (both typing-then-Tab and clicking a day
+  cell commit cleanly on the page's own terms), but it's still unclear whether Alicia ever ATTEMPTS
+  either — `isComboControl()`/the wordy-gate text-question pass don't appear to exclude this field on
+  paper, so if it's still blank the field was likely typed into and then reverted by react-datepicker's
+  own validation, OR never reached at all. Need: does `data-alicia-answered="1"` appear on the date
+  input after a run, and does the question ever show up in Alicia's question panel?
+- Ashby toggle-button pairs — class names confirmed stable across 2 postings, but same-tenant only
+  (both were OpenAI). Still need a DIFFERENT company's Ashby posting to know if the hash is
+  platform-stable or per-tenant-build.
+
+## Update 2026-07-09 — v1.13.27: EEO multi-select comboboxes were never classified as EEO at all (same label-discovery gap, different call site), and a new checkbox-group ("select all that apply") question type is now discovered and answered
 
 Round 24 confirmed v1.13.26's sponsorship fix and banner-durability fix both hold cleanly on live
 re-test, with no reversion. It also confirmed the SPA-navigation gap is still NOT fully fixed (a

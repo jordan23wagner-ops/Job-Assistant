@@ -950,7 +950,16 @@
     return out;
   }
   function checkboxGroupQuestionLabel(ul) {
-    var card = ul.closest('.application-question, fieldset, li, div');
+    // Same closest()-stops-too-early bug already fixed elsewhere in this file, reintroduced here:
+    // a bare `div` in a comma-separated selector list makes .closest() return the NEAREST match, and
+    // on Lever's real markup the checkbox <ul>'s immediate parent is itself a plain
+    // <div class="application-field ...">, matching that bare `div` clause instantly — the actual
+    // outer <li class="application-question ..."> that contains the sibling .application-label is
+    // never reached, so the label always comes back empty and the whole question was silently
+    // dropped (confirmed live: v1.13.27's checkbox-group fix did nothing on live re-test because of
+    // exactly this). Try the specific, correct wrapper FIRST; only fall back to generic/bare
+    // selectors if that specific one isn't present.
+    var card = ul.closest('.application-question') || ul.closest('fieldset, li') || ul.closest('div');
     if (!card) return '';
     var lg = card.querySelector('.application-label, legend, label');
     return lg ? getText(lg) : '';
@@ -1337,7 +1346,7 @@
       var cglabel = checkboxGroupQuestionLabel(cg.ul);
       if (!cglabel || cglabel.length < 8) continue;
       if (isVoluntaryEeoKey(eeoKey(norm(cglabel)))) continue; // voluntary self-ID (e.g. race multi-select) handled by fillEeoComboboxes/its own pass, not here
-      var cgCont = cg.ul.closest('.application-question, fieldset, li, div') || cg.ul.parentElement;
+      var cgCont = cg.ul.closest('.application-question') || cg.ul.closest('fieldset, li') || cg.ul.closest('div') || cg.ul.parentElement;
       if (mustNeverAnswer(cglabel, cgCont)) continue; // never AI-answer a CAPTCHA/honeypot
       var cgOpts = cg.boxes.map(checkboxLabel).filter(Boolean);
       if (cgOpts.length < 2 || cgOpts.length > 15) continue;
