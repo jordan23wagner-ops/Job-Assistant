@@ -1008,7 +1008,16 @@
     var hasStored = !!(resumeFileRec && resumeFileRec.b64);
     if (!hasStored && !tailoredText) return 0;
     var attached = 0;
-    var fileInputs = document.querySelectorAll('input[type="file"]');
+    var allFileInputs = document.querySelectorAll('input[type="file"]');
+    // Ashby (confirmed live) renders a SECOND, non-required file input for its own "autofill this
+    // form from your resume" convenience widget, separate from the actual required submission field
+    // (id="_systemfield_resume", required=""). Both can independently look like a resume upload by
+    // label text, and attaching to the wrong one leaves the real required field empty while nothing
+    // looks wrong (no error, file "attached" somewhere). When any REQUIRED file input exists among
+    // the candidates, prefer it — "required" is a strong, standard, ATS-agnostic signal for "this is
+    // the field that actually matters," never present on a decorative helper input.
+    var requiredFileInputs = Array.prototype.filter.call(allFileInputs, function (el) { return el.required; });
+    var fileInputs = requiredFileInputs.length ? requiredFileInputs : allFileInputs;
     for (var i = 0; i < fileInputs.length; i++) {
       var el = fileInputs[i];
       if (el.disabled) continue;
@@ -1184,13 +1193,21 @@
     // with the candidate's own COMMUNITY COLLEGE — not invented, genuinely in the resume, but pulled
     // from the EDUCATION section and treated as if it were a job. The model wasn't told to keep those
     // two resume sections separate when a question is specifically about employment.
-    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. If a question explicitly asks to answer "yes or no" (or is clearly a yes/no question even if phrased as free text), answer with just "Yes." or "No." plus at most one short supporting clause — not a paragraph. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, NEVER a school — this rule has NO exception, even if the resume has no obvious current employer. If no work-experience entry clearly answers a company/employer question, answer exactly "N/A" for that question rather than substituting an education entry as a fallback — do not treat "give the most conservative reasonable answer" (below) as permission to use a school here. A question specifically about education must be answered ONLY from an education entry. If you cannot reasonably answer a DIFFERENT (non-company/employer) question from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
+    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. EXCEPTION: if a question explicitly states a target length (e.g. "200-400 words", "in detail", "tell us a story about a time when...") or is marked [substantive answer...] below, write a genuinely substantive answer close to that length using real resume details — do not default to 1-2 sentences for those, and never pad with filler just to hit a count. If a question explicitly asks to answer "yes or no" (or is clearly a yes/no question even if phrased as free text), answer with just "Yes." or "No." plus at most one short supporting clause — not a paragraph. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, NEVER a school — this rule has NO exception, even if the resume has no obvious current employer. If no work-experience entry clearly answers a company/employer question, answer exactly "N/A" for that question rather than substituting an education entry as a fallback — do not treat "give the most conservative reasonable answer" (below) as permission to use a school here. A question specifically about education must be answered ONLY from an education entry. If you cannot reasonably answer a DIFFERENT (non-company/employer) question from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
+    // A textarea whose own label states a target length ("great answers are often 200-400 words")
+    // was still getting a 1-2 sentence answer — the blanket [short paragraph] hint below was
+    // overriding what the question itself asked for. Detect an explicit word-count request and hint
+    // for a substantive answer instead, so the system prompt's length exception above actually gets
+    // triggered on the specific item that needs it.
+    var WANTS_LENGTH_RE = /\d+\s*(-|–|to)\s*\d+\s*words|\bat least \d+\s*words\b|\bminimum\s*(of\s*)?\d+\s*words\b|\bin (great )?detail\b/i;
     var qLines = items.map(function (it, i) {
       var typeLabel = it.multi
         ? '[list one or more values from the resume, comma-separated]'
         : ((it.type === 'select' || it.type === 'radio' || it.type === 'combobox') && it.options && it.options.length)
           ? ('[choose one: ' + it.options.join(' | ') + ']')
-          : (it.type === 'textarea' ? '[short paragraph]' : '[short answer]');
+          : (it.type === 'textarea'
+              ? (WANTS_LENGTH_RE.test(it.label) ? '[substantive answer matching the requested length stated in the question]' : '[short paragraph]')
+              : '[short answer]');
       return (i + 1) + '. ' + typeLabel + ' ' + it.label;
     }).join('\n');
     var user = pageJobContext() + '\n\nCandidate Resume:\n' + (resumeText || '').slice(0, 6000) + '\n\nQuestions:\n' + qLines;
@@ -2185,6 +2202,11 @@
     } catch (err) {
       result.status = 'error';
       result.error = String(err && err.message || err);
+      // Observed: a run can throw and stop with ZERO visible sign anything happened at all — no
+      // banner, no panel, nothing filled — which is indistinguishable from Alicia simply never
+      // running (e.g. an injection gap). Surfacing the actual exception turns a silent, unexplained
+      // "nothing happened" into an actionable, reportable message.
+      try { showBanner('Alicia hit an error and stopped: ' + result.error + ' — this page may need to be filled in manually.', '#d32f2f'); } catch (e) {}
       report(result);
       return result;
     } finally {

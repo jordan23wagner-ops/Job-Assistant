@@ -1,6 +1,47 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.16: the actual fix for "Truckee Meadows Community College" — the deterministic check never covered the real application site
+## Update 2026-07-08 (latest) — v1.13.17: Ashby résumé-upload root cause (required-input preference), essay answers were capped too short, silent-exception banner
+
+Round 14 confirmed the v1.13.16 "Current Company" fix held on a SEVENTH distinct Lever tenant
+(3Pillar Global correctly got "Modernizing Medicine," not a school) — and supplied a clean live DOM
+diagnostic that pinned down the Ashby résumé-upload bug exactly, plus surfaced two more real issues.
+
+1. **Ashby résumé upload — root cause confirmed via live DOM inspection.** The page has TWO
+   `input[type="file"]` elements: one belonging to Ashby's own "autofill this form from your resume"
+   convenience widget (not required, decorative), and the actual required submission field
+   (`id="_systemfield_resume"`, `required=""`). Both can independently look like a résumé upload by
+   label text, so `attachResume` could attach to either — and attaching to the decorative one leaves
+   the real required field empty with no visible error, exactly matching what was reported. Fixed by
+   preferring any `required` file input over non-required candidates when both exist; falls back to
+   considering all candidates when none are marked required, so single-file-input sites are unaffected.
+
+2. **Essay-style answers were capped at 1-2 sentences even when the question explicitly asked for
+   200-400 words.** The "Why Anthropic?" essay got answered this round (an improvement over last
+   round's blank), but at 38 words against a requested 200-400. Root cause: the per-item prompt hint
+   for every textarea was the blanket `[short paragraph]`, and the system prompt's "short, professional
+   answer (1-2 sentences)" instruction had no exception for a question that states its own target
+   length. Added a `WANTS_LENGTH_RE` detector (matches "200-400 words," "at least N words," "in
+   detail," etc.) that swaps in a "[substantive answer matching the requested length]" hint for
+   textareas whose own label asks for one, plus a matching exception in the system prompt.
+
+3. **New, general safety fix: a run can throw and stop with ZERO visible sign anything happened at
+   all.** On an Anduril Greenhouse posting, the passive "Auto-fill?" banner was explicitly accepted,
+   yet nothing filled — no banner, no ask-panel, nothing. Traced to the outer `catch (err)` block:
+   it sets `result.status = 'error'` and reports internally, but never calls `showBanner()` — so a
+   thrown exception looks EXACTLY like "Alicia never ran," making it impossible to tell an injection
+   gap apart from a real code bug from the outside. Added a banner showing the actual exception
+   message in that catch block. This doesn't explain what specifically went wrong on Anduril (still
+   unknown — Wagner-GPT's Tracker also showed a false "✓ applied" status on that same job, a
+   Wagner-GPT-side issue out of scope here), but the next time this happens, the exact error will be
+   visible instead of indistinguishable from silence.
+
+Verified: `test-round14-fixes.js` — the required-file-input preference selects the real Ashby field
+over the decorative helper (and falls back correctly when nothing is marked required); the essay-length
+detector fires on the exact reproduced label and leaves ordinary textareas unaffected; confirms the
+catch-all error handler now calls `showBanner`. `node --check` clean; all prior round test suites
+(5 through 13) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.16: the actual fix for "Truckee Meadows Community College" — the deterministic check never covered the real application site
 
 Round 13 confirmed the "Legal Name" fix works (a different fix from the exact same v1.13.15 commit),
 which rules out a stale/unreloaded extension — so when the "Current Company" bug still showed up
