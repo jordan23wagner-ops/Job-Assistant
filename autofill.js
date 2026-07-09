@@ -73,6 +73,17 @@
     try { chrome.runtime.sendMessage({ type: 'UNIVERSAL_FILL_RESULT', result: result }).catch(function () {}); } catch (e) {}
   }
 
+  // Contact fields are silently auto-filled from saved profile data with no special callout — that's
+  // fine, they're not sensitive. EEO/demographic fields use the exact same "fill from what the user
+  // already told us, never guess" trust model, but they're voluntary, legally-protected self-ID
+  // questions (race, gender, veteran/disability status, etc.) — worth surfacing explicitly rather
+  // than blending silently into an undifferentiated fill count, so the human notices and can
+  // double-check them before submitting rather than discovering it after the fact.
+  function eeoNote(result) {
+    return result.eeoFilled > 0
+      ? ' (includes ' + result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' auto-filled from your saved preferences — please double-check before submitting)'
+      : '';
+  }
   function showBanner(text, color) {
     var el = document.getElementById('alicia-apply-banner');
     if (!el) {
@@ -485,6 +496,19 @@
   var EEO = [
     { key: 'eeo-sponsorship',   pats: [/sponsor/, /visa status/] },
     { key: 'eeo-authorization', pats: [/authoriz/, /legally (authorized|eligible|entitled)/, /right to work/, /eligible to work/] },
+    // Sexual orientation and gender identity/trans status weren't recognized as EEO categories at
+    // all, so they fell through to the generic custom-question pipeline — treated exactly like an
+    // ordinary job-content question ("describe a challenging project") rather than a voluntary,
+    // legally-protected self-identification question. That routed them into the ask-panel asking a
+    // human to pick an answer as if Alicia needed one to proceed, and — worse — left them reachable
+    // by the AI-answer path like any other unanswered question. Recognizing them here routes them
+    // through the SAME silent fill-from-saved-preference-or-skip path every other EEO category
+    // already uses (see fillEeoSelects/fillEeoRadios/fillEeoComboboxes: `if (!key || !eeo[key])
+    // continue` — an unconfigured category is simply left blank, never asked, never AI-guessed).
+    // Must be checked BEFORE eeo-gender below — "gender identity" would otherwise match \bgender\b
+    // first and get misclassified as the plain gender category.
+    { key: 'eeo-gender-identity',    pats: [/transgender/, /gender identity/] },
+    { key: 'eeo-sexual-orientation', pats: [/sexual orientation/] },
     { key: 'eeo-gender',        pats: [/\bgender\b/, /\bsex\b/] },
     { key: 'eeo-race',          pats: [/\brace\b/, /ethnic/] },
     { key: 'eeo-veteran',       pats: [/veteran/] },
@@ -1794,7 +1818,7 @@
     }
     busy = true;
     var state = { generatedCredential: null };
-    var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, ats: 'generic' };
+    var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, eeoFilled: 0, ats: 'generic' };
     var atsName = detectATS();
     var adapter = ADAPTERS[atsName] || {};
     result.ats = atsName;
@@ -1846,10 +1870,16 @@
         try { n += await fillStdCombos(profile); } catch (e) {} // same, for combobox-style dropdowns
         if (adapter.fillTypeaheads) { try { n += await adapter.fillTypeaheads(profile); } catch (e) {} }
         n += fillPasswordFields(profile, siteCredentials, state);
-        n += fillEeoSelects(eeo);
-        n += fillEeoRadios(eeo);
-        if (adapter.fillDropdowns) { try { n += await adapter.fillDropdowns(eeo, profile); } catch (e) {} }
-        n += await fillEeoComboboxes(eeo);
+        // Demographic/EEO fields are filled from the user's OWN saved preferences (never AI-guessed —
+        // same trust model as contact fields), but unlike contact fields they're voluntary,
+        // legally-protected self-ID questions — worth surfacing explicitly rather than blending
+        // silently into the generic fill count, so the human notices and can double-check them
+        // before submitting (see the eeoFilled note on the terminal banners below).
+        var eeoN = fillEeoSelects(eeo) + fillEeoRadios(eeo);
+        if (adapter.fillDropdowns) { try { eeoN += await adapter.fillDropdowns(eeo, profile); } catch (e) {} }
+        eeoN += await fillEeoComboboxes(eeo);
+        result.eeoFilled += eeoN;
+        n += eeoN;
         var ra = attachResume(resumeFile, tailoredResume);
         result.resumeAttached += ra;
         n += ra;
@@ -1874,6 +1904,7 @@
             });
             var dyn = await findDynamicFallbackItems(profile, eeo, claimedEls);
             n += dyn.contactFilled + dyn.eeoFilled;
+            result.eeoFilled += dyn.eeoFilled;
             items = items.concat(dyn.questionItems);
           } catch (e) {}
         }
@@ -1998,10 +2029,11 @@
                 // Ask directly in an interactive panel (dropdowns get a real option list); saving
                 // banks each answer in the learned store and resumes filling automatically. The
                 // confirm-capture above still learns if they dismiss it and edit the page instead.
+                if (result.eeoFilled > 0) showBanner('Alicia also auto-filled ' + result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' from your saved preferences — please double-check them too.', '#e0a800');
                 showQuestionPanel(needHuman);
               } else {
                 result.status = 'answered_review';
-                showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.', '#e0a800');
+                showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.' + eeoNote(result), '#e0a800');
               }
               break;
             }
@@ -2011,7 +2043,7 @@
           if (stopBtn) {
             result.status = 'ready_to_submit';
             result.readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim();
-            showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.', '#4caf50');
+            showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + eeoNote(result), '#4caf50');
             break;
           }
           if (hasVisibleError()) {
@@ -2027,7 +2059,7 @@
             }
             if (!recovered) {
               result.status = 'stopped_needs_input';
-              showBanner('Filled what it could — this step needs your input.', '#e0a800');
+              showBanner('Filled what it could — this step needs your input.' + eeoNote(result), '#e0a800');
               break;
             }
           }

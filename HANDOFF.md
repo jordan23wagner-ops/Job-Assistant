@@ -1,6 +1,62 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.9: aria-labelledby multi-id fix (from a deeper investigation pass on the two open ADP/Zoho items)
+## Update 2026-07-08 (latest) — v1.13.10: EEO categories for sexual orientation/gender identity + visible EEO-fill transparency note
+
+Round 8 supplied the exact DOM/console diagnostics requested in v1.13.9, plus a new, more serious
+finding from a third test site. Net result: the two "needs live data" bugs turned out to point at
+something outside this codebase entirely (see below), while the new finding was a real, fixable gap.
+
+**Test 1/2 diagnostics reframe both open items — likely NOT an autofill.js bug at all.** The ADP
+field (`guestFirstName`) has completely ordinary markup — a plain `<input>` with `aria-label="First
+Name"` right on it, no shadow root, no iframe — exactly the shape `signals()` already reads directly
+with no special-casing needed, so the earlier aria-labelledby hypothesis doesn't apply here. And on
+Zoho, `typeof window.__aliciaAutofillRun` came back `"undefined"` — proving autofill.js never ran in
+that tab at all, not that it ran and silently failed. Both failing tests were reached via Wagner-GPT's
+**Tracker** tab; the one Test 3 site that filled correctly (Greenhouse) was reached via **Search**'s
+direct-apply flow. Checking `bridge.js`, there is exactly ONE entry point that creates an explicit
+autofill session (`ALICIA_APPLY` → `WEBAPP_APPLY`) — if Tracker's own "open"/"apply" action doesn't
+fire that same message the way Search's Apply button does, the extension would correctly do nothing
+beyond its passive ATS-detect banner (which requires a human click to actually engage), matching every
+symptom observed: zero console output, `window.__aliciaAutofillRun` undefined, no banner. This can't be
+confirmed further from this repo (Wagner-GPT's Tracker code isn't in scope here) — flagged for the user
+to check, and to add the Wagner-GPT repo to this session if they want it fixed from this side.
+
+**New finding, fixed: sexual orientation / transgender status weren't recognized as EEO categories at
+all.** On Onenergy's Greenhouse posting, Gender/Hispanic-or-Latino/Race were correctly auto-filled
+silently from the user's own saved EEO preferences (existing, intended design — same trust model as
+any other profile field, never AI-guessed) — but "How would you describe your sexual orientation?" and
+"Do you identify as transgender?" surfaced in the ask-panel as ordinary custom questions needing an
+"answer," because `eeoKey()`'s category list had no entry for either. That's a real gap: these are
+voluntary, legally-protected self-identification questions that deserve the exact same "fill from a
+real saved preference, or silently leave blank — never ask, never AI-guess" treatment every other EEO
+category already gets, not the generic job-content-question treatment. Fixed by adding
+`eeo-gender-identity` (transgender/gender identity) and `eeo-sexual-orientation` categories to the
+`EEO` array — checked BEFORE the plain `eeo-gender` entry, since "gender identity" would otherwise
+match `\bgender\b` first and get misclassified (caught by the test suite before shipping). An
+unconfigured category is now silently skipped exactly like an unconfigured race/veteran/disability
+preference already is — no ask, no guess.
+
+**Also added: a visible transparency note whenever EEO/demographic fields get auto-filled.** The
+report separately raised that Gender/Race/Hispanic-or-Latino were filled with zero visible callout —
+correct per the existing trust model (it's the user's own configured data, filled the same way contact
+fields are), but worth surfacing rather than blending silently into the generic fill count, given how
+sensitive the category is. Added `result.eeoFilled` tracking and an `eeoNote()` helper appended to the
+terminal banners ("Filled and ready…", "Alicia answered N questions…", "Filled what it could…", and a
+dedicated note before the ask-panel opens) — e.g. "(includes 3 EEO/demographic answers auto-filled from
+your saved preferences — please double-check before submitting)". Doesn't change what gets filled or
+add a new blocking step, just makes it visible instead of silent.
+
+**Not yet addressed:** Test 3 also reported one Yes/No accommodation question answered with "Cypress,
+Texas" instead of Yes/No — a single occurrence, not enough detail yet (was it a radio group or a text
+field?) to safely root-cause; flagged for a future round rather than guessed at.
+
+Verified: `test-round8b-fixes.js` — `eeoKey` now classifies both new categories correctly (including the
+ordering fix, which the test suite caught before shipping: "gender identity" was initially
+misclassified as plain "gender" until the category order was corrected), confirms an unconfigured new
+category is silently skipped (never asked, never guessed), and confirms `eeoNote()` only appears when
+something was actually EEO-filled. `node --check` clean; all prior round test suites still pass.
+
+## Update 2026-07-08 — v1.13.9: aria-labelledby multi-id fix (from a deeper investigation pass on the two open ADP/Zoho items)
 
 Ran a higher-effort, multi-agent investigation (two independent deep-dive passes on the ADP
 field-recognition gap and the Zoho total-fill regression, each followed by an adversarial verification
