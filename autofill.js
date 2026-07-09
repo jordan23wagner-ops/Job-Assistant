@@ -387,6 +387,26 @@
     }
     return t;
   }
+  // For a react-select-style combobox trigger, labelText()'s own closest('div') fallback stops at
+  // the trigger's narrow inner control div (e.g. "select__control") — some ATS layouts (confirmed on
+  // GitLab's Greenhouse eligibility questions, and Smartsheet's Education combobox fields) put the
+  // real <label> as a SIBLING of a wider wrapper one or more levels further out, e.g.
+  // <div class="select"><label>...</label><div class="select-shell">...trigger...</div></div>.
+  // That wider wrapper is exactly what comboContainer() already computes for value-reading — reuse it
+  // here and climb a few more ancestor levels looking for a label before giving up. Without this, the
+  // combobox's question label comes back empty and the whole field is silently skipped (never asked,
+  // never AI-answered, left blank) — a required-field gap the human has to find on their own.
+  function comboLabelText(trig, cont) {
+    var t = labelText(trig) || trig.getAttribute('aria-label') || '';
+    if (t) return t;
+    var node = cont;
+    for (var hop = 0; node && hop < 4; hop++) {
+      var l = node.querySelector && node.querySelector('label,legend');
+      if (l) return getText(l);
+      node = node.parentElement;
+    }
+    return '';
+  }
   function signals(el) {
     return norm([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('data-automation-id'), labelText(el)].filter(Boolean).join(' '));
   }
@@ -1170,7 +1190,7 @@
       var trig = combos[ki].trig;
       var kcont = combos[ki].container;
       if (comboValueText(trig, kcont)) continue; // already has a selection
-      var klabel = (labelText(trig) || trig.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      var klabel = comboLabelText(trig, kcont).replace(/\s+/g, ' ').trim();
       if (!klabel || klabel.length < 8) continue;
       if (eeoKey(norm(klabel))) continue; // EEO comboboxes handled by fillEeoComboboxes
       if (mustNeverAnswer(klabel, kcont)) continue; // never AI-answer a CAPTCHA/honeypot
@@ -1628,6 +1648,30 @@
         showBanner('Filled and ready — review everything, then click "' + buttonText + '" yourself. (a field finished filling in after the last check)', '#4caf50');
         clearInterval(iv);
       }
+    }, 3000);
+  }
+  // The mirror-image gap: watchForLateRequiredFieldFix only ever runs from the BLOCKED banner path,
+  // so a page that was already "ready"/"answered, review" when its banner rendered has nothing
+  // watching afterward. Confirmed live (Match Group, Lever): a "Current location" field Alicia had
+  // already filled correctly went silently blank again several seconds later, at the same moment a
+  // third-party feature on the page (Lever's own résumé-parse autofill) finished — same plain-.value,
+  // no-DOM-mutation blind spot documented above, just discovered on the healthy side instead of the
+  // blocked side. `refill` is a caller-provided corrective step (re-run the typeahead/company-field
+  // fixups, NOT the full AI-answer pipeline — a background poll must never trigger new network calls
+  // or re-ask questions the human may already be mid-answering).
+  function watchForLateRegression(refill) {
+    if (hasUnfilledRequiredField()) return; // already blocked -- the other watcher's job, not this one
+    var checks = 0;
+    var iv = setInterval(function () {
+      checks++;
+      if (checks > 6 || document.getElementById('alicia-question-panel') || document.getElementById('alicia-nav-panel')) { clearInterval(iv); return; }
+      if (!hasUnfilledRequiredField()) return; // still healthy, keep watching
+      clearInterval(iv);
+      Promise.resolve().then(refill).catch(function () {}).then(function () {
+        showBanner(hasUnfilledRequiredField()
+          ? 'Heads up: a required field Alicia had filled was cleared by something else on this page (not Alicia) and couldn’t be automatically refilled — please check the form before continuing.'
+          : 'Fixed automatically — a required field got cleared by something else on this page after Alicia filled it, and Alicia just refilled it. Please double-check before continuing.', '#e0a800');
+      });
     }, 3000);
   }
   // Wait for the SPA to settle after an advance click: quiet mutations or timeout.
@@ -2203,6 +2247,14 @@
         if (result.learnedUsed) storageSet({ customQA: bank });
         return { filled: n, unanswered: unanswered };
       }
+      // Narrow corrective step for watchForLateRegression: re-run just the two fixups that undo a
+      // third party clobbering an already-filled field (the company-field sweep and the ATS adapter's
+      // typeahead fill) — deliberately NOT a full fillOnePass(), since a background poll must never
+      // re-trigger the AI-answer pipeline or re-ask a question the human may be mid-answering.
+      async function lateRegressionRefill() {
+        clearSuspiciousSchoolInCompanyFields();
+        if (adapter.fillTypeaheads) { try { await adapter.fillTypeaheads(profile); } catch (e) {} }
+      }
 
       // On a job *details* page (e.g. hirebridge details.aspx, a Greenhouse/Lever posting) there's
       // no form yet — just an "Apply Now" button. Click through to the actual application before
@@ -2312,6 +2364,7 @@
                 var reviewSiteErr = detectResumeUploadSiteError();
                 if (reviewSiteErr) reviewNote += ' The site itself reported an error attaching the résumé: "' + reviewSiteErr + '" — try reloading and reapplying.';
                 showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.' + eeoNote() + reviewNote, '#e0a800');
+                watchForLateRegression(lateRegressionRefill);
               }
               break;
             }
@@ -2331,6 +2384,7 @@
             result.status = 'ready_to_submit';
             result.readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim();
             showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + eeoNote(), '#4caf50');
+            watchForLateRegression(lateRegressionRefill);
             break;
           }
           if (hasVisibleError()) {

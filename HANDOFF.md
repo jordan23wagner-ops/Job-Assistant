@@ -1,6 +1,62 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.24: real data-loss bug found and fixed (location field clobbered by Lever's own async parser), banner gaps closed on a third code path, EEO disclosure no longer vanishes on rerun
+## Update 2026-07-09 (latest) — v1.13.25: react-select combobox questions were being silently skipped entirely (GitLab, Smartsheet), a late third-party field-clobber watcher for the two banner paths that never had one, and a background.js fix for ADP's total stall
+
+Round 22 (verification pass + 4 targeted deep dives) closed the loop on two long-standing "why does
+this never get filled" mysteries and produced a strong, evidence-backed hypothesis for the ADP
+Workforce Now total stall.
+
+1. **Root cause found for GitLab's required eligibility questions AND Smartsheet's Education
+   School/Degree/Discipline fields both going universally unfilled: `findUnansweredCustomQuestions`'s
+   combobox branch computed the question's label from `labelText(trig)`, which stops at the
+   trigger's own NEAREST `div` ancestor — for a react-select-shaped combobox that's the narrow inner
+   control div (e.g. `select__control`/`select-shell`), never the wider wrapper where the field's
+   real `<label>` actually sits as a sibling** (`<div class="select"><label>...</label>
+   <div class="select-shell">...trigger...</div></div>`). An empty label fails the
+   `if (!klabel || klabel.length < 8) continue;` gate, so the field was never even offered as a
+   question — not asked, not AI-answered, not flagged, just silently blank. Added `comboLabelText()`,
+   which reuses the wide wrapper `comboContainer()` already computes for value-reading and climbs up
+   to 4 more ancestor levels looking for a `label`/`legend` before giving up.
+
+2. **New watcher: `watchForLateRegression()`, for the "ready to submit" and "answered, review" banner
+   paths, which had NO late-fix/late-regression watcher at all** — only the blocked/stop-button path
+   got one (`watchForLateRequiredFieldFix`, v1.13.20). Confirmed live on Match Group (Lever): a
+   "Current location" field Alicia had already filled correctly, on an already-"ready" page, went
+   silently blank again ~8s later — the same plain-`.value`-set/no-DOM-mutation blind spot as the
+   original bug, just discovered on the healthy side instead of the blocked side, where nothing was
+   watching. The new watcher runs a bounded poll (max 6 checks × 3s) after those two banners; on a
+   detected regression it runs a deliberately narrow corrective step (`lateRegressionRefill` —
+   `clearSuspiciousSchoolInCompanyFields()` + the ATS adapter's `fillTypeaheads`, NOT a full
+   `fillOnePass()`, since a background poll must never re-trigger the AI-answer pipeline or re-ask a
+   question the human may be mid-answering), then reports whether it self-healed.
+
+3. **background.js: ADP Workforce Now never showed Alicia's autofill offer at all — confirmed live,
+   zero console errors, offer banner never appeared even after waiting.** Hypothesis, not yet
+   re-verified live: ADP's listing and application views are the SAME URL path
+   (`workforcenow.adp.com/mascsr/.../recruitment.html`), differentiated only by a `jobId` query param
+   the app updates via `history.pushState` — so `chrome.tabs.onUpdated`'s single `'complete'` event
+   (the ONLY place the passive "auto-fill available" offer was wired up) fires on the pre-form
+   listing view and never fires again once the real form loads. The existing SPA-reinjection listener
+   (`chrome.webNavigation.onHistoryStateUpdated`, added for exactly this class of problem in an
+   earlier round) only re-arms an EXISTING session — it never gave the passive OFFER a second chance
+   for tabs with no session yet. Refactored the offer logic into `maybeOfferAutofill(tabId, url)` and
+   wired it to both events. **Needs live re-verification on ADP next round** — this is the most
+   confident explanation given the evidence, but the total stall wasn't directly reproduced against
+   the fix yet.
+
+**Still open, insufficient information to fix yet:** (a) the `answered_review` banner's "other
+required fields" note isn't durable across reruns that land in a different one of the three terminal
+branches (reported live on GitLab: reverted to the generic message after opening one dropdown) — same
+class of bug as the EEO-note fix in v1.13.24, but the note itself, not just the eeoNote() count, would
+need to become a shared/durable computation rather than three independently-derived per-branch
+strings; (b) Match Group showing NO banner at all on one application (not wrong text — no banner
+rendered) — single occurrence, needs a repro with console/DOM access to diagnose; (c) Zoho Recruit's
+own native image CAPTCHA blocking after an otherwise-excellent full autofill — expected/correct
+behavior (Alicia surfaces it via its own panel and stops, never solves it), not a bug; (d) the
+Wagner-GPT Tracker "saved → applied" transition (fixed this round in the Wagner-GPT repo, see its own
+commit) needs a slower-motion re-check to confirm the transition is real and not instant.
+
+## Update 2026-07-08 — v1.13.24: real data-loss bug found and fixed (location field clobbered by Lever's own async parser), banner gaps closed on a third code path, EEO disclosure no longer vanishes on rerun
 
 Round 21 (breadth, 15 applications) surfaced the most serious finding of this whole "Current Company"
 saga so far: not just a field staying wrong, but a previously-CORRECT field getting silently cleared.

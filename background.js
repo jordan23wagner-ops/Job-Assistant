@@ -292,11 +292,10 @@ chrome.tabs.onCreated.addListener(function (tab) {
 var atsOfferDismissed = {}; // host -> timestamp
 var OFFER_DISMISS_TTL_MS = 6 * 60 * 60 * 1000;
 
-chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
-  if (info.status !== 'complete' || !tab || !tab.url) return;
-  if (!/^https?:/i.test(tab.url) || /(^|\.)linkedin\.com/i.test(tab.url)) return;
+function maybeOfferAutofill(tabId, url) {
+  if (!url || !/^https?:/i.test(url) || /(^|\.)linkedin\.com/i.test(url)) return;
   var host = '';
-  try { host = new URL(tab.url).hostname; } catch (e) { return; }
+  try { host = new URL(url).hostname; } catch (e) { return; }
   if (!ATS_HOST_RE.test(host)) return;
   var dismissedAt = atsOfferDismissed[host];
   if (dismissedAt && Date.now() - dismissedAt < OFFER_DISMISS_TTL_MS) return;
@@ -315,6 +314,24 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
       chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['detect.js'] }).catch(function () {});
     });
   }, 1200);
+}
+
+chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
+  if (info.status !== 'complete' || !tab) return;
+  maybeOfferAutofill(tabId, tab.url);
+});
+
+// Some ATS hosts (confirmed on ADP Workforce Now: the listing and the specific job/application view
+// are the SAME URL path, differentiated only by a query param the app updates via history.pushState)
+// never fire a SECOND 'complete' event once the real application form loads — chrome.tabs.onUpdated
+// only saw the FIRST, pre-form load, so the offer above either never fired or fired too early and
+// found nothing to detect, then went silent forever (the total-stall pattern reported live). The
+// active-session re-injection listener above already re-fires on this exact event for tabs WITH a
+// session; mirror that here for tabs WITHOUT one yet, so the offer gets a second chance once the
+// real form's URL/query params land.
+chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
+  if (details.frameId !== 0) return;
+  maybeOfferAutofill(details.tabId, details.url);
 });
 
 chrome.runtime.onMessage.addListener(function (message, sender) {
