@@ -1,6 +1,50 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.30: date-picker fix from last round was typing free-text ("Negotiable") into a strict widget — now forced to ask the human; and a self-inflicted false-failure banner from last round's own detect.js change is fixed
+## Update 2026-07-09 (latest) — v1.13.31: confirmed the two v1.13.30 fixes hold, ruled out shadow DOM for ADP and "label unreachable" for checkbox-groups via direct live queries, added a temporary ADP-only diagnostic marker to settle "never injected" vs "fails silently"
+
+Round 28 was diagnostics-only by design and delivered exactly that: both of last round's fixes
+(date-picker asks the human instead of faking "Negotiable"; the false "didn't start" banner is gone)
+confirmed working live, plus two ruled-out hypotheses that narrow — without yet solving — the two
+remaining open items.
+
+1. **ADP: shadow DOM ruled out with direct evidence.** 14 shadow roots exist on the page, but all
+   belong to ADP's own UI chrome (`SFC-SHELL`, `SDF-BUTTON`, etc.) — the actual form fields
+   (`#guestFirstName`, `#guestLastName`, `#guestEmail`, `#login_view_phone`) are confirmed plain
+   `<input>` elements in ordinary light DOM, directly reachable via `document.querySelectorAll`. So
+   v1.13.29's content-mutation-watch fix not helping isn't explained by "can't see the fields at all"
+   — the fields ARE visible to a query, `hasApplicationForm()` should find them, yet detect.js
+   produces zero observable effect on ADP, four rounds running. Since I can't tell from page-level
+   queries alone whether `detect.js` is even being INJECTED there at all (vs. injected and failing
+   silently downstream), added a small, ADP-scoped, TEMPORARY diagnostic marker — a visible pink bar
+   detect.js paints onto the page the INSTANT it executes, before any of its own guard logic — to
+   settle that ambiguity directly. Should be removed once ADP is understood.
+2. **Checkbox-group: both the container selector AND the question label are now confirmed reachable
+   via the user's own direct console queries** (`ul[data-qa="checkboxes"]` matches;
+   `.closest('.application-question')` finds the right element; its `.application-label` text is
+   correct) — ruling out "the label isn't discoverable" as the cause, which was the entire premise of
+   both v1.13.27 and v1.13.28's fix attempts. The one remaining unverified link in the discovery chain
+   is whether the checkboxes themselves pass `checkboxGroups()`'s visibility filter
+   (`visible(b) || visible(b.closest('label'))`) — Lever may hide the raw `<input type="checkbox">`
+   via CSS in a way `offsetParent` reports as invisible, relying entirely on a custom-rendered visual
+   checkbox. Needs one precise console check next round (see below) before touching this a fourth
+   time.
+
+**Still open:**
+- ADP total miss (see item 1) — diagnostic marker shipped, needs a live check next round: does the
+  pink "Alicia detect.js executed" bar ever appear on the real ADP form?
+- Checkbox-group (see item 2) — needs:
+  `Array.from(document.querySelectorAll('ul[data-qa="checkboxes"] input[type="checkbox"]')).map(b => ({ visible: b.offsetParent !== null, labelVisible: b.closest('label') && b.closest('label').offsetParent !== null, disabled: b.disabled, checked: b.checked }))`
+  run on the live Shield AI page — if every entry comes back `visible:false, labelVisible:false`,
+  that's the confirmed bug (the visibility filter drops all 6 boxes, so the group never reaches the
+  `boxes.length >= 2` threshold in `checkboxGroups()`).
+- **General Greenhouse SPA-nav gap still fully broken, and now fails completely silently** (no banner
+  of any kind, confirmed after a full unhurried 30s wait) — still unexplained, lowest-confidence item
+  of the three currently open; no new hypothesis yet, may need its own dedicated diagnostic round once
+  the other two close out.
+- EEO race/ethnicity multi-select combobox (Smartsheet/Greenhouse) — no new hypothesis since two
+  rounds ago; still unexplained.
+
+## Update 2026-07-09 — v1.13.30: date-picker fix from last round was typing free-text ("Negotiable") into a strict widget — now forced to ask the human; and a self-inflicted false-failure banner from last round's own detect.js change is fixed
 
 Round 27 was a breadth pass (10 new-tenant applications) specifically meant to catch problems before
 they compound — and it worked: it caught a real bug in code shipped THIS SESSION (last round),
