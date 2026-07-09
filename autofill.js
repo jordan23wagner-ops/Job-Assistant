@@ -601,6 +601,32 @@
     var isEducationQuestion = /\b(school|college|university|degree|education|major|graduat|academic|coursework|gpa|alma mater)\b/i.test(norm(question));
     return !isEducationQuestion;
   }
+  // The actual explanation for why "Current company" = a school kept surviving every fix aimed at
+  // Alicia's OWN discovery/AI-answer/learned-bank pipeline: on tenants where the field's visible
+  // label is short ("Current company," 2 words), it never passes the "wordy" gate that decides
+  // whether a text field even counts as a discoverable custom question — Alicia correctly never
+  // treats it as a question needing an answer AT ALL on those tenants. The value was never coming
+  // from Alicia's pipeline there; it's Lever's OWN client-side "parse resume to prefill" feature
+  // (triggered by the résumé upload's change event, on tenants that have it enabled), independently
+  // misreading the exact same education-vs-employment distinction Alicia's own AI used to get wrong
+  // — a third-party bug, invisible to and unfixable by any change to Alicia's discovery logic, since
+  // by the time Alicia's own scan runs the field already has a (wrong) non-empty value and every
+  // existing check correctly treats "already has a value" as "leave it alone." Runs as its own sweep
+  // regardless of how the field was discovered (or wasn't), and regardless of who wrote the value.
+  function clearSuspiciousSchoolInCompanyFields() {
+    var cleared = 0;
+    var orgFields = document.querySelectorAll('input[name="org"]');
+    for (var i = 0; i < orgFields.length; i++) {
+      var el = orgFields[i];
+      if (visible(el) && el.value && /\b(college|university|institute|academy|polytechnic|school)\b/i.test(el.value)) {
+        setNativeValue(el, '');
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        cleared++;
+      }
+    }
+    return cleared;
+  }
   // Pure random sampling from a mixed character pool (the old approach) has a real chance of
   // landing zero characters from some required class — with a 5-in-62 special-character density
   // over 16 picks, about a 1-in-4 chance of generating NO special character at all. Workday (and
@@ -1495,6 +1521,23 @@
       }
       if (!String(el.value || '').trim()) return true;
     }
+    // Ashby marks a required question via a CSS class on its <label> ("_required_...", confirmed
+    // live), not the standard required/aria-required attribute — invisible to the [required] scan
+    // above. Its Yes/No questions are also custom <button> pairs, not native radio inputs, so they
+    // were never discovered as a question at all (buttons aren't a recognized control type anywhere
+    // in the discovery pipeline) NOR caught by the scan above. Observed live: a required Yes/No
+    // button-pair with neither option selected let the "Filled and ready" banner fire anyway. Ashby's
+    // own hidden tracking checkbox (tabindex="-1", paired 1:1 with the question) is the one reliably
+    // present state signal — unchecked means genuinely unanswered.
+    var ashbyEntries = document.querySelectorAll('[class*="ashby-application-form-field-entry"]');
+    for (var ae = 0; ae < ashbyEntries.length; ae++) {
+      var entry = ashbyEntries[ae];
+      if (!visible(entry)) continue;
+      var reqLabel = entry.querySelector('label[class*="_required_"]');
+      if (!reqLabel) continue;
+      var yesNoCheckbox = entry.querySelector('[class*="_yesno_"] input[type="checkbox"]');
+      if (yesNoCheckbox && !yesNoCheckbox.checked) return true;
+    }
     return false;
   }
   // Wait for the SPA to settle after an advance click: quiet mutations or timeout.
@@ -1971,6 +2014,7 @@
 
       async function fillOnePass() {
         var n = 0;
+        n += clearSuspiciousSchoolInCompanyFields();
         n += fillStdFields(profile);
         n += fillStdSelects(profile); // State/Country/City dropdowns → select the option, don't type
         try { n += await fillStdCombos(profile); } catch (e) {} // same, for combobox-style dropdowns

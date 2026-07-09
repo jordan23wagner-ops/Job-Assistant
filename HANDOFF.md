@@ -1,6 +1,68 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.19: Lever's "org" field gets an ATS-level override (stop guessing label wording for good), hidden-required-file-input gap in the "ready to submit" safety net
+## Update 2026-07-08 (latest) — v1.13.20: the actual explanation for "Truckee Meadows Community College" — it was never Alicia's own pipeline; Ashby button-pair Yes/No questions
+
+Round 17 re-tested the Lever fix on option 2 (a fresh posting on an already-tested tenant, since the
+fixed 60-posting Search pool contains no new Lever tenants) — still broken. Also re-tested the Ashby
+résumé fix on a brand-new posting — still broken there too. Given the required-field banner (a
+DIFFERENT fix from the exact same v1.13.19 commit) is confirmed correctly showing the yellow warning
+instead of a false green "ready," this ruled out a stale extension for the third time and forced a much
+closer look at the actual code, this time asking a different question: **is this field even reaching
+the code I keep patching, at all?**
+
+**Answer: no — not on the failing tenants.** `findUnansweredCustomQuestions`'s text-field discovery
+gates every candidate behind a "wordy" check (`label.split(' ').length >= 4` or a question mark or a
+handful of keywords) specifically so a bare one-word caption never gets misread as an open question. A
+label reading "Current company" (2 words, no "?", no keyword match) fails that gate — meaning on any
+tenant that words the field this tersely, Alicia never treats it as a discoverable question **at all**,
+and every fix from the last five rounds — all of which operated entirely inside that discovery →
+learned-bank → AI-answer pipeline — could only ever have zero effect there, no matter how correct the
+logic inside was. The value was coming from somewhere else entirely: **Lever's own client-side
+"parse résumé to prefill" feature**, which some tenants have enabled and which independently makes the
+exact same education-vs-employment mistake Alicia's own (long since fixed) AI used to make. By the time
+Alicia's discovery scan runs, the field already has this wrong value, and the existing "already has a
+value, leave it" logic — completely correct from Alicia's own perspective — just leaves a
+third-party-injected wrong value sitting there untouched.
+
+No amount of further work on Alicia's own question-discovery/AI-answer/bank logic could ever have
+caught this, because the bug was never in that pipeline. Fixed with a deliberately blunt, independent
+sweep — `clearSuspiciousSchoolInCompanyFields()` — that checks Lever's `input[name="org"]` field
+directly (a DOM-level signal fixed across every tenant, unlike the visible label) for a school-shaped
+value and clears it, regardless of who wrote it or whether Alicia ever "discovered" it as a question.
+Runs at the start of every fill pass, so it also catches Lever's parse feature firing asynchronously
+after Alicia's first pass (the existing mutation-observer rerun mechanism gives it another chance).
+
+**New, cleanly diagnosed with live markup: Ashby's Yes/No questions are custom `<button>` pairs, not
+native radio inputs, and "required" is marked via a CSS class rather than the `required`/
+`aria-required` attribute.** This made them invisible to both the question-discovery pipeline (buttons
+aren't a recognized control type anywhere) and the `hasUnfilledRequiredField()` safety net (no real
+`required`/`aria-required` attribute exists anywhere in the widget) — so the "Filled and ready" banner
+could fire with a required Yes/No question still completely blank. Extended
+`hasUnfilledRequiredField()` with an Ashby-specific check: find each `ashby-application-form-field-entry`
+container, check for a label whose class contains `_required_`, and treat it as unanswered if its
+paired hidden tracking checkbox (present in every such widget, confirmed live) is unchecked. Scoped to
+detecting "still needs an answer" only — teaching Alicia to actively answer this custom widget shape is
+a larger undertaking left for a future round if it turns out to be worth it.
+
+**Still flagged, not fixed — need one more diagnostic each:**
+- Ashby's résumé upload is still failing on a brand-new posting even after the required-file-input
+  preference fix — this specific posting may not mark its résumé input `required` at all (postings can
+  configure this individually), which would explain the earlier fix not applying here; needs the same
+  DOM snippet as before, for this specific posting.
+- The stale "needs N answers" Greenhouse panel — this round's diagnostic revealed the underlying
+  control is a newer "Remix"-styled react-select combobox (`select__container` / `select-shell`
+  classes), different from previously-seen Greenhouse forms. Whether `visibleComboTriggers()` even
+  discovers this trigger, or discovers it but `comboValueText()` fails to read its already-selected
+  value, is still unconfirmed — the diagnostic markup was cut off by a content filter partway through.
+  Needs the full, uncut trigger markup before attempting a fix.
+
+Verified: `test-round17-fixes.js` — the Lever sweep clears exactly the contaminated field (school-named
+value) while leaving genuine employer values, already-empty fields, and hidden fields untouched; the
+Ashby button-pair detection correctly flags an unanswered required question via the live-diagnosed
+label-class + hidden-checkbox pattern, while an answered, non-required, or hidden question is correctly
+left alone. `node --check` clean; all prior round test suites (5 through 16) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.19: Lever's "org" field gets an ATS-level override (stop guessing label wording for good), hidden-required-file-input gap in the "ready to submit" safety net
 
 Round 16 went back to general coverage after the dedicated Zoho/ADP hunt came up empty (19 searches,
 no hits — that thread stays open, revisit only if one surfaces naturally rather than spending more
