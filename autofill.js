@@ -485,7 +485,12 @@
       { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
       { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
       { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
-      { v: fullName,          t: function (s) { return /\bfull name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
+      // "Please state your FULL LEGAL name" is a real, common phrasing that fell through both
+      // branches: "legal" breaks the contiguous \bfull name\b match, and the generic \bname\b branch
+      // explicitly excludes "legal" (to avoid misfiring on "legal first/last name", which the
+      // firstName/lastName matchers above already own) -- so the whole-name question was left
+      // unmatched and blank. Allow an optional "legal" between "full" and "name" specifically.
+      { v: fullName,          t: function (s) { return /\bfull (legal )?name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
     ];
   }
   function isKnownContactField(s, el) {
@@ -1409,6 +1414,31 @@
     for (var i = 0; i < errs.length; i++) { if (visible(errs[i]) && getText(errs[i])) return true; }
     return false;
   }
+  // Observed: the "ready to submit" banner fired while several REQUIRED fields (a legal-name text
+  // box, a required radio group, a required select) were still empty -- something the discovery
+  // passes above missed reaching for one reason or another (a different label phrasing, a widget
+  // shape none of the passes recognize, etc.). Rather than trying to enumerate every possible reason
+  // a required field could be missed, do one final sweep for ANY visible, required, still-empty
+  // control right before declaring the form ready -- a general safety net so Alicia never tells the
+  // human "you're ready to submit" while something required is provably blank, regardless of why.
+  function hasUnfilledRequiredField() {
+    var req = document.querySelectorAll('[required], [aria-required="true"]');
+    for (var i = 0; i < req.length; i++) {
+      var el = req[i];
+      if (!visible(el) || el.disabled) continue;
+      if (el.tagName === 'SELECT') { if (!selectHasRealValue(el)) return true; continue; }
+      if (el.type === 'checkbox') { if (!el.checked) return true; continue; }
+      if (el.type === 'radio') {
+        var name = el.name;
+        if (!name) { if (!el.checked) return true; continue; }
+        var group = document.getElementsByName(name);
+        if (!Array.prototype.some.call(group, function (r) { return r.checked; })) return true;
+        continue;
+      }
+      if (!String(el.value || '').trim()) return true;
+    }
+    return false;
+  }
   // Wait for the SPA to settle after an advance click: quiet mutations or timeout.
   function waitForDomSettle(maxMs) {
     return new Promise(function (resolve) {
@@ -2062,6 +2092,11 @@
 
           var stopBtn = findButton(stopPatterns);
           if (stopBtn) {
+            if (hasUnfilledRequiredField()) {
+              result.status = 'stopped_needs_input';
+              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + (stopBtn.innerText || stopBtn.value || '').trim() + '".' + eeoNote(result), '#e0a800');
+              break;
+            }
             result.status = 'ready_to_submit';
             result.readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim();
             showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + eeoNote(result), '#4caf50');

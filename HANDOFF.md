@@ -1,6 +1,51 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.12: poisoned learned-bank record (the REAL fix for the education/employment bug), yes/no answer tightening
+## Update 2026-07-08 (latest) — v1.13.13: "full legal name" matcher gap, general "ready to submit" required-field safety net
+
+Round 11 (Search-path only, per the decisive-test plan) found no Zoho/ADP posting available to redo
+that specific comparison, but produced two new, concrete findings on Lever and Greenhouse — both
+fixed — plus an open question on the recurring "Current Company" bug that needs the user's input
+before going further.
+
+1. **Root cause found: "Please state your full legal name" was left blank despite the profile having
+   a name.** The `fullName` std matcher's two branches BOTH failed on this exact phrasing: the
+   contiguous `\bfull name\b` pattern doesn't match because "legal" sits in between ("full legal
+   name"), and the generic `\bname\b` branch explicitly excludes any label containing "legal" (so it
+   doesn't misfire on "legal first name"/"legal last name", which the firstName/lastName matchers
+   already own). That left "full legal name" — a common, real phrasing — matched by nothing at all.
+   Fixed by allowing an optional "legal" between "full" and "name" specifically, without touching the
+   legal-first/last-name exclusion that was working correctly.
+
+2. **New, more general safety fix: the "Filled and ready — review everything, then click Submit"
+   banner fired on Shield AI's Lever form while THREE required fields were still visibly empty**
+   ("How did you hear about us?", the full-legal-name field above, and "Are you a transitioning
+   service member?"). Rather than chase down every individual reason a specific field might be missed
+   by the discovery passes, added a general safety net: `hasUnfilledRequiredField()` scans for any
+   visible `[required]`/`[aria-required="true"]` control (text, select, checkbox, radio group) that's
+   still empty, checked right before the "ready to submit" banner would fire. If anything required is
+   still blank, the banner now says so explicitly ("Filled what it could, but some required fields
+   still look empty — please check the whole form...") instead of confidently claiming the form is
+   ready. This doesn't fix why a field was missed — it stops Alicia from ever *claiming* readiness
+   while something required is provably blank, regardless of the reason.
+
+3. **Still open, needs the user's input before another fix attempt: "Truckee Meadows Community
+   College" in "Current Company" survived the v1.13.12 poisoned-bank-record fix, reproduced on a
+   FOURTH distinct Lever tenant (Shield AI).** Two possibilities, and they call for opposite next
+   steps: (a) the fix has some remaining gap (e.g. the originally-banked question text didn't
+   literally contain "company"/"employer" and slipped past the filter's regex), meaning this is still
+   a bug — or (b) this was never actually wrong at all: nothing in this session has ever confirmed
+   whether Truckee Meadows Community College is genuinely the candidate's own EDUCATION background
+   (the original assumption, based on circumstantial reasoning — a matching area code — never
+   verified against the actual resume text) or an actual past EMPLOYER (e.g. staff/instructor role),
+   in which case "fixing" this further would mean suppressing a true fact. Asked the user directly
+   rather than guess further, since guessing wrong in either direction is worse than asking.
+
+Verified: this round's tests confirm the "full legal name" phrasing now matches (without regressing
+the legal-first/last-name exclusion it was carved out of), and `hasUnfilledRequiredField()` correctly
+flags blank required text/radio-group/select fields while ignoring filled or hidden ones. `node
+--check` clean; all prior round test suites (5 through 10) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.12: poisoned learned-bank record (the REAL fix for the education/employment bug), yes/no answer tightening
 
 Round 10 confirmed two of the three v1.13.11 fixes work (the location-typeahead fix stopped the
 wrong-type "Cypress, Texas" guess; the passive-offer race condition is fixed, confirmed on two
