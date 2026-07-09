@@ -1,6 +1,50 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.15: deterministic (not prompt-based) rejection for the company/education bug, bare "Legal Name" gap, widened résumé-upload detection
+## Update 2026-07-08 (latest) — v1.13.16: the actual fix for "Truckee Meadows Community College" — the deterministic check never covered the real application site
+
+Round 13 confirmed the "Legal Name" fix works (a different fix from the exact same v1.13.15 commit),
+which rules out a stale/unreloaded extension — so when the "Current Company" bug still showed up
+unchanged on a SIXTH distinct Lever tenant (Aledade) despite last round's supposedly airtight
+deterministic check, that meant the check itself had a real gap, not that it wasn't running.
+
+**Root cause, finally: `findLearnedAnswer()` matches by FUZZY similarity, and my check was never
+applied at the one place that actually mattered.** v1.13.15 added `isSchoolAnsweringCompanyQuestion()`
+at two points: filtering the bank at load time (checking each record's OWN stored question wording)
+and rejecting a *fresh* AI answer. But there's a THIRD point — the one actually responsible — where a
+learned answer gets applied to the current page's field: `findLearnedAnswer(bank, qItem.label)` uses
+fuzzy question-similarity matching, not exact text. A poisoned record originally banked under
+different wording (e.g. "Where are you currently employed?" — which doesn't literally contain
+"company" or "employer" as a whole word) sailed straight through the bank-load filter untouched
+(since that filter only ever looks at the record's own stored wording), then fuzzy-matched THIS PAGE's
+"Current company" label closely enough to apply directly — never reaching either of the two checks
+added last round at all. That's why the "deterministic" fix appeared to have zero effect: it covered
+two real spots, just not the one doing the actual damage.
+
+Fixed by re-checking the learned answer against the CURRENT page's actual label at the moment it
+would be applied (not the banked record's original wording) — `if (learned &&
+isSchoolAnsweringCompanyQuestion(qItem.label, learned.answer)) learned = null;` right before
+`applyAnswerToItem`. This closes the gap regardless of how the original poisoned record was phrased,
+since it now checks what's actually on the page, not history.
+
+**Two other Round 13 findings, not yet fixed — need more data, not another guess:**
+- The résumé-upload fix from last round works on Greenhouse but is confirmed still broken specifically
+  on Ashby, across three separate postings. Since the widened `widerLabelGuess()` check should have
+  caught a merely-hard-to-find label, and it's failing consistently across every Ashby form tried, the
+  more likely explanation now is Ashby's upload widget may not expose a native `<input type="file">`
+  that can be filled via DataTransfer at all (a fully custom drag-and-drop implementation) — needs a
+  live check of `document.querySelectorAll('input[type="file"]').length` on an Ashby page before
+  attempting a fix, rather than guessing at a mechanism that might not even apply.
+- A required 200–400 word "Why Anthropic?" essay was left blank on an otherwise well-filled Greenhouse
+  application, with no clear code-level explanation found (the label passes the wordy-question gate
+  fine, and the answer-length involved is far too long to trip the refusal-detection gate). Flagged
+  for a future round with more diagnostic detail rather than a blind fix.
+
+Verified: `test-round13-fixes.js` reproduces the fuzzy-match gap directly (a poisoned record banked
+under different wording than the current page's label) and confirms the new re-check catches it while
+leaving a genuine, correct learned answer unaffected. `node --check` clean; all prior round test suites
+(5 through 12) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.15: deterministic (not prompt-based) rejection for the company/education bug, bare "Legal Name" gap, widened résumé-upload detection
 
 Round 12 confirmed the v1.13.13 required-field safety net works well (correct banner text on two
 sites, no false alarms), but found the v1.13.14 prompt fix STILL didn't stop "Truckee Meadows

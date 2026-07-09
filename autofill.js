@@ -2005,6 +2005,15 @@
         for (var qi = 0; qi < items.length; qi++) {
           var qItem = items[qi];
           var learned = findLearnedAnswer(bank, qItem.label);
+          // The bank-load filter above only catches a poisoned record whose OWN stored question
+          // wording literally contains "company"/"employer" — but findLearnedAnswer matches by FUZZY
+          // similarity, so a record originally banked under different wording (e.g. "Where are you
+          // currently employed?") still fuzzy-matches THIS page's "Current company" label and slips
+          // through untouched. This is why the deterministic fix appeared to do nothing: it never
+          // covered this application site at all. Re-check against the CURRENT page's actual label,
+          // not the banked record's original wording, so it's caught regardless of how the poisoned
+          // record was originally phrased.
+          if (learned && isSchoolAnsweringCompanyQuestion(qItem.label, learned.answer)) learned = null;
           if (learned && await applyAnswerToItem(qItem, learned.answer)) {
             learned.lastUsedAt = Date.now();
             result.learnedUsed++;
