@@ -1,6 +1,48 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.14: close the school-fallback loophole in the AI-answer prompt (the actual fix for "Truckee Meadows Community College")
+## Update 2026-07-08 (latest) — v1.13.15: deterministic (not prompt-based) rejection for the company/education bug, bare "Legal Name" gap, widened résumé-upload detection
+
+Round 12 confirmed the v1.13.13 required-field safety net works well (correct banner text on two
+sites, no false alarms), but found the v1.13.14 prompt fix STILL didn't stop "Truckee Meadows
+Community College" from appearing — now on a FIFTH distinct Lever tenant (Zoox) — plus two new,
+separate gaps.
+
+1. **Gave up on prompt-only fixes for the company/education bug — added a deterministic code-level
+   rejection instead.** Two rounds of prompt engineering (an explicit "never a school" instruction,
+   then closing the fallback loophole that let the model reach for a school anyway) both failed to
+   stop the same wrong answer from recurring. Rather than attempt a third prompt tweak, added
+   `isSchoolAnsweringCompanyQuestion(question, answer)`: a plain, deterministic check — a
+   "current/present/most-recent company or employer" question whose answer contains an education-
+   institution keyword is rejected outright, the same way a refusal answer is. Applied at BOTH points
+   the wrong answer could reach the field: dropping a poisoned bank record (as before) AND now also
+   rejecting a *fresh* AI answer before it's ever typed in, so even if the model produces the same
+   wrong answer again after the bank is clean, it still never reaches the field — it's left blank and
+   routed to the human, same treatment as CAPTCHA/honeypot/refusal answers.
+
+2. **New: bare "Legal Name*" (Ashby) was left blank — last round's fix was too narrow.** v1.13.13 only
+   added support for "full legal name"; Ashby's actual field is just "Legal Name" with no "full" at
+   all, which still fell through both matcher branches (the contiguous-phrase branch needs "full", and
+   the generic name branch's blanket "legal" exclusion — originally added only to avoid misfiring on
+   "Legal First Name"/"Legal Last Name" — also excluded plain "Legal Name"). Fixed by explicitly
+   matching bare "legal name" and removing "legal" from the generic branch's exclusion list, since
+   "first"/"last" (still excluded) already covered the only cases that exclusion was meant for.
+
+3. **New: a required "Resume*" upload was left completely empty on Ashby.** `attachResume`'s
+   `signals()`-based label check (label[for]/aria-*/narrow ancestor search) couldn't reach the
+   "Resume*" heading sitting above the drag-and-drop widget, and the "exactly one file input" fallback
+   didn't apply either since the form also had a separate Cover Letter upload. Widened the check to
+   also try `widerLabelGuess()` (the dynamic-fallback tier's broader ancestor/sibling text scrape),
+   checked per-input so it correctly distinguishes the résumé upload from a sibling cover-letter one
+   on the same form.
+
+Verified: `test-round12-fixes.js` — the deterministic school-rejection check is confirmed applied at
+both the bank-filter site and the fresh-answer-application site (a wrong answer never reaches the
+field even immediately after the bank is cleaned); the fullName matcher now recognizes bare "Legal
+Name" without regressing the legal-first/last-name exclusion; the widened résumé-upload check
+recognizes an Ashby-style "Resume*" heading while still correctly NOT misidentifying a sibling Cover
+Letter upload. `node --check` clean; all prior round test suites (5 through 11) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.14: close the school-fallback loophole in the AI-answer prompt (the actual fix for "Truckee Meadows Community College")
 
 Confirmed directly with the user: Truckee Meadows Community College is genuinely education-only
 (attended, did not graduate) — never an employer. So the recurring "Current Company" bug (reproduced

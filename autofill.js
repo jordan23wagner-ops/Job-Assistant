@@ -485,12 +485,14 @@
       { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
       { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
       { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
-      // "Please state your FULL LEGAL name" is a real, common phrasing that fell through both
+      // "Full Legal Name" AND bare "Legal Name*" (Ashby: "Please enter your legal name exactly as
+      // shown on your government-issued ID") are both real, common phrasings that fell through both
       // branches: "legal" breaks the contiguous \bfull name\b match, and the generic \bname\b branch
-      // explicitly excludes "legal" (to avoid misfiring on "legal first/last name", which the
-      // firstName/lastName matchers above already own) -- so the whole-name question was left
-      // unmatched and blank. Allow an optional "legal" between "full" and "name" specifically.
-      { v: fullName,          t: function (s) { return /\bfull (legal )?name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle|legal/.test(s)); } }
+      // used to exclude ANY label containing "legal" at all -- overkill, since "first"/"last" (still
+      // excluded below) already cover the ONLY case that exclusion was meant for ("Legal First Name"/
+      // "Legal Last Name", owned by the firstName/lastName matchers above). Bare "Legal Name" with no
+      // first/last qualifier is a whole-name field just like "Full Name" and should match here.
+      { v: fullName,          t: function (s) { return /\bfull (legal )?name\b/.test(s) || /\blegal name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle/.test(s)); } }
     ];
   }
   function isKnownContactField(s, el) {
@@ -572,6 +574,20 @@
     return new RegExp('^(n ?a|not applicable|no image( provided| was provided)?|no image available|' +
       'unable to (view|see|access|answer)' + img + '|cannot (see|view|access)' + img + '|can ?t (see|view|access)' + img + '|' +
       'i (do not|don.?t|cannot|can.?t) (have|see|view|access)' + img + '|no access to (an? )?image|i.?m unable to (see|view|access)' + img + ')$').test(n);
+  }
+  // Third safety net, this time deterministic rather than relying on the AI to self-police: a
+  // "current company"/"employer" question answered with an EDUCATION institution. Two rounds of
+  // prompt-only fixes (explicit "never a school" instruction, then closing a fallback loophole that
+  // let the model reach for a school anyway when it had no clean current employer) both failed to
+  // stop this same wrong answer from reappearing across FIVE different Lever tenants — confirmed with
+  // the user that the institution in question really is education-only, so this is a genuine,
+  // persistent model behavior, not something prompt wording alone reliably fixes. Used both to drop a
+  // poisoned bank record (so a bad answer banked once doesn't replay forever) and to reject a FRESH
+  // AI answer before it's ever applied to the field (so even a still-wrong new answer never gets
+  // typed in) — treated exactly like a refusal: left blank, routed to the human instead of guessed.
+  function isSchoolAnsweringCompanyQuestion(question, answer) {
+    return /\b(current|present|most recent)?\s*(company|employer)\b/i.test(norm(question)) &&
+      /\b(college|university|institute|academy|polytechnic|school)\b/i.test(answer || '');
   }
   // Pure random sampling from a mixed character pool (the old approach) has a real chance of
   // landing zero characters from some required class — with a 5-in-62 special-character density
@@ -1011,7 +1027,14 @@
       // file input and the page text mentions a resume, assume it's the one. Cover letters
       // and "other documents" are left for the human. File inputs are often visually hidden
       // behind an "Attach" button, so visibility is NOT required here.
-      var looksResume = /resume|cv\b|curriculum/.test(s);
+      // signals()/labelText() only look at label[for]/aria-*/a narrow tag-based ancestor search —
+      // observed gap on Ashby: a "Resume*" heading sits above the drag-and-drop widget but outside
+      // that narrow search, AND the form also has a separate Cover Letter upload, so the "exactly
+      // one file input" fallback below doesn't apply either — the résumé input was left completely
+      // unattached. widerLabelGuess's broader ancestor/sibling text scrape (already used by the
+      // dynamic-fallback tier) catches headings the strict label search misses, checked per-input so
+      // it also correctly picks the right one out of several file inputs on the same form.
+      var looksResume = /resume|cv\b|curriculum/.test(s) || /resume|cv\b|curriculum/i.test(widerLabelGuess(el));
       if (!looksResume && !(fileInputs.length === 1 && /resume|curriculum vitae/i.test(document.body.innerText || ''))) continue;
       if (/cover letter|coverletter/.test(s)) continue;
       try {
@@ -1878,14 +1901,11 @@
         if (!rec) return false;
         var n = norm(rec.answer);
         if (!n || /^-+$/.test(n.replace(/\s/g, '')) || (n.length < 30 && /^(select|choose|pick|please select|please choose)\b/.test(n))) return false;
-        // A "current company/employer" question that got banked with an EDUCATION institution as
-        // its answer is a poisoned record from before the education/employment prompt separation
-        // fix — the bank is checked BEFORE the AI is ever called again, so a bad answer banked once
-        // silently reused itself verbatim across every future site with a similarly-worded question,
-        // completely bypassing the prompt fix (observed: identical wrong answer on 3 different Lever
-        // tenants). Dropping it here forces a fresh AI answer this run, which then re-banks correctly.
-        if (/\b(current|present|most recent)?\s*(company|employer)\b/i.test(norm(rec.question)) &&
-            /\b(college|university|institute|academy|polytechnic|school)\b/i.test(rec.answer)) return false;
+        // A "current company/employer" question banked with an EDUCATION institution as its answer
+        // is a poisoned record — the bank is checked BEFORE the AI is ever called again, so a bad
+        // answer banked once would otherwise replay itself verbatim on every future site with a
+        // similarly-worded question. Dropping it forces a fresh AI answer this run.
+        if (isSchoolAnsweringCompanyQuestion(rec.question, rec.answer)) return false;
         return true;
       });
       // A web-app apply session delivers the per-job TAILORED résumé via a window var (set by
@@ -2065,6 +2085,7 @@
                 var aiItem = pass.unanswered[ui];
                 var ans = byIndex[ui + 1];
                 if (ans && looksLikeRefusalAnswer(ans)) continue; // "No image provided."/"N/A"-style non-answer -> leave empty, ask the human instead
+                if (ans && isSchoolAnsweringCompanyQuestion(aiItem.label, ans)) continue; // a fresh AI answer can still be wrong even with the prompt fix -- never type a school into a company/employer question
                 if (ans && await applyAnswerToItem(aiItem, ans)) answeredItems.push(aiItem);
               }
             }
