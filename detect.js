@@ -62,23 +62,33 @@
     row.appendChild(no);
     box.appendChild(row);
     (document.body || document.documentElement).appendChild(box);
+    // Visually auto-dismiss after 30s if untouched; cleared once the user actually clicks something.
+    var autoDismissTimer = setTimeout(function () { if (box.parentNode) box.remove(); }, 30000);
     fill.onclick = function () {
+      clearTimeout(autoDismissTimer);
       // Visible feedback that the click registered at all, and a fallback message if autofill.js
-      // never actually starts within a few seconds — otherwise a silent failure here looks IDENTICAL
-      // to the box just quietly closing, with no signal that anything went wrong.
+      // never actually starts — otherwise a silent failure here looks IDENTICAL to the box just
+      // quietly closing, with no signal that anything went wrong. A single fixed-delay check was
+      // confirmed live to false-positive: the real fill (multi-step DOM interaction + an AI-answer
+      // network round trip for custom questions) routinely takes longer than a few seconds even when
+      // it's working correctly, so a short one-shot check reported "didn't start" while autofill.js
+      // was still legitimately mid-run — misleading the human into thinking nothing happened when
+      // fields were actually filling correctly. Poll instead of a single check, giving it real time.
       msg.textContent = 'Starting…';
       row.style.display = 'none';
       send({ type: 'ATS_OFFER_ACCEPT' });
-      setTimeout(function () {
-        if (!document.getElementById('alicia-apply-banner')) {
+      var checkTries = 0;
+      (function checkStarted() {
+        if (document.getElementById('alicia-apply-banner')) { if (box.parentNode) box.remove(); return; }
+        if (++checkTries > 10) { // 10 * 2s = 20s of real running time before concluding failure
           msg.textContent = '⚠️ Alicia didn’t start — try reloading the page.';
           setTimeout(function () { if (box.parentNode) box.remove(); }, 4000);
-        } else if (box.parentNode) { box.remove(); }
-      }, 3000);
+          return;
+        }
+        setTimeout(checkStarted, 2000);
+      })();
     };
-    no.onclick = function () { box.remove(); send({ type: 'ATS_OFFER_DISMISS', host: location.hostname }); };
-    // Visually auto-dismiss after 30s; not clicking "Not now" means we may offer again later.
-    setTimeout(function () { if (box.parentNode) box.remove(); }, 30000);
+    no.onclick = function () { clearTimeout(autoDismissTimer); box.remove(); send({ type: 'ATS_OFFER_DISMISS', host: location.hostname }); };
   }
 
   // The initial poll (form may render moments after load) plus an open-ended MutationObserver watch:

@@ -1,6 +1,57 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.29: labelText()'s own foundational fallback had the same closest()-too-early bug (fixes Ashby's date-picker discovery), and detect.js now watches page content directly instead of giving up after a fixed 4-second poll (targets ADP's total miss)
+## Update 2026-07-09 (latest) — v1.13.30: date-picker fix from last round was typing free-text ("Negotiable") into a strict widget — now forced to ask the human; and a self-inflicted false-failure banner from last round's own detect.js change is fixed
+
+Round 27 was a breadth pass (10 new-tenant applications) specifically meant to catch problems before
+they compound — and it worked: it caught a real bug in code shipped THIS SESSION (last round),
+alongside confirming/refuting three targeted fixes.
+
+1. **v1.13.29's date-picker discovery fix worked (field is no longer blank), but the AI is typing
+   "Negotiable" into Ashby's date-picker instead of a real date** — a strict widget that needs an
+   actual parseable date, which the AI has no factual basis to invent (résumés don't state a future
+   employment start date). Fixed by detecting date-picker-shaped fields
+   (`el.closest('[class*="datepicker" i], [class*="DatePicker"]')`) and giving them a no-op
+   `apply()` that always returns `false`, reusing the same mechanism combos/checkboxes already use to
+   fall through to the human-ask panel on a failed apply — so the question now correctly gets asked
+   directly rather than silently answered with unusable text.
+2. **Self-inflicted bug: last round's own new "Alicia didn't start" failure message in `detect.js`
+   was false-positiving on real, correctly-working fills.** The breadth pass found 3 of 7 Lever
+   applications (FiscalNote, Zoox, PMA Consultants) showing "⚠ Alicia didn't start — try reloading
+   the page" while several fields had genuinely, correctly filled (email, phone, location) — the
+   real fill (multi-step DOM interaction plus an AI-answer network round trip for custom questions)
+   routinely takes longer than the single fixed 3-second check I shipped last round to confirm the
+   banner had appeared. Replaced the one-shot check with a poll (up to 10 checks × 2s = 20s of real
+   running time) before concluding failure, and clear the box's own unrelated 30s auto-dismiss timer
+   once the user has actually clicked something (previously could race with the new check).
+
+**Still open:**
+- **ADP Workforce Now: v1.13.29's content-mutation watch confirmed NOT to fix it** — no offer banner
+  under any condition (full reload, waiting in place, triggering focus/interaction). New leading
+  hypothesis, not yet confirmed: ADP's own component framework (`ActionLink2`/`MDFButton2` — a
+  proprietary or heavily componentized UI, not plain HTML forms) may render its actual input fields
+  inside a Shadow DOM, which regular `document.querySelectorAll` cannot see into regardless of timing
+  — this would explain why NEITHER the original fixed-poll NOR the new content-watch ever helped,
+  since it was never a timing problem to begin with. Needs a next-round check: whether any element on
+  the page has a non-null `.shadowRoot`, or whether the actual form fields use non-standard/custom
+  tag names.
+- **Checkbox-group question still not fixed after THREE rounds.** Confirmed this round that the
+  `ul[data-qa="checkboxes"]` selector correctly matches (`length` → 1 on live Shield AI), ruling out
+  "selector doesn't match" as the cause. v1.13.28's label-lookup fix has not yet been confirmed
+  working or failing on live re-test — next round needs exactly one more diagnostic:
+  `document.querySelectorAll('ul[data-qa="checkboxes"]')[0].closest('.application-question')` (does
+  it find a match?) and, if so, that match's `.querySelector('.application-label')` text.
+- **General SPA in-page-navigation gap confirmed NOT Smartsheet-specific** — reproduced identically on
+  Horizon Industries and Anduril Industries (both Greenhouse, reached via the page's own in-page
+  "Apply" button): zero Alicia activity, no banner, all fields blank. This is a general Greenhouse
+  SPA-navigation gap, not a one-tenant fluke — still unexplained; v1.13.26's detect.js guard fix and
+  v1.13.29's content-watch apparently aren't sufficient for this specific navigation pattern either.
+  Given the new false-failure-banner bug (item 2 above) may have been MASKING whether these three
+  actually eventually got a real banner given enough time, this needs a clean re-test with the timing
+  fix in place before concluding it's still fully broken.
+- The EEO race/ethnicity multi-select combobox (Smartsheet/Greenhouse) remains unexplained — two
+  hypotheses ruled out (missing preference, broken label association), no new hypothesis yet.
+
+## Update 2026-07-09 — v1.13.29: labelText()'s own foundational fallback had the same closest()-too-early bug (fixes Ashby's date-picker discovery), and detect.js now watches page content directly instead of giving up after a fixed 4-second poll (targets ADP's total miss)
 
 Round 26 delivered three genuinely new, page-console-only diagnostics (no chrome://extensions access
 available in Claude Extension's environment — noted for future rounds) that finally pinned down two

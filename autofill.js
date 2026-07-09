@@ -1404,7 +1404,18 @@
       var textCont = el.closest('fieldset,.form-group,div') || el.parentElement;
       if (mustNeverAnswer(lbl, textCont)) continue; // never AI-answer a CAPTCHA/honeypot — always leave as-is
       seenControls.push(el);
-      pushItem({ type: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', control: el, container: textCont, label: lbl, options: [] });
+      // A date-picker widget (react-datepicker and similar) must be SELECTED/typed as a real date,
+      // never free text -- confirmed live: once discovered via the wideLabelText fix above, the AI
+      // answered Ashby's "When can you start?" with the word "Negotiable", which a strict date
+      // parser will reject or leave uncommitted. The two interactions confirmed to actually work
+      // (typing a real date string, clicking a calendar day) both require an ACTUAL date value the
+      // AI has no factual basis to invent -- so instead of ever typing anything into it, force this
+      // straight to the human via a no-op apply(), same mechanism already used for combos/checkboxes
+      // whose apply() can fail and fall through to needHuman.
+      var isDatePicker = !!el.closest('[class*="datepicker" i], [class*="DatePicker"]');
+      pushItem(isDatePicker
+        ? { type: 'text', control: el, container: textCont, label: lbl, options: [], apply: function () { return false; } }
+        : { type: el.tagName === 'TEXTAREA' ? 'textarea' : 'text', control: el, container: textCont, label: lbl, options: [] });
     }
 
     return out;
