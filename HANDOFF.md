@@ -1,6 +1,49 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.20: the actual explanation for "Truckee Meadows Community College" — it was never Alicia's own pipeline; Ashby button-pair Yes/No questions
+## Update 2026-07-08 (latest) — v1.13.21: stale react-select panel root-caused and fixed, résumé-upload `acceptsTxt` wildcard bug found and fixed
+
+Round 18 confirmed the v1.13.20 Lever fix (correct employer filled, no intermediate wrong value
+observed) and the Ashby button-pair banner fix (correct yellow warning, no false "ready" claim) both
+hold. It also delivered clean, complete diagnostic markup for the two remaining flagged items — both
+now root-caused and fixed.
+
+**Stale "needs N answers" panel — root cause confirmed and fixed.** The full uncut markup showed the
+already-answered field is a react-select combobox where the trigger's own `<input>` always has
+`value=""` (react-select only uses it for typing/searching); the actual selected value lives in a
+sibling `.select__single-value` div several DOM levels away. `comboContainer()`'s fallback selector
+included a bare `div` alternative, and since `.closest()` returns the NEAREST ancestor matching ANY
+part of a combined selector, it stopped at the trigger's own immediate parent div — never reaching the
+wider wrapper that actually contains the sibling value display. `comboValueText()` therefore searched a
+container that structurally could not contain the answer, read nothing, and the field got treated as
+unanswered despite visibly showing "No." Fixed by trying a wider, react-select-shaped wrapper
+(`select__container`/`select-shell`/`Select-container`/`select-container` class patterns, all confirmed
+in the live markup) first, falling back to the original narrow search only when none of those exist —
+strictly additive, no regression risk for comboboxes that don't use this naming convention.
+
+**Ashby résumé-upload gap — a real bug found one level deeper than expected.** The diagnostic showed
+the required field's accept list (`application/pdf,...,image/*,video/*,audio/*`) has no `.txt` or
+`text/plain` entry — but `acceptsTxt()`'s check (`accept.indexOf('*') >= 0`) treated the mere presence
+of ANY asterisk as "accepts everything," including the partial wildcards `image/*`/`video/*`/`audio/*`,
+which only mean "any image/video/audio subtype." That false positive meant Alicia confidently attached
+a `Resume.txt` the site's own validation would reject — and once `el.__aliciaResumeAttached` gets set
+(right after the attempt, regardless of whether the site accepts it), nothing ever retries with the
+correct file. Fixed `acceptsTxt()` to require an exact match on one of the comma-separated accept-list
+entries (`*`, `*/*`, `.txt`, or `text/plain`) instead of a loose substring search. Also added a
+last-resort fallback in `attachResume`: if there's tailored text but the input doesn't declare `.txt`
+support AND there's no stored original file either, attempt the tailored text anyway rather than
+guaranteeing a blank required field — the `accept` attribute is only an OS file-picker hint, not an
+enforced restriction on a programmatically-assigned file, so this can still succeed even when
+`acceptsTxt()` correctly says the input "shouldn't" take it.
+
+Verified: `test-round18-fixes.js` — `comboContainer()` is confirmed (via a constructed DOM matching the
+live-diagnosed structure) to find the wider wrapper containing the sibling value display, while the old
+logic demonstrably does not; `acceptsTxt()` is confirmed to correctly reject Ashby's real accept list
+(previously a false positive) while still accepting genuine wildcard/text-plain lists; the résumé
+fallback decision logic now correctly prefers a stored original over a wrongly-accepted `.txt` attempt,
+and only reaches the last-resort tailored-text attempt when no stored original exists at all. `node
+--check` clean; all prior round test suites (5 through 17) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.20: the actual explanation for "Truckee Meadows Community College" — it was never Alicia's own pipeline; Ashby button-pair Yes/No questions
 
 Round 17 re-tested the Lever fix on option 2 (a fresh posting on an already-tested tenant, since the
 fixed 60-posting Search pool contains no new Lever tenants) — still broken. Also re-tested the Ashby

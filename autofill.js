@@ -998,6 +998,17 @@
   // its control div and its inner input — the container dedupe keeps the first).
   var COMBO_TRIGGER_SELECTOR = '[role="combobox"], [aria-haspopup="listbox"], input[aria-autocomplete="list"], input[aria-autocomplete="both"], [class*="select__control"], [class*="Select-control"]';
   function comboContainer(trig) {
+    // react-select (and similar libraries) render the trigger's own typing <input> and its sibling
+    // "selected value" display several levels apart, both nested well below the real field wrapper.
+    // The narrow fallback below's bare `div` alternative stops at the trigger's OWN immediate parent
+    // (itself just a div, e.g. "select__input-container") since .closest() returns the NEAREST match
+    // across the whole combined selector — never reaching the wider wrapper that actually contains
+    // the sibling "select__single-value" element. Confirmed live: a react-select combobox already
+    // showing "No" was still flagged as unanswered because comboValueText() searched a container that
+    // didn't include the value display at all. Try a wider, react-select-shaped wrapper first; only
+    // fall back to the narrow generic search when none of those specific patterns exist.
+    var wide = trig.closest('[class*="select__container"], [class*="select-shell"], [class*="Select-container"], [class*="select-container"]');
+    if (wide) return wide;
     return trig.closest('fieldset,.form-group,[class*="field"],[class*="question"],div') || trig.parentElement;
   }
   function visibleComboTriggers() {
@@ -1039,8 +1050,17 @@
     return new File([bytes], rec.name || 'resume.pdf', { type: rec.type || 'application/pdf' });
   }
   function acceptsTxt(el) {
-    var a = (el.getAttribute('accept') || '').toLowerCase();
-    return !a || a.indexOf('.txt') >= 0 || a.indexOf('text/plain') >= 0 || a.indexOf('*') >= 0;
+    var a = (el.getAttribute('accept') || '').toLowerCase().trim();
+    if (!a) return true;
+    // A loose `indexOf('*')` treated "image/*,video/*,audio/*" (Ashby's real accept list on its
+    // required résumé field, confirmed live) as if it meant "accepts any file at all," including
+    // .txt — it doesn't; "image/*" only ever means "any image subtype." That false positive let
+    // Alicia confidently attach a Resume.txt the site's own validation actually rejects, silently
+    // leaving the required field empty (the site clears .files; Alicia's own "already attached"
+    // marker then prevents ever retrying with the correct format). Require an EXACT match on one of
+    // the comma-separated entries instead of a loose substring search.
+    var parts = a.split(',').map(function (p) { return p.trim(); });
+    return parts.indexOf('*') >= 0 || parts.indexOf('*/*') >= 0 || parts.indexOf('.txt') >= 0 || parts.indexOf('text/plain') >= 0;
   }
   function attachResume(resumeFileRec, tailoredText) {
     var hasStored = !!(resumeFileRec && resumeFileRec.b64);
@@ -1090,7 +1110,14 @@
         // the uploaded document matches the tailored answers — otherwise the stored original.
         if (tailoredText && acceptsTxt(el)) dt.items.add(new File([tailoredText], 'Resume.txt', { type: 'text/plain' }));
         else if (hasStored) dt.items.add(b64ToFile(resumeFileRec));
-        else continue; // tailored-only but this input rejects .txt — leave it for the human
+        // Observed live: a REQUIRED résumé field left completely blank because tailoredText existed
+        // but acceptsTxt(el) said no, and there was no stored original file to fall back to — a
+        // guaranteed-empty required field is worse than an imperfect attach. The accept attribute is
+        // only an OS file-picker HINT; it does not actually block a file programmatically assigned via
+        // DataTransfer, so attempting the tailored text anyway here can still succeed even when
+        // acceptsTxt() says the input "shouldn't" take it.
+        else if (tailoredText) dt.items.add(new File([tailoredText], 'Resume.txt', { type: 'text/plain' }));
+        else continue; // no tailored text and no stored original at all — leave it for the human
         el.files = dt.files;
         el.__aliciaResumeAttached = true;
         el.dispatchEvent(new Event('change', { bubbles: true }));
