@@ -1,6 +1,56 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.21: stale react-select panel root-caused and fixed, résumé-upload `acceptsTxt` wildcard bug found and fixed
+## Update 2026-07-08 (latest) — v1.13.22: first high-volume test round (17 applications, 17 tenants) — panel-undercounting fixed, two new issues flagged for diagnostic
+
+First round using the new "Tier 1" high-density testing format: 17 applications across 17 distinct
+tenants (10 Lever, 5 Greenhouse, 2 Ashby) in a single round, reported in a compact structured format
+instead of prose per application. This immediately surfaced patterns that single-application testing
+hadn't made visible before.
+
+**Confirmed holding, no action needed:** the Lever "org"-field fix (10/10 Lever apps got a real
+employer, several with `org` itself marked required — none got a school), the Ashby button-pair
+required-field detection, and the résumé-upload fix on at least one Greenhouse tenant (Atoms/cssmerge).
+
+**Fixed this round: the "Alicia needs N answers" panel was consistently undercounting how much was
+actually left to do.** Reproduced 4 times across 2 platforms (Humata Health, FiscalNote, Anduril,
+Success Academy) — e.g. FiscalNote's panel said "needs 1 answer" (an *optional* GitHub URL field)
+while 5 actual required fields sat blank; Anduril's panel said "needs 1 answer" while 3 required
+`<select>` fields were empty. Root cause: the panel only ever lists items the discovery pipeline
+recognized as an unanswerable custom *question* — it was never a comprehensive "everything still
+blank" checklist, and a plain required text/select field the discovery logic doesn't recognize as a
+"question" at all (most of what's actually driving these gaps) never had a chance to appear there. The
+comprehensive scan for exactly this (`hasUnfilledRequiredField()`) already existed, but only ever ran
+right before the "ready to submit" banner — a shown panel always broke out of the loop before reaching
+that check. Now also runs whenever the panel is shown, surfacing a combined note ("Also worth checking:
+other required fields on this page are still empty beyond what's listed in this panel") alongside the
+existing EEO-fill note, so the human isn't misled into thinking the panel is the whole story.
+
+**Flagged, not fixed — need dedicated diagnostics next round:**
+- **New, high-value: a thrown JS exception during résumé upload** — `Cannot read properties of
+  undefined (reading 'uploadFile')`, rendered visibly on the page, reproduced identically across THREE
+  different Greenhouse tenants (Elevations Credit Union, Success Academy, Judi Health/Capital Rx), while
+  a fourth Greenhouse tenant (Atoms) attached cleanly in the same round. This looks like a real,
+  reproducible bug (not random site flakiness) tied to a specific newer Greenhouse upload-widget variant
+  some tenants have and others don't — needs the widget's markup and, ideally, a full stack trace before
+  attempting a fix, since guessing at a mechanism this specific has repeatedly gone wrong this session.
+- **Humata Health (Ashby): autofill appears to have done almost nothing** (no standard fields filled at
+  all — not even name/email) yet still produced a 2-item question panel, meaning the run did execute
+  and reach the panel-showing code, just without filling anything conventional along the way. Possibly a
+  non-standard/white-labeled Ashby integration with different markup throughout; needs the actual field
+  markup to diagnose rather than a guess.
+- **3Pillar Global (Lever): banner claimed required fields were still empty when the tester visually
+  confirmed everything was filled.** Likely a timing artifact rather than a real bug — the SAME round
+  independently observed and self-corrected an identical false-negative-on-first-check pattern on a
+  different tenant (Zoox), consistent with the banner being a snapshot that can trail a slightly-later
+  successful re-fill from the mutation-observer rerun. Noted, not treated as confirmed until it
+  reproduces without an immediate-recheck explanation.
+
+Verified: `test-round19-fixes.js` confirms the required-field note now surfaces alongside the panel
+(and combines correctly with the EEO note rather than one overwriting the other), while a genuinely
+clean form produces no spurious extra note. `node --check` clean; all prior round test suites (5
+through 18) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.21: stale react-select panel root-caused and fixed, résumé-upload `acceptsTxt` wildcard bug found and fixed
 
 Round 18 confirmed the v1.13.20 Lever fix (correct employer filled, no intermediate wrong value
 observed) and the Ashby button-pair banner fix (correct yellow warning, no false "ready" claim) both

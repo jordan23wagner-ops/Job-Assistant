@@ -2216,7 +2216,18 @@
                 // Ask directly in an interactive panel (dropdowns get a real option list); saving
                 // banks each answer in the learned store and resumes filling automatically. The
                 // confirm-capture above still learns if they dismiss it and edit the page instead.
-                if (result.eeoFilled > 0) showBanner('Alicia also auto-filled ' + result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' from your saved preferences — please double-check them too.', '#e0a800');
+                // The panel itself only ever lists items Alicia recognized as an unanswerable custom
+                // QUESTION — it was never meant as a full "everything still blank" checklist, but
+                // observed repeatedly in practice: a form with many MORE required fields still empty
+                // (a plain required text/select the discovery logic doesn't recognize as a "question"
+                // at all) showed a panel claiming only 1-2 answers needed, badly understating how much
+                // was actually left. The comprehensive required-field scan already exists (used right
+                // before the "ready to submit" banner) but never ran on this path, since a shown panel
+                // always breaks the loop before reaching that check. Surface it here too.
+                var extraNotes = [];
+                if (result.eeoFilled > 0) extraNotes.push(result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' auto-filled from your saved preferences');
+                if (hasUnfilledRequiredField()) extraNotes.push('other required fields on this page are still empty beyond what\'s listed in this panel');
+                if (extraNotes.length) showBanner('Also worth checking: ' + extraNotes.join('; ') + ' — please review the whole form, not just this panel.', '#e0a800');
                 showQuestionPanel(needHuman);
               } else {
                 result.status = 'answered_review';
