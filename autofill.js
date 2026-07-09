@@ -1567,6 +1567,41 @@
     }
     return false;
   }
+  // Greenhouse's own résumé-upload widget can throw internally and paint the raw JS error message
+  // into its own field-error slot instead of a normal validation message — confirmed live:
+  // "Cannot read properties of undefined (reading 'uploadFile')" in a <p id="resume-error">, never
+  // reaching the console. Reproduced only after several Greenhouse forms were processed in the same
+  // tab/session (not on a fresh navigation) — this looks like a Greenhouse-side component/session
+  // lifecycle bug, not something Alicia's own attach sequence is doing wrong (the underlying <input>
+  // markup was byte-identical between a failing and a working tenant). Nothing here can fix
+  // Greenhouse's own bug, but surfacing its exact message means the human knows WHY the résumé is
+  // missing (a real site-side error) instead of just seeing an unexplained empty required field.
+  function detectResumeUploadSiteError() {
+    var errEl = document.querySelector('.file-upload [id$="-error"], .file-upload .helper-text--error, [class*="file-upload"] [id$="-error"]');
+    var t = errEl ? getText(errEl) : '';
+    return t || null;
+  }
+  // The "still needs work" banner (like "ready to submit") is a one-time snapshot of
+  // hasUnfilledRequiredField() at the moment it's shown — if a field's value changes afterward via a
+  // plain JS property assignment with no corresponding DOM node/attribute change (observed live:
+  // Lever's own async résumé-parse feature completing several seconds after the initial scan), the
+  // banner goes stale, since MutationObserver only ever sees actual DOM tree/attribute mutations,
+  // never a raw .value property set. A bounded, lightweight poll — NOT a full pipeline rerun, so it
+  // can't interfere with anything in-flight — keeps the banner honest for a little while afterward
+  // without needing a real DOM mutation to notice. Only meaningful where hasUnfilledRequiredField()
+  // is the SOLE blocker (the final stop-button step); a shown question panel has its own separate
+  // blocker (unanswered custom questions) that self-resolving one required field can't clear anyway.
+  function watchForLateRequiredFieldFix(buttonText) {
+    var checks = 0;
+    var iv = setInterval(function () {
+      checks++;
+      if (checks > 10 || document.getElementById('alicia-question-panel') || document.getElementById('alicia-nav-panel')) { clearInterval(iv); return; }
+      if (!hasUnfilledRequiredField()) {
+        showBanner('Filled and ready — review everything, then click "' + buttonText + '" yourself. (a field finished filling in after the last check)', '#4caf50');
+        clearInterval(iv);
+      }
+    }, 3000);
+  }
   // Wait for the SPA to settle after an advance click: quiet mutations or timeout.
   function waitForDomSettle(maxMs) {
     return new Promise(function (resolve) {
@@ -2227,6 +2262,8 @@
                 var extraNotes = [];
                 if (result.eeoFilled > 0) extraNotes.push(result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' auto-filled from your saved preferences');
                 if (hasUnfilledRequiredField()) extraNotes.push('other required fields on this page are still empty beyond what\'s listed in this panel');
+                var panelSiteErr = detectResumeUploadSiteError();
+                if (panelSiteErr) extraNotes.push('the site reported an error attaching the résumé: "' + panelSiteErr + '" — try reloading and reapplying');
                 if (extraNotes.length) showBanner('Also worth checking: ' + extraNotes.join('; ') + ' — please review the whole form, not just this panel.', '#e0a800');
                 showQuestionPanel(needHuman);
               } else {
@@ -2241,7 +2278,11 @@
           if (stopBtn) {
             if (hasUnfilledRequiredField()) {
               result.status = 'stopped_needs_input';
-              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + (stopBtn.innerText || stopBtn.value || '').trim() + '".' + eeoNote(result), '#e0a800');
+              var stopBtnText = (stopBtn.innerText || stopBtn.value || '').trim();
+              var siteErr = detectResumeUploadSiteError();
+              var siteErrNote = siteErr ? (' The site itself reported an error attaching the résumé: "' + siteErr + '" — this looks like a bug on the employer\'s own site, not something Alicia can work around; try reloading the page and reapplying, or attach it yourself.') : '';
+              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + stopBtnText + '".' + eeoNote(result) + siteErrNote, '#e0a800');
+              watchForLateRequiredFieldFix(stopBtnText);
               break;
             }
             result.status = 'ready_to_submit';

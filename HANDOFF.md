@@ -1,6 +1,52 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.22: first high-volume test round (17 applications, 17 tenants) — panel-undercounting fixed, two new issues flagged for diagnostic
+## Update 2026-07-08 (latest) — v1.13.23: Greenhouse résumé-upload site error surfaced (not fixable — Greenhouse's own bug), stale-banner root cause found (MutationObserver blind spot) and mitigated
+
+Round 20 was a depth round targeting the two highest-value items Round 19's breadth sweep couldn't
+resolve. Both got clean, complete diagnoses.
+
+**Résumé-upload exception: root-caused, but it's Greenhouse's own bug, not Alicia's.** The three
+previously-failing tenants all succeeded on a fresh navigation — the error only reproduced after
+several Greenhouse forms had been processed in the same browser tab (found via a deliberate same-tab
+reuse test). Full diagnostic confirmed: the error never reaches the browser console — it's raw
+`error.message` text painted directly into Greenhouse's own native field-error slot
+(`<p id="resume-error" class="helper-text--error">`), meaning Greenhouse's own upload-handling code
+threw internally and displayed its own exception text, unrelated to whether the actor is human or
+automated. The underlying `<input id="resume">` markup was byte-identical between a failing and a
+working tenant — same `accept` list, same `id`, no difference Alicia's own attach logic could
+possibly be causing. This looks like a Greenhouse-side component/session lifecycle bug (something not
+re-initializing correctly across repeated form navigations within one tab), which cannot be fixed from
+this repo. What CAN be done: added `detectResumeUploadSiteError()`, which looks for exactly this error
+slot and surfaces its message directly in Alicia's own banner/panel notes ("The site itself reported
+an error attaching the résumé... this looks like a bug on the employer's own site... try reloading the
+page and reapplying") — so a human hitting this sees a clear explanation and an actionable next step
+instead of an unexplained empty required field.
+
+**Stale "still needs work" banner: root cause found — a real gap in the MutationObserver rerun
+mechanism, not the "Current Company" fix.** A deliberate before/after timing check confirmed the org
+field self-corrected to a real employer about 8 seconds after the banner first rendered (Lever's own
+async résumé-parse feature completing later than the initial scan), but the banner text never updated
+— it stayed on the stale "still looks empty" warning indefinitely. Root cause: a plain `.value`
+property assignment (how frameworks commonly update a controlled input) creates no `childList` or
+`attributes` DOM mutation for a MutationObserver configured with only `{childList: true, subtree:
+true}` to see — the observer is structurally blind to exactly this kind of change, so the existing
+rerun mechanism never had a chance to fire and re-evaluate the banner. Rather than restructure the
+observer (attribute observation still wouldn't catch a live DOM property with no attribute reflection,
+and broadening it further risks far more rerun churn for marginal benefit), added a narrowly-scoped,
+bounded polling fallback: `watchForLateRequiredFieldFix()` starts a lightweight check (not a full
+pipeline rerun — can't interfere with anything in-flight) every 3 seconds for up to 30 seconds after
+the "still needs work" banner fires from `hasUnfilledRequiredField()` specifically, and flips the
+banner to the real "ready" state the moment the blocker clears. Bails out immediately if a question
+panel appears (a different, unrelated blocker) rather than ever falsely declaring readiness.
+
+Verified: `test-round20-fixes.js` — `detectResumeUploadSiteError` surfaces the exact diagnosed error
+text and returns null when no error is present (no fabricated notes); the polling logic is confirmed
+to detect a field resolving a few checks after the initial snapshot, to bail out without a false
+"ready" claim if a panel appears mid-poll, and to never falsely declare readiness within its bounded
+check window when genuinely still blocked. `node --check` clean; all prior round test suites (5
+through 19) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.22: first high-volume test round (17 applications, 17 tenants) — panel-undercounting fixed, two new issues flagged for diagnostic
 
 First round using the new "Tier 1" high-density testing format: 17 applications across 17 distinct
 tenants (10 Lever, 5 Greenhouse, 2 Ashby) in a single round, reported in a compact structured format
