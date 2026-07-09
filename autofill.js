@@ -88,21 +88,26 @@
   // the page directly for currently-answered EEO-classified controls means the note reflects reality
   // regardless of which run (or how many reruns ago) actually did the filling.
   function countFilledEeoFields() {
+    // Scoped to genuinely-voluntary self-ID categories only — sponsorship/authorization now flow
+    // through the normal custom-question pipeline when unconfigured (see isVoluntaryEeoKey), so a
+    // filled sponsorship field may be an AI/human answer, not something pulled from saved
+    // preferences; counting it here would make the "auto-filled from your saved preferences"
+    // disclosure inaccurate about where the answer actually came from.
     var count = 0;
     var selects = document.querySelectorAll('select');
     for (var i = 0; i < selects.length; i++) {
       var sel = selects[i];
-      if (eeoKey(signals(sel)) && selectHasRealValue(sel)) count++;
+      if (isVoluntaryEeoKey(eeoKey(signals(sel))) && selectHasRealValue(sel)) count++;
     }
     var groups = radioGroups();
     Object.keys(groups).forEach(function (nm) {
       var rs = groups[nm];
-      if (eeoKey(norm(groupQuestionLabel(rs))) && rs.some(function (r) { return r.checked; })) count++;
+      if (isVoluntaryEeoKey(eeoKey(norm(groupQuestionLabel(rs)))) && rs.some(function (r) { return r.checked; })) count++;
     });
     var combos = visibleComboTriggers();
     for (var i = 0; i < combos.length; i++) {
       var c = combos[i];
-      if (eeoKey(signals(c.trig)) && comboValueText(c.trig, c.container)) count++;
+      if (isVoluntaryEeoKey(eeoKey(signals(c.trig))) && comboValueText(c.trig, c.container)) count++;
     }
     return count;
   }
@@ -110,6 +115,16 @@
     var n = countFilledEeoFields();
     return n > 0
       ? ' (includes ' + n + ' EEO/demographic answer' + (n === 1 ? '' : 's') + ' auto-filled from your saved preferences — please double-check before submitting)'
+      : '';
+  }
+  // Live-scan counterpart to eeoNote(), same reasoning: countAiAnsweredFields() reads the
+  // data-alicia-answered markers left on the page, not a per-pass-local counter, so it survives a
+  // rerun that lands in a different terminal banner branch than the one that actually did the
+  // answering.
+  function aiAnsweredNote() {
+    var n = countAiAnsweredFields();
+    return n > 0
+      ? ' Alicia has answered ' + n + ' custom question' + (n === 1 ? '' : 's') + ' on this page using your résumé/learned answers — please review before continuing.'
       : '';
   }
   function showBanner(text, color) {
@@ -575,6 +590,20 @@
       for (var p = 0; p < EEO[i].pats.length; p++) { if (EEO[i].pats[p].test(s)) return EEO[i].key; }
     }
     return null;
+  }
+  // eeo-sponsorship/eeo-authorization are NOT voluntary self-ID categories like the rest of this
+  // list (race/gender/veteran/disability/orientation/gender-identity are legally-protected and
+  // correctly silent-fill-or-skip) — they're ordinary REQUIRED eligibility screening questions.
+  // Confirmed live: GitLab's required "Will you now or in the future require sponsorship for a visa"
+  // combobox was silently and PERMANENTLY skipped — never asked, never AI-answered, no configured
+  // saved preference to fall back on — because findUnansweredCustomQuestions excluded anything
+  // eeoKey() recognized, with no distinction between "voluntary, correctly stays blank" and
+  // "required, must still be asked if not already answered". Discovery uses THIS narrower check;
+  // eeoKey() itself (and the fillEeo* silent-fill passes) still treat sponsorship/authorization as
+  // EEO categories so an already-configured saved answer keeps auto-filling exactly as before.
+  function isVoluntaryEeoKey(key) {
+    return key === 'eeo-gender' || key === 'eeo-race' || key === 'eeo-veteran' || key === 'eeo-disability' ||
+      key === 'eeo-gender-identity' || key === 'eeo-sexual-orientation';
   }
   // A CAPTCHA must NEVER reach the custom-question AI-answer pipeline — a text-only backend call
   // has no way to actually read the challenge, and asking it anyway risks it answering with some
@@ -1192,7 +1221,7 @@
       if (comboValueText(trig, kcont)) continue; // already has a selection
       var klabel = comboLabelText(trig, kcont).replace(/\s+/g, ' ').trim();
       if (!klabel || klabel.length < 8) continue;
-      if (eeoKey(norm(klabel))) continue; // EEO comboboxes handled by fillEeoComboboxes
+      if (isVoluntaryEeoKey(eeoKey(norm(klabel)))) continue; // voluntary self-ID only -- sponsorship/authorization must still be asked if not already answered
       if (mustNeverAnswer(klabel, kcont)) continue; // never AI-answer a CAPTCHA/honeypot
       var kopts = await harvestComboOptions(trig);
       seenControls.push(trig);
@@ -1214,7 +1243,7 @@
       var cur = (sel.value || '').toLowerCase();
       if (cur && !/select|choose|--|^$/.test(cur)) continue;
       var s = signals(sel);
-      if (eeoKey(s)) continue;
+      if (isVoluntaryEeoKey(eeoKey(s))) continue; // voluntary self-ID only -- sponsorship/authorization must still be asked if not already answered
       var label = labelText(sel) || sel.getAttribute('aria-label') || '';
       if (!label || label.length < 8) continue;
       var selCont = sel.closest('fieldset,.form-group,div') || sel.parentElement;
@@ -1233,7 +1262,7 @@
       if (rs.some(function (x) { return x.checked; })) return;
       var qlabel = groupQuestionLabel(rs);
       if (!qlabel || qlabel.length < 8) return;
-      if (eeoKey(norm(qlabel))) return;
+      if (isVoluntaryEeoKey(eeoKey(norm(qlabel)))) return; // voluntary self-ID only -- sponsorship/authorization must still be asked if not already answered
       var rGroupCont = rs[0].closest('fieldset,.form-group,div');
       if (mustNeverAnswer(qlabel, rGroupCont)) return; // never AI-answer a CAPTCHA/honeypot
       var ropts = rs.map(radioLabel).filter(Boolean);
@@ -1265,9 +1294,27 @@
     return out;
   }
 
+  // Marks a control that got a real bank/AI answer, so a LATER page-wide rerun (any ambient DOM
+  // mutation on the page, not just user interaction, re-triggers the whole engine — see the
+  // MutationObserver setup near the bottom of this file) can still tell the human "Alicia answered
+  // some questions here" even on a pass where nothing was NEWLY answered. Without this, that
+  // information only ever lived in a per-call-local variable and vanished the moment a rerun landed
+  // in a different one of the three terminal banner branches — confirmed live, reproducibly, with NO
+  // user interaction at all (an unrelated page mutation was enough to trigger the rerun).
+  function markAnswered(item) {
+    try {
+      if (item.control && item.control.setAttribute) item.control.setAttribute('data-alicia-answered', '1');
+      if (item.radios) item.radios.forEach(function (r) { if (r.checked) r.setAttribute('data-alicia-answered', '1'); });
+    } catch (e) {}
+  }
+  function countAiAnsweredFields() { return document.querySelectorAll('[data-alicia-answered="1"]').length; }
   async function applyAnswerToItem(item, answerText) {
     if (!answerText) return false;
-    if (item.apply) return await item.apply(answerText); // adapter-provided (e.g. Workday prompt-option dropdown)
+    if (item.apply) { // adapter-provided (e.g. Workday prompt-option dropdown, combobox selectFromCombobox)
+      var applied = await item.apply(answerText);
+      if (applied) markAnswered(item);
+      return applied;
+    }
     if (item.type === 'select') {
       var sel = item.control;
       var best = null, bs = 0;
@@ -1276,13 +1323,18 @@
         var sc = Math.max(score(op.textContent, answerText), score(op.value, answerText));
         if (sc > bs) { bs = sc; best = op; }
       }
-      if (best && bs >= 45) { sel.value = best.value; fire(sel); return true; }
+      if (best && bs >= 45) { sel.value = best.value; fire(sel); markAnswered(item); return true; }
       return false;
     }
-    if (item.type === 'radio') return pickRadio(item.radios, answerText);
+    if (item.type === 'radio') {
+      var picked = pickRadio(item.radios, answerText);
+      if (picked) markAnswered(item);
+      return picked;
+    }
     if (item.control.value && item.control.value.trim()) return false;
     setNativeValue(item.control, answerText);
     fire(item.control);
+    markAnswered(item);
     return true;
   }
 
@@ -2363,7 +2415,7 @@
                 var reviewNote = hasUnfilledRequiredField() ? ' Also worth checking: other required fields on this page are still empty beyond the answered question(s) above.' : '';
                 var reviewSiteErr = detectResumeUploadSiteError();
                 if (reviewSiteErr) reviewNote += ' The site itself reported an error attaching the résumé: "' + reviewSiteErr + '" — try reloading and reapplying.';
-                showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.' + eeoNote() + reviewNote, '#e0a800');
+                showBanner('Alicia filled in what it could here — review/edit, then click Continue yourself.' + aiAnsweredNote() + eeoNote() + reviewNote, '#e0a800');
                 watchForLateRegression(lateRegressionRefill);
               }
               break;
@@ -2377,13 +2429,13 @@
               var stopBtnText = (stopBtn.innerText || stopBtn.value || '').trim();
               var siteErr = detectResumeUploadSiteError();
               var siteErrNote = siteErr ? (' The site itself reported an error attaching the résumé: "' + siteErr + '" — this looks like a bug on the employer\'s own site, not something Alicia can work around; try reloading the page and reapplying, or attach it yourself.') : '';
-              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + stopBtnText + '".' + eeoNote() + siteErrNote, '#e0a800');
+              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + stopBtnText + '".' + aiAnsweredNote() + eeoNote() + siteErrNote, '#e0a800');
               watchForLateRequiredFieldFix(stopBtnText);
               break;
             }
             result.status = 'ready_to_submit';
             result.readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim();
-            showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + eeoNote(), '#4caf50');
+            showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + aiAnsweredNote() + eeoNote(), '#4caf50');
             watchForLateRegression(lateRegressionRefill);
             break;
           }
@@ -2400,7 +2452,7 @@
             }
             if (!recovered) {
               result.status = 'stopped_needs_input';
-              showBanner('Filled what it could — this step needs your input.' + eeoNote(), '#e0a800');
+              showBanner('Filled what it could — this step needs your input.' + aiAnsweredNote() + eeoNote(), '#e0a800');
               break;
             }
           }

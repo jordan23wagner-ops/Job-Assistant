@@ -7,9 +7,15 @@
 // clicks form buttons, or submits anything — it only shows the offer.
 (function () {
   'use strict';
-  if (window.__aliciaDetectRan) return;
-  window.__aliciaDetectRan = true;
   if (/(^|\.)linkedin\.com$/i.test(location.hostname)) return; // content.js owns LinkedIn
+  // A PERMANENT "ran once" guard used to live here — but content scripts survive same-page SPA
+  // route changes (no fresh `window`), so once the FIRST load (e.g. an ATS listing page, no form
+  // yet) finished its poll and found nothing, every LATER re-injection (background.js re-offers on
+  // history.pushState navigation once the real form loads) was an instant no-op. Confirmed live:
+  // zero Alicia UI/activity at all after clicking Greenhouse's own in-page "Apply" button, and on
+  // ADP. Only guard against a poll that's already in flight or an offer that's already showing —
+  // never block a genuinely fresh re-injection from re-scanning the (now different) page.
+  if (window.__aliciaDetectPolling || document.getElementById('alicia-detect-offer')) return;
 
   function visible(el) { return !!el && el.offsetParent !== null; }
 
@@ -53,10 +59,11 @@
   }
 
   // The form may render after initial load (SPA), so poll briefly.
+  window.__aliciaDetectPolling = true;
   var tries = 0;
   (function poll() {
-    if (hasApplicationForm()) { showOffer(); return; }
-    if (++tries > 8) return;
+    if (hasApplicationForm()) { window.__aliciaDetectPolling = false; showOffer(); return; }
+    if (++tries > 8) { window.__aliciaDetectPolling = false; return; }
     setTimeout(poll, 500);
   })();
 })();

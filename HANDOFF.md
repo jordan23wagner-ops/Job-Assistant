@@ -1,6 +1,61 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.25: react-select combobox questions were being silently skipped entirely (GitLab, Smartsheet), a late third-party field-clobber watcher for the two banner paths that never had one, and a background.js fix for ADP's total stall
+## Update 2026-07-09 (latest) — v1.13.26: required sponsorship/authorization questions were misfiled as voluntary EEO and silently skipped forever, detect.js's permanent run-once guard defeated its own re-injection fix, and the "Alicia answered N questions" banner is now durable across reruns
+
+Round 23 (targeted verification + a deliberate hunt for other "whole class" gaps) confirmed v1.13.25's
+combobox-label fix works for most fields, then root-caused why ONE specific field-shape still failed,
+plus a follow-up bug that undermined the ADP fix shipped last round, plus a full explanation (not just
+a workaround) for the banner-reverting behavior first reported two rounds ago.
+
+1. **GitLab's required "Will you now or in the future require sponsorship for a visa" question was
+   still silently and PERMANENTLY skipped, even with v1.13.25's label-discovery fix in place — root
+   cause found: `eeoKey()` classifies "sponsor"/"authoriz"/"eligible to work"-style labels as EEO
+   categories, and `findUnansweredCustomQuestions` excludes ANYTHING `eeoKey()` recognizes from ever
+   being asked or AI-answered, with no configured saved preference to fall back on.** That blanket
+   exclusion is correct for genuinely voluntary, legally-protected self-ID categories (race, gender,
+   veteran status, disability, sexual orientation, gender identity) — it is NOT correct for
+   sponsorship/work-authorization, which are ordinary REQUIRED eligibility screening questions, not
+   protected-characteristic self-ID. Added `isVoluntaryEeoKey()` and use it (instead of a blanket
+   `eeoKey()` truthy check) for the three discovery-exclusion sites in
+   `findUnansweredCustomQuestions` and for `countFilledEeoFields()`'s "please double-check" disclosure
+   scan — sponsorship/authorization now flow through the normal learned-bank → AI-answer →
+   ask-human pipeline when no saved preference is configured, exactly like any other required custom
+   question, while an already-configured saved answer still auto-fills silently exactly as before.
+
+2. **detect.js's own permanent run-once guard (`if (window.__aliciaDetectRan) return`) defeated last
+   round's background.js fix for the ADP total stall, and explains an identical case found fresh on
+   Smartsheet.** Content scripts survive same-page SPA route changes (no fresh `window`), so once the
+   FIRST load (an ATS listing page, no application form yet) finished its poll and found nothing, that
+   boolean stayed `true` forever — every LATER re-injection (background.js correctly re-offering once
+   the real form's URL/route lands, per v1.13.25) was a complete no-op. Confirmed live: zero Alicia
+   UI/activity at all after clicking Greenhouse's own in-page "Apply" button. Replaced the permanent
+   guard with an in-flight-poll / already-showing-offer guard only, so a genuinely fresh re-injection
+   can always re-scan the page's current (possibly now-different) content.
+
+3. **The "Alicia answered N questions — review and continue" banner reverting to generic phrasing,
+   first reported in round 21, is now understood completely: it's not interaction-triggered, it's
+   ANY qualifying DOM mutation anywhere on the page** (the engine's own MutationObserver watches
+   `document.body` with `{childList:true, subtree:true}`, debounced to at most once per 4s) —
+   including ambient third-party page activity completely unrelated to the user (chat widgets, ad
+   refreshes, live viewer counters). Confirmed live: the banner reverted after 30 seconds of
+   deliberately zero interaction. Since `answeredItems.length` is local to each pass, any rerun that
+   finds nothing NEWLY unanswered falls into a different one of the three terminal branches, whose
+   banner text carries no memory that anything was ever answered. Fixed the same way the identical
+   EEO-disclosure bug was fixed in v1.13.24: `applyAnswerToItem` now marks every control it fills
+   (`data-alicia-answered="1"`) via a new `markAnswered()` helper, and a new `aiAnsweredNote()` (a live
+   DOM-marker scan, mirroring `eeoNote()`) replaces the pass-local phrasing and is now appended to
+   ALL FOUR terminal banners consistently (previously only the answered_review one mentioned answered
+   questions at all).
+
+**Still open:** GitLab's sponsorship fix needs live re-verification (untested against a real page
+yet); the newly-confirmed sibling "whole class" gaps from round 23's deliberate hunt — multi-select
+EEO chip comboboxes (e.g. "race/ethnicity — select all that apply"), custom date-picker widgets
+(Ashby's start-date calendar popup), and checkbox-group questions (Shield AI's relocate-offices list)
+— are real, confirmed, structurally novel widget shapes that need their own discovery logic, not yet
+attempted; ADP's own privacy-policy consent gate blocks reaching its real form at all without explicit
+consent authorization, separate from and prior to any Alicia-side issue.
+
+## Update 2026-07-09 — v1.13.25: react-select combobox questions were being silently skipped entirely (GitLab, Smartsheet), a late third-party field-clobber watcher for the two banner paths that never had one, and a background.js fix for ADP's total stall
 
 Round 22 (verification pass + 4 targeted deep dives) closed the loop on two long-standing "why does
 this never get filled" mysteries and produced a strong, evidence-backed hypothesis for the ADP
