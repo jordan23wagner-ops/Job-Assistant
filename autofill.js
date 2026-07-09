@@ -1156,7 +1156,7 @@
     // with the candidate's own COMMUNITY COLLEGE — not invented, genuinely in the resume, but pulled
     // from the EDUCATION section and treated as if it were a job. The model wasn't told to keep those
     // two resume sections separate when a question is specifically about employment.
-    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, never a school. A question specifically about education must be answered ONLY from an education entry. If you cannot reasonably answer from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
+    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. If a question explicitly asks to answer "yes or no" (or is clearly a yes/no question even if phrased as free text), answer with just "Yes." or "No." plus at most one short supporting clause — not a paragraph. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, never a school. A question specifically about education must be answered ONLY from an education entry. If you cannot reasonably answer from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
     var qLines = items.map(function (it, i) {
       var typeLabel = it.multi
         ? '[list one or more values from the resume, comma-separated]'
@@ -1847,7 +1847,16 @@
       var bank = (Array.isArray(data.customQA) ? data.customQA : []).filter(function (rec) {
         if (!rec) return false;
         var n = norm(rec.answer);
-        return n && !/^-+$/.test(n.replace(/\s/g, '')) && !(n.length < 30 && /^(select|choose|pick|please select|please choose)\b/.test(n));
+        if (!n || /^-+$/.test(n.replace(/\s/g, '')) || (n.length < 30 && /^(select|choose|pick|please select|please choose)\b/.test(n))) return false;
+        // A "current company/employer" question that got banked with an EDUCATION institution as
+        // its answer is a poisoned record from before the education/employment prompt separation
+        // fix — the bank is checked BEFORE the AI is ever called again, so a bad answer banked once
+        // silently reused itself verbatim across every future site with a similarly-worded question,
+        // completely bypassing the prompt fix (observed: identical wrong answer on 3 different Lever
+        // tenants). Dropping it here forces a fresh AI answer this run, which then re-banks correctly.
+        if (/\b(current|present|most recent)?\s*(company|employer)\b/i.test(norm(rec.question)) &&
+            /\b(college|university|institute|academy|polytechnic|school)\b/i.test(rec.answer)) return false;
+        return true;
       });
       // A web-app apply session delivers the per-job TAILORED résumé via a window var (set by
       // background.js just before injection). Prefer it — the whole point of tailoring in the

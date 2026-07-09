@@ -1,6 +1,60 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.11: location-typeahead over-match, education/employment prompt separation, passive-offer race condition
+## Update 2026-07-08 (latest) — v1.13.12: poisoned learned-bank record (the REAL fix for the education/employment bug), yes/no answer tightening
+
+Round 10 confirmed two of the three v1.13.11 fixes work (the location-typeahead fix stopped the
+wrong-type "Cypress, Texas" guess; the passive-offer race condition is fixed, confirmed on two
+separate sites) — but the "Truckee Meadows Community College in Current Company" bug was reported as
+STILL happening on a third, brand-new Lever tenant despite last round's system-prompt fix.
+
+**Root cause of why the prompt fix had zero effect: the learned-answer bank short-circuits the AI
+entirely.** `findUnansweredCustomQuestions`'s results are checked against the GLOBAL, cross-site
+`customQA` learned-answer bank BEFORE the AI backend is ever called — by design, so a question the
+human has already answered once doesn't need re-asking. The wrong "Truckee Meadows Community College"
+answer, generated once by the (at the time, unfixed) AI on the very first Lever tenant, got banked as
+the "learned" answer for anything matching "Current Company"-shaped questions — and every subsequent
+site with a similarly-worded field just replayed that exact stale, wrong value straight from the bank,
+never touching the AI (or the new prompt instruction) again at all. This is precisely why the identical
+wrong value kept reappearing verbatim across three different Lever tenants.
+
+Fixed by extending the existing "poisoned record" filter (originally added for a stale "Select an
+option" placeholder bug) with one more targeted rule: a banked record whose QUESTION is about
+"current/present/most recent company or employer" and whose ANSWER contains an education-institution
+keyword (college, university, institute, academy, polytechnic, school) is dropped from the bank before
+use. This forces a fresh AI call for that question on the next run — which now benefits from the Round
+9 prompt fix — and the corrected answer re-banks itself normally afterward, permanently repairing this
+specific stale record going forward. Scoped narrowly (only company/employer-labeled questions), so a
+genuine education question ("What school did you attend?") with an education-institution answer is
+untouched.
+
+**Also tightened: yes/no questions were getting a full paragraph instead of a short answer.** Round 10
+showed the location-typeahead fix correctly routed a Yes/No travel-accommodation question to the
+AI-answer path instead of guessing a location value — but the AI answered with "YES – My experience
+includes managing global programs for Arrow Electronics and coordinating multi-site implementations
+for Modernizing Medicine, showing I can meet location and travel demands," a full justification where
+the page explicitly asked for just "YES or NO." Not wrong, just verbose — added an explicit system-
+prompt instruction: when a question is clearly yes/no (even if phrased as free text), answer with just
+"Yes."/"No." plus at most one short supporting clause.
+
+**Clarified, not a new bug:** the Zoho posting's stall now has stronger evidence it's the SAME
+Tracker-session gap identified in Rounds 8-9, not a separate mystery. Round 10's corrected diagnostic
+(scanning the whole DOM for any fixed-position/high-z-index element, i.e. Alicia's own banner styling)
+found zero such elements — autofill.js left no trace at all, consistent with "never ran," not "ran and
+failed silently." Zoho's "I'm interested" transition is a same-document, no-URL-change SPA swap (per
+the v1.13.4 MutationObserver work), so if no explicit session was ever established when this specific
+job's LISTING page first loaded, the passive click-gated offer (also easy to lose if the SPA transition
+replaces the DOM before it's clicked) would be the only path to activation — and per the tester's own
+practice of never clicking Alicia's own UI, that would never be accepted. Recommend re-testing this
+exact job via Wagner-GPT's Search tab (not Tracker) to confirm; still out of scope to fix from this repo
+without Wagner-GPT in session.
+
+Verified: `test-round10-fixes.js` — the extended poisoned-record filter drops the exact reproduced
+bad record (company/employer question + education-institution answer) while preserving genuine
+company/employer records AND genuine education-question records; confirms the yes/no tightening
+instruction is present in the shipped prompt string. `node --check` clean; all prior round test suites
+(5 through 9) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.11: location-typeahead over-match, education/employment prompt separation, passive-offer race condition
 
 Round 9 confirmed the v1.13.10 EEO fixes work as intended (sexual-orientation/transgender questions
 now silently skip instead of prompting; the EEO transparency note shows up verbatim on the terminal
