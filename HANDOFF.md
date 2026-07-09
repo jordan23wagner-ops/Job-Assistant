@@ -1,6 +1,40 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.13: "full legal name" matcher gap, general "ready to submit" required-field safety net
+## Update 2026-07-08 (latest) — v1.13.14: close the school-fallback loophole in the AI-answer prompt (the actual fix for "Truckee Meadows Community College")
+
+Confirmed directly with the user: Truckee Meadows Community College is genuinely education-only
+(attended, did not graduate) — never an employer. So the recurring "Current Company" bug (reproduced
+on FOUR distinct Lever tenants across several rounds, surviving the v1.13.12 poisoned-bank-record fix)
+was a real, still-unfixed bug, not a misread fact as the prior entry left open as a possibility.
+
+**Root cause: the Round 9 prompt fix had a self-defeating loophole.** The system prompt told the model
+"a company/employer question must be answered ONLY from a work-experience entry, never a school" —
+but the SAME prompt also said, at the end, "if you cannot reasonably answer from the resume, give the
+most conservative reasonable answer." When the resume has no clean current employer to point to (this
+candidate did not graduate from a degree program and doesn't have a tidy "current job" line), the model
+resolved that conflict by treating the fallback instruction as license to reach for a school anyway —
+something is better than nothing, from the model's perspective, even after being told "never a school."
+The v1.13.12 poisoned-bank fix was doing its job correctly (forcing a fresh AI call each round instead
+of replaying a stale answer) — it just kept getting the same wrong fresh answer back each time, which
+is why the symptom looked unchanged despite that fix actually working as designed.
+
+Fixed by closing the loophole explicitly: the prompt now says the "never a school" rule for
+company/employer questions has NO exception, and if no work-experience entry answers it, the model
+must respond exactly "N/A" instead of substituting a school. This connects directly to EXISTING
+infrastructure: `looksLikeRefusalAnswer()` (shipped for the CAPTCHA "No image provided."/"N/A" bug)
+already intercepts a bare "N/A" and refuses to type it into the field, letting it fall through to the
+human-ask path instead — which is exactly the right outcome here, matching how the candidate says they
+handle this exact situation on real applications (give an honest, defensible answer, or skip the
+question/application rather than guess). No new gate was needed; the fix is entirely in what the model
+is now told to say when it genuinely doesn't know.
+
+Verified: confirms the prompt string now contains the explicit no-exception language and the N/A
+fallback instruction, and re-confirms the existing `looksLikeRefusalAnswer()` gate correctly catches a
+bare "N/A" (while correctly noting that gate alone could never have caught a *wrong but confident*
+answer like the school name itself — the fix had to happen at the prompt level, not the gate level).
+`node --check` clean; all prior round test suites (5 through 11) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.13: "full legal name" matcher gap, general "ready to submit" required-field safety net
 
 Round 11 (Search-path only, per the decisive-test plan) found no Zoho/ADP posting available to redo
 that specific comparison, but produced two new, concrete findings on Lever and Greenhouse — both
