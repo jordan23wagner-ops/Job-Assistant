@@ -1,6 +1,45 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.23: Greenhouse résumé-upload site error surfaced (not fixable — Greenhouse's own bug), stale-banner root cause found (MutationObserver blind spot) and mitigated
+## Update 2026-07-08 (latest) — v1.13.24: real data-loss bug found and fixed (location field clobbered by Lever's own async parser), banner gaps closed on a third code path, EEO disclosure no longer vanishes on rerun
+
+Round 21 (breadth, 15 applications) surfaced the most serious finding of this whole "Current Company"
+saga so far: not just a field staying wrong, but a previously-CORRECT field getting silently cleared.
+
+1. **Real data loss, now fixed: Lever's own async résumé-parse feature (the same one responsible for
+   the "Current Company" saga) can clear an already-correctly-filled "Current location" field as a
+   side effect of its own batch update** — observed live landing at the exact same moment the company
+   field self-corrected. Root cause: `atsFillLocationTypeahead`'s one-shot "already handled this field"
+   marker was checked BEFORE any value check, so once a field was successfully filled once, it was
+   never touched again — even after a third party cleared it back to empty. Fixed by only honoring the
+   marker while the field still has a value; if something clears it afterward, Alicia now retries.
+   Confirmed via the same round that this clobbering isn't universal (didn't happen on Zoox in the same
+   round), consistent with tenant-configurable third-party behavior rather than something deterministic
+   in Alicia's own code.
+
+2. **The "Alicia answered N questions — review and continue" banner had the exact same
+   undercounting gap fixed for the panel and stop-button paths two rounds ago, just never closed on
+   this THIRD terminal banner.** Reproduced on 6+ GitLab/Ashby/Lever applications in one round — the
+   banner said "just review and continue" while 3-5 required Select-style eligibility questions sat
+   blank the whole time, never mentioned. Added the same `hasUnfilledRequiredField()` +
+   `detectResumeUploadSiteError()` checks used on the other two paths.
+
+3. **The EEO "please double-check these answers" disclosure was disappearing from the banner within
+   seconds, confirmed on 3 separate applications, with the underlying answers unchanged.** Root cause:
+   `result.eeoFilled` was a per-invocation counter on a fresh `result` object created on every run
+   (including frequent mutation-observer-triggered reruns) — a rerun that did no NEW EEO filling (because
+   the fields were already correctly filled by an earlier run) reported 0, silently dropping the
+   disclosure even though the auto-filled EEO answers were still sitting right there. Replaced with
+   `countFilledEeoFields()`, a live DOM scan for currently-answered EEO-classified controls, so the note
+   reflects actual page state regardless of which run (or how long ago) did the filling.
+
+Verified: `test-round21-fixes.js` — the location-typeahead fix is confirmed to retry a cleared-but-
+previously-marked field while still skipping a field that genuinely still has its value; the
+"answered N questions" banner now surfaces both required-field gaps and résumé site errors, matching
+the other two terminal banners; the EEO note is confirmed to survive a rerun that does no new filling
+(reproducing the old counter-based bug for contrast, then confirming the live-scan version doesn't
+regress). `node --check` clean; all prior round test suites (5 through 20) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.23: Greenhouse résumé-upload site error surfaced (not fixable — Greenhouse's own bug), stale-banner root cause found (MutationObserver blind spot) and mitigated
 
 Round 20 was a depth round targeting the two highest-value items Round 19's breadth sweep couldn't
 resolve. Both got clean, complete diagnoses.

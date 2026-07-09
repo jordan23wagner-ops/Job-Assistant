@@ -79,9 +79,37 @@
   // questions (race, gender, veteran/disability status, etc.) — worth surfacing explicitly rather
   // than blending silently into an undifferentiated fill count, so the human notices and can
   // double-check them before submitting rather than discovering it after the fact.
-  function eeoNote(result) {
-    return result.eeoFilled > 0
-      ? ' (includes ' + result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' auto-filled from your saved preferences — please double-check before submitting)'
+  // A live DOM scan rather than a per-run counter: `result` is a fresh object on every invocation of
+  // window.__aliciaAutofillRun (including the frequent mutation-observer-triggered reruns), so a
+  // counter incremented only on the run that ACTUALLY performed the fill goes back to 0 on every
+  // later rerun — even though the EEO answers are still sitting there, correctly filled. Confirmed
+  // live: the "please double-check these" disclosure disappeared from the banner within seconds on
+  // three separate applications, with no action taken and the underlying answers unchanged. Scanning
+  // the page directly for currently-answered EEO-classified controls means the note reflects reality
+  // regardless of which run (or how many reruns ago) actually did the filling.
+  function countFilledEeoFields() {
+    var count = 0;
+    var selects = document.querySelectorAll('select');
+    for (var i = 0; i < selects.length; i++) {
+      var sel = selects[i];
+      if (eeoKey(signals(sel)) && selectHasRealValue(sel)) count++;
+    }
+    var groups = radioGroups();
+    Object.keys(groups).forEach(function (nm) {
+      var rs = groups[nm];
+      if (eeoKey(norm(groupQuestionLabel(rs))) && rs.some(function (r) { return r.checked; })) count++;
+    });
+    var combos = visibleComboTriggers();
+    for (var i = 0; i < combos.length; i++) {
+      var c = combos[i];
+      if (eeoKey(signals(c.trig)) && comboValueText(c.trig, c.container)) count++;
+    }
+    return count;
+  }
+  function eeoNote() {
+    var n = countFilledEeoFields();
+    return n > 0
+      ? ' (includes ' + n + ' EEO/demographic answer' + (n === 1 ? '' : 's') + ' auto-filled from your saved preferences — please double-check before submitting)'
       : '';
   }
   function showBanner(text, color) {
@@ -1967,7 +1995,14 @@
     for (var i = 0; i < inputs.length; i++) {
       var el = inputs[i];
       if (!visible(el) || el.disabled || el.readOnly) continue;
-      if (el.getAttribute('data-alicia-typeahead')) continue;
+      // The one-shot marker used to be checked alone, permanently skipping this field after the
+      // first successful fill — but a THIRD PARTY (Lever's own async résumé-parse feature, the same
+      // one responsible for the "Current Company" saga) can clear an already-correctly-filled
+      // location field as a side effect of its own batch update, observed live landing at the exact
+      // same moment the company field self-corrects. With the old check, that cleared field could
+      // never be refilled — real data loss, not just a cosmetic staleness issue. Only skip if the
+      // field STILL has a value; if something cleared it since, retry.
+      if (el.getAttribute('data-alicia-typeahead') && (el.value || '').trim()) continue;
       if (!/\blocation\b/.test(signals(el))) continue; // location-specific only
       // A real location-autocomplete field has a short, caption-like label ("Location", "Current
       // Location") — not a full sentence. Observed bug: a Yes/No question merely MENTIONING
@@ -2260,7 +2295,8 @@
                 // before the "ready to submit" banner) but never ran on this path, since a shown panel
                 // always breaks the loop before reaching that check. Surface it here too.
                 var extraNotes = [];
-                if (result.eeoFilled > 0) extraNotes.push(result.eeoFilled + ' EEO/demographic answer' + (result.eeoFilled === 1 ? '' : 's') + ' auto-filled from your saved preferences');
+                var panelEeoCount = countFilledEeoFields();
+                if (panelEeoCount > 0) extraNotes.push(panelEeoCount + ' EEO/demographic answer' + (panelEeoCount === 1 ? '' : 's') + ' auto-filled from your saved preferences');
                 if (hasUnfilledRequiredField()) extraNotes.push('other required fields on this page are still empty beyond what\'s listed in this panel');
                 var panelSiteErr = detectResumeUploadSiteError();
                 if (panelSiteErr) extraNotes.push('the site reported an error attaching the résumé: "' + panelSiteErr + '" — try reloading and reapplying');
@@ -2268,7 +2304,14 @@
                 showQuestionPanel(needHuman);
               } else {
                 result.status = 'answered_review';
-                showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.' + eeoNote(result), '#e0a800');
+                // Same gap as the panel path above, confirmed live across 6+ applications in one
+                // round: this banner said "just review and continue" while OTHER required fields
+                // elsewhere on the page (never recognized as a "question" at all) sat blank the whole
+                // time, with no indication anything else was missing.
+                var reviewNote = hasUnfilledRequiredField() ? ' Also worth checking: other required fields on this page are still empty beyond the answered question(s) above.' : '';
+                var reviewSiteErr = detectResumeUploadSiteError();
+                if (reviewSiteErr) reviewNote += ' The site itself reported an error attaching the résumé: "' + reviewSiteErr + '" — try reloading and reapplying.';
+                showBanner('Alicia answered ' + answeredItems.length + ' question' + (answeredItems.length === 1 ? '' : 's') + ' here — review/edit, then click Continue yourself.' + eeoNote() + reviewNote, '#e0a800');
               }
               break;
             }
@@ -2281,13 +2324,13 @@
               var stopBtnText = (stopBtn.innerText || stopBtn.value || '').trim();
               var siteErr = detectResumeUploadSiteError();
               var siteErrNote = siteErr ? (' The site itself reported an error attaching the résumé: "' + siteErr + '" — this looks like a bug on the employer\'s own site, not something Alicia can work around; try reloading the page and reapplying, or attach it yourself.') : '';
-              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + stopBtnText + '".' + eeoNote(result) + siteErrNote, '#e0a800');
+              showBanner('Filled what it could, but some required fields still look empty — please check the whole form before clicking "' + stopBtnText + '".' + eeoNote() + siteErrNote, '#e0a800');
               watchForLateRequiredFieldFix(stopBtnText);
               break;
             }
             result.status = 'ready_to_submit';
             result.readyButtonText = (stopBtn.innerText || stopBtn.value || '').trim();
-            showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + eeoNote(result), '#4caf50');
+            showBanner('Filled and ready — review everything, then click "' + result.readyButtonText + '" yourself.' + eeoNote(), '#4caf50');
             break;
           }
           if (hasVisibleError()) {
@@ -2303,7 +2346,7 @@
             }
             if (!recovered) {
               result.status = 'stopped_needs_input';
-              showBanner('Filled what it could — this step needs your input.' + eeoNote(result), '#e0a800');
+              showBanner('Filled what it could — this step needs your input.' + eeoNote(), '#e0a800');
               break;
             }
           }
