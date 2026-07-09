@@ -23,15 +23,24 @@ other genuinely fixed and verified.
    before moving to the next field, so this is a faithful rather than exotic interaction, and matches
    the working theory that ADP's framework re-syncs its internal state specifically on blur.
 
-**Still open:**
-- **ADP fix (item 2) is not yet verified against a live re-test** — well-evidenced by the isolated
-  repro, but the actual fix (focus/blur wrapping) hasn't been confirmed to solve it yet. If it's still
-  reverting after this, the next escalation is real per-character keyboard event simulation
-  (keydown/keypress/input/keyup per character) rather than a bulk value-set — a bigger, slower change
-  best held in reserve until focus/blur is ruled insufficient.
-- General Greenhouse SPA-nav gap and the EEO race/ethnicity multi-select combobox — both still fully
-  open, no new hypotheses since their last updates; lowest priority of the remaining open items given
-  ADP has had the most investment and is now down to one specific, testable next step.
+**CONFIRMED on live re-test (round 33): ADP is closed.** First Name ("Jordan"), Last Name ("Wagner"),
+and Email ("Jordan23wagner@gmail.com") all filled correctly and held their values (re-checked 5s
+later, unchanged) — the first time in 6 rounds of testing these fields have held real data on ADP.
+The focus/blur fix worked. The banner still reads "Filled what it could — this step needs your
+input," but it's now ACCURATE rather than false: Mobile Number is still genuinely blank.
+
+One small, separate, lower-priority follow-up noticed in passing: ADP's phone field
+(`#login_view_phone`) apparently ships pre-populated with a literal `"+1"` country-code default,
+which is a non-empty, non-blank string — `fillStdFields()`'s early-exit guard
+(`if (el.value && el.value.trim()) continue;`) correctly-by-its-own-logic treats that as "already has
+a value" and skips it, even though `"+1"` alone isn't a complete phone number. This is a narrow,
+single-field gap (not a repeat of the "total miss" class of bug), and the banner already correctly
+flags it as something the human needs to complete — not chased further this round since it wasn't
+prioritized, but noted here in case it recurs on other platforms with a similar pre-filled
+country-code pattern.
+
+**Still open, lower priority, no fresh angle yet:** general Greenhouse SPA-nav gap, and the EEO
+race/ethnicity multi-select combobox (Smartsheet/Greenhouse).
 
 ## Update 2026-07-09 — v1.13.32: ADP's real root cause found — camelCase field IDs never matched any contact-field regex (norm() doesn't split camelCase); diagnostic marker removed now that its question is answered
 
