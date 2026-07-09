@@ -926,6 +926,59 @@
     return filled;
   }
 
+  // ---------- checkbox-group ("select all that apply") questions ----------
+  // A single required question rendered as a LIST of plain checkboxes, distinct from radioGroups()'s
+  // mutually-exclusive semantics — checking one box doesn't uncheck the others. Confirmed live on
+  // Lever (Shield AI): "What office(s) would you be willing to relocate to?" used Lever's own
+  // semantic native-question markup (ul[data-qa="checkboxes"], .application-label, not hashed CSS
+  // module classes), previously entirely undiscovered and left unchecked. `data-qa="checkboxes"` is
+  // a Lever test-id attribute, not app-specific styling — stable across Lever tenants.
+  function checkboxLabel(box) {
+    var w = box.closest('label');
+    if (w) return getText(w);
+    if (box.id) { var l = document.querySelector('label[for="' + box.id + '"]'); if (l) return getText(l); }
+    return box.value || '';
+  }
+  function checkboxGroups() {
+    var out = [];
+    var uls = document.querySelectorAll('ul[data-qa="checkboxes"]');
+    for (var i = 0; i < uls.length; i++) {
+      var boxes = Array.prototype.slice.call(uls[i].querySelectorAll('input[type="checkbox"]'))
+        .filter(function (b) { return (visible(b) || visible(b.closest('label'))) && !b.disabled; });
+      if (boxes.length >= 2) out.push({ ul: uls[i], boxes: boxes });
+    }
+    return out;
+  }
+  function checkboxGroupQuestionLabel(ul) {
+    var card = ul.closest('.application-question, fieldset, li, div');
+    if (!card) return '';
+    var lg = card.querySelector('.application-label, legend, label');
+    return lg ? getText(lg) : '';
+  }
+  // Multi-select answer matching: the AI (or a learned bank hit) returns a comma-separated list of
+  // chosen option texts — same convention already used for adapter multi:true items — and each is
+  // matched independently against the checkbox labels, so a partial-match answer still checks every
+  // option it can confidently identify rather than all-or-nothing.
+  function applyCheckboxGroupAnswer(boxes, answerText) {
+    var wants = String(answerText || '').split(/\s*[,;]\s*|\s+and\s+/i).map(function (w) { return w.trim(); }).filter(Boolean);
+    if (!wants.length) return false;
+    var checkedAny = false;
+    for (var i = 0; i < boxes.length; i++) {
+      if (boxes[i].checked) continue;
+      var lbl = checkboxLabel(boxes[i]);
+      for (var w = 0; w < wants.length; w++) {
+        if (score(lbl, wants[w]) >= 55) {
+          boxes[i].checked = true;
+          boxes[i].dispatchEvent(new Event('click', { bubbles: true }));
+          boxes[i].dispatchEvent(new Event('change', { bubbles: true }));
+          checkedAny = true;
+          break;
+        }
+      }
+    }
+    return checkedAny;
+  }
+
   // EEO/demographic dropdowns rendered as comboboxes: Workday-style listbox buttons AND
   // react-select inputs (Greenhouse demographic questions — the old pass skipped INPUT triggers,
   // so those were typed into by nothing and left unanswered). Selects the option from saved prefs.
@@ -935,9 +988,15 @@
       var c = combos[ti];
       try {
         if (comboValueText(c.trig, c.container)) continue; // already has a real selection
-        var tKey = eeoKey(signals(c.trig));
+        // signals(trig) alone uses labelText()'s narrow closest('div') lookup, which suffers the
+        // SAME wide-wrapper gap fixed for custom questions (comboLabelText) — confirmed live on a
+        // Smartsheet "race/ethnicity (select all that apply)" react-select multi that was never
+        // even classified as EEO, let alone filled. Fold the widened label in as an extra signal.
+        var tKey = eeoKey(norm(comboLabelText(c.trig, c.container) + ' ' + signals(c.trig)));
         if (!tKey || !eeo[tKey]) continue;
-        if (await selectFromCombobox(c.trig, eeo[tKey])) filled++;
+        // Multi-select react-selects (aria-multiselectable menus) don't auto-close on pick the way
+        // single-selects do -- close explicitly after selecting so the menu doesn't sit open.
+        if (await selectFromCombobox(c.trig, eeo[tKey])) { filled++; closeComboMenu(c.trig); }
       } catch (e) { /* one odd widget shouldn't abort the rest */ }
     }
     return filled;
@@ -1270,6 +1329,29 @@
       pushItem({ type: 'radio', control: null, radios: rs, container: rGroupCont, label: qlabel, options: ropts });
     });
 
+    // Checkbox-group ("select all that apply") questions with nothing checked yet.
+    var cboxGroups = checkboxGroups();
+    for (var cgi = 0; cgi < cboxGroups.length; cgi++) {
+      var cg = cboxGroups[cgi];
+      if (cg.boxes.some(function (b) { return b.checked; })) continue; // already has an answer
+      var cglabel = checkboxGroupQuestionLabel(cg.ul);
+      if (!cglabel || cglabel.length < 8) continue;
+      if (isVoluntaryEeoKey(eeoKey(norm(cglabel)))) continue; // voluntary self-ID (e.g. race multi-select) handled by fillEeoComboboxes/its own pass, not here
+      var cgCont = cg.ul.closest('.application-question, fieldset, li, div') || cg.ul.parentElement;
+      if (mustNeverAnswer(cglabel, cgCont)) continue; // never AI-answer a CAPTCHA/honeypot
+      var cgOpts = cg.boxes.map(checkboxLabel).filter(Boolean);
+      if (cgOpts.length < 2 || cgOpts.length > 15) continue;
+      seenControls = seenControls.concat(cg.boxes);
+      out.push((function (boxes, cont, lbl, opts) {
+        return {
+          type: 'checkbox', control: null, checkboxes: boxes, container: cont, label: lbl, options: opts, multi: true,
+          apply: function (ans) { return applyCheckboxGroupAnswer(boxes, ans); },
+          getValue: function () { return boxes.filter(function (b) { return b.checked; }).map(checkboxLabel).join(', '); }
+        };
+      })(cg.boxes, cgCont, cglabel, cgOpts));
+      if (out.length >= CUSTOM_QA_MAX_PER_STEP) return out;
+    }
+
     // Text inputs / textareas with a question-looking label, still empty, not contact fields.
     var texts = document.querySelectorAll('input[type="text"], input[type="number"], input:not([type]), textarea');
     for (var i = 0; i < texts.length; i++) {
@@ -1305,6 +1387,7 @@
     try {
       if (item.control && item.control.setAttribute) item.control.setAttribute('data-alicia-answered', '1');
       if (item.radios) item.radios.forEach(function (r) { if (r.checked) r.setAttribute('data-alicia-answered', '1'); });
+      if (item.checkboxes) item.checkboxes.forEach(function (b) { if (b.checked) b.setAttribute('data-alicia-answered', '1'); });
     } catch (e) {}
   }
   function countAiAnsweredFields() { return document.querySelectorAll('[data-alicia-answered="1"]').length; }

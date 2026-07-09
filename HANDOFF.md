@@ -1,6 +1,64 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.26: required sponsorship/authorization questions were misfiled as voluntary EEO and silently skipped forever, detect.js's permanent run-once guard defeated its own re-injection fix, and the "Alicia answered N questions" banner is now durable across reruns
+## Update 2026-07-09 (latest) — v1.13.27: EEO multi-select comboboxes were never classified as EEO at all (same label-discovery gap, different call site), and a new checkbox-group ("select all that apply") question type is now discovered and answered
+
+Round 24 confirmed v1.13.26's sponsorship fix and banner-durability fix both hold cleanly on live
+re-test, with no reversion. It also confirmed the SPA-navigation gap is still NOT fully fixed (a
+second, different route into it — Greenhouse's own in-page "Apply" — still shows zero Alicia
+activity) and that ADP Workforce Now's real form is a total miss even past its consent gate — both
+still open, see below. Two of the four widget shapes found in round 23's deliberate hunt got clean,
+well-evidenced fixes; the other two (date-picker, toggle-button pairs) are deferred pending a live
+interaction diagnostic rather than shipping a guessed fix for something as fiddly as a calendar click.
+
+1. **EEO multi-select comboboxes (e.g. "race/ethnicity — select all that apply") were never even
+   classified as EEO, confirmed via full markup: a react-select multi (`aria-multiselectable="true"`
+   menu, `role="option"` items) whose trigger carries no name/aria-label/placeholder mentioning race
+   at all.** Root cause: `fillEeoComboboxes` classified fields using `eeoKey(signals(trig))`, and
+   `signals()` calls the OLD narrow `labelText()` — the exact same wide-wrapper gap fixed for custom
+   questions via `comboLabelText()` two rounds ago (v1.13.25), just never applied to this second call
+   site. Folded `comboLabelText(trig, container)` in as an additional classification signal. Also
+   added an explicit `closeComboMenu()` after a successful multi-select pick, since multi-select
+   react-selects don't auto-close the menu on selection the way single-selects do.
+2. **New question type: checkbox-group ("select all that apply" rendered as a plain checkbox list,
+   not radios).** Confirmed live on Lever (Shield AI): "What office(s) would you be willing to
+   relocate to?" used Lever's own semantic native markup (`ul[data-qa="checkboxes"]`,
+   `.application-label` — a Lever test-id attribute and BEM-ish class, not hashed CSS modules, so
+   reasonably stable across Lever tenants), previously entirely undiscovered since only
+   `radioGroups()` (mutually-exclusive) existed. Added `checkboxGroups()`/`checkboxLabel()`/
+   `checkboxGroupQuestionLabel()` (mirroring the radio-group helpers) and
+   `applyCheckboxGroupAnswer()`, which matches a comma-separated multi-answer against every option
+   independently (reusing the same `multi:true`/comma-separated-answer convention already established
+   for adapter-provided multi-select items) rather than all-or-nothing. Wired into
+   `findUnansweredCustomQuestions` and `markAnswered()`.
+
+**Still open:**
+- **SPA in-page navigation gap not fully fixed** — reaching a Greenhouse application via the site's
+  OWN client-side "Apply" routing (not a fresh URL load) still produces zero Alicia DOM elements and
+  no banner, re-confirmed live on Smartsheet even after v1.13.26's detect.js guard fix. The
+  `maybeOfferAutofill`/`onHistoryStateUpdated` wiring may not be firing for this specific navigation
+  pattern, or something else is blocking it — needs a background/service-worker console check next
+  round (the page console alone can't distinguish "never injected" from "injected, found nothing").
+- **ADP Workforce Now: total miss even past the consent gate.** With the scoped consent-modal
+  authorization, the real application form loads fine, but Alicia never appears at all — zero
+  `alicia`-prefixed DOM elements, no console activity, checked immediately and 10+ seconds later. The
+  privacy modal was A blocker, not THE blocker; something else about ADP's real form (framework:
+  "ActionLink2"/"MDFButton2", likely a heavily componentized Angular/proprietary UI) needs its own
+  fresh diagnostic — not yet understood.
+- **Ashby date-picker widget** (react-datepicker library, portal-rendered popper with
+  `role="option"` day cells) — deferred. Needs a live check of whether typing a date directly into
+  the input commits a value, or whether a specific calendar day must be clicked, before shipping any
+  fix — guessing at calendar-click mechanics without verification risks a worse-than-nothing "looks
+  like it worked but didn't" result.
+- **Ashby toggle-button pairs** (segmented Yes/No buttons, not native radios) — deferred. The
+  classnames captured (`_container_pjyt6_1`, `_option_1svni_32`) look like build-hashed CSS modules,
+  not stable semantic classes — need to confirm whether the SAME hash appears across multiple Ashby
+  postings (stable enough to key off) or varies per-deployment, before designing a selector.
+- The multi-select EEO combobox fix (item 1 above) still depends on the user's `eeo-race` preference
+  actually being configured in Alicia's saved settings — if it was never set, the field correctly
+  stays blank by design (never guess a protected demographic answer), which would look identical to
+  the bug from the outside. Worth checking directly next round.
+
+## Update 2026-07-09 — v1.13.26: required sponsorship/authorization questions were misfiled as voluntary EEO and silently skipped forever, detect.js's permanent run-once guard defeated its own re-injection fix, and the "Alicia answered N questions" banner is now durable across reruns
 
 Round 23 (targeted verification + a deliberate hunt for other "whole class" gaps) confirmed v1.13.25's
 combobox-label fix works for most fields, then root-caused why ONE specific field-shape still failed,
