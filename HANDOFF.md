@@ -1,6 +1,39 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.32: ADP's real root cause found — camelCase field IDs never matched any contact-field regex (norm() doesn't split camelCase); diagnostic marker removed now that its question is answered
+## Update 2026-07-09 (latest) — v1.13.33: checkbox-group question CONFIRMED fixed after 3 attempts (round 23→30, closed); ADP's value-commit step now includes focus/blur, following a fully isolated live repro of the framework reverting a bare synthetic value-set
+
+Rounds 30-32 finally closed the two longest-running mysteries of the session down to one, with the
+other genuinely fixed and verified.
+
+1. **Checkbox-group ("select all that apply") question CONFIRMED WORKING on live re-test** — Shield
+   AI now correctly checks 3 of 6 relocate-office options matching the posting's own listed locations,
+   with zero panel/human involvement needed (the question is answered directly during the normal
+   fill pass, same as any other multi-select). This closes a bug first found in round 23, through two
+   failed fix attempts (v1.13.27, v1.13.28) before v1.13.28's corrected label lookup turned out to be
+   the actual fix all along — it just took until round 30 to get a clean live re-test confirming it.
+2. **ADP: value-commit step confirmed to actively revert a synthetic value-set, isolated completely
+   outside Alicia's own code.** A hand-run console script using the EXACT same `setNativeValue()` +
+   `fire()` (input/change) technique used successfully on every other tested ATS platform was run
+   directly against `#guestFirstName` on the real ADP form — the value reverted to empty within
+   500ms. This is the single most decisive result of the ADP investigation: it rules out "Alicia's
+   fill pass never reaches these fields" (a hand-run, completely separate script showed the identical
+   failure) and confirms ADP's own framework is actively re-syncing/rejecting the field's state absent
+   something Alicia wasn't doing. Added `el.focus()` before and `el.blur()` after the value-set+fire
+   sequence in `fillStdFields()` specifically — a real user always focuses before typing and blurs
+   before moving to the next field, so this is a faithful rather than exotic interaction, and matches
+   the working theory that ADP's framework re-syncs its internal state specifically on blur.
+
+**Still open:**
+- **ADP fix (item 2) is not yet verified against a live re-test** — well-evidenced by the isolated
+  repro, but the actual fix (focus/blur wrapping) hasn't been confirmed to solve it yet. If it's still
+  reverting after this, the next escalation is real per-character keyboard event simulation
+  (keydown/keypress/input/keyup per character) rather than a bulk value-set — a bigger, slower change
+  best held in reserve until focus/blur is ruled insufficient.
+- General Greenhouse SPA-nav gap and the EEO race/ethnicity multi-select combobox — both still fully
+  open, no new hypotheses since their last updates; lowest priority of the remaining open items given
+  ADP has had the most investment and is now down to one specific, testable next step.
+
+## Update 2026-07-09 — v1.13.32: ADP's real root cause found — camelCase field IDs never matched any contact-field regex (norm() doesn't split camelCase); diagnostic marker removed now that its question is answered
 
 Round 29 confirmed detect.js DOES execute on ADP (the temporary marker appeared every time, from the
 listing page through the consent modal through the real form) — settling the "never injected" question

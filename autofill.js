@@ -768,7 +768,21 @@
       var s = signals(el);
       if (!s) continue;
       for (var f = 0; f < STD.length; f++) {
-        if (STD[f].v && STD[f].t(s, el)) { setNativeValue(el, STD[f].v); fire(el); filled++; break; }
+        if (STD[f].v && STD[f].t(s, el)) {
+          // setNativeValue()+fire() (input/change) alone was confirmed live to get silently reverted
+          // on ADP Workforce Now's own framework -- tested in complete isolation, outside any of
+          // Alicia's own code, with the identical technique used successfully everywhere else in this
+          // file. The revert happens on a delay (not the same tick), consistent with the framework
+          // re-syncing its own state specifically on blur rather than on input/change alone. A real
+          // user always blurs a field before moving to the next one, so simulating that too is a
+          // faithful rather than an exotic interaction -- focus() first so the blur is meaningful.
+          try { el.focus(); } catch (e) {}
+          setNativeValue(el, STD[f].v);
+          fire(el);
+          try { el.blur(); } catch (e) {}
+          filled++;
+          break;
+        }
       }
     }
     return filled;
