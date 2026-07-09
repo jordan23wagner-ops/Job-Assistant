@@ -7,24 +7,10 @@
 // clicks form buttons, or submits anything — it only shows the offer.
 (function () {
   'use strict';
-  // TEMPORARY diagnostic marker, ADP-only (remove once ADP's total miss is understood): four
-  // straight rounds showed zero Alicia activity there under every condition tried (full reload,
-  // waiting, focus interaction), and two fix attempts (content-mutation watch, a shadow-DOM
-  // hypothesis) were both ruled out by direct live evidence -- fields are confirmed plain, reachable
-  // <input> elements in light DOM, not hidden behind timing or encapsulation. What's NOT yet known:
-  // whether this script is even being injected/executed on ADP at all, as opposed to running and
-  // failing silently downstream. This marker answers that unconditionally, before any other logic.
-  if (/(^|\.)adp\.com$/i.test(location.hostname)) {
-    try {
-      if (!document.getElementById('alicia-detect-loaded-marker')) {
-        var marker = document.createElement('div');
-        marker.id = 'alicia-detect-loaded-marker';
-        marker.style.cssText = 'position:fixed;top:0;left:0;z-index:2147483647;background:#e91e63;color:#fff;padding:4px 8px;font:600 11px monospace;';
-        marker.textContent = 'Alicia detect.js executed @ ' + new Date().toISOString();
-        (document.documentElement || document.body).appendChild(marker);
-      }
-    } catch (e) {}
-  }
+  // The v1.13.31 ADP-only diagnostic marker confirmed this script DOES execute there (the pink bar
+  // appeared every time) -- removed now that the question it existed to answer is settled. The real
+  // ADP problem was downstream in autofill.js's own field matching (see signals()/splitCamel: ADP's
+  // camelCase field IDs like "guestFirstName" never matched any contact-field regex), not here.
   if (/(^|\.)linkedin\.com$/i.test(location.hostname)) return; // content.js owns LinkedIn
   // A PERMANENT "ran once" guard used to live here — but content scripts survive same-page SPA
   // route changes (no fresh `window`), so once the FIRST load (e.g. an ATS listing page, no form

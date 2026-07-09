@@ -1,6 +1,51 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.31: confirmed the two v1.13.30 fixes hold, ruled out shadow DOM for ADP and "label unreachable" for checkbox-groups via direct live queries, added a temporary ADP-only diagnostic marker to settle "never injected" vs "fails silently"
+## Update 2026-07-09 (latest) — v1.13.32: ADP's real root cause found — camelCase field IDs never matched any contact-field regex (norm() doesn't split camelCase); diagnostic marker removed now that its question is answered
+
+Round 29 confirmed detect.js DOES execute on ADP (the temporary marker appeared every time, from the
+listing page through the consent modal through the real form) — settling the "never injected" question
+definitively. But it also surfaced something new: the auto-fill offer banner appeared for the first
+time in 5 rounds of ADP testing, Alicia responded to it, and the response banner said "Filled what it
+could — this step needs your input" while First Name, Last Name, and Email were all still confirmed
+empty. That specific banner text only fires from the `hasVisibleError()` branch — meaning ADP's own
+form was showing a visible validation error that Alicia's correction pass couldn't resolve, not a
+"nothing happened" case as previously assumed.
+
+1. **Root cause found: ADP's field IDs (`guestFirstName`, `guestLastName`, `guestEmail`) are camelCase,
+   and `norm()` never splits camelCase boundaries** — it only lowercases and strips punctuation, so
+   `"guestFirstName"` normalizes to the single unbroken token `"guestfirstname"`. Every contact-field
+   matcher in this file keys off `\b` word-boundary regexes (e.g. `\bfirst name\b`/`\bfirstname\b`),
+   and there is no word boundary between "guest" and "First" once concatenated — so the match silently
+   failed and these fields were never even recognized as contact fields, let alone filled. This
+   directly explains both the empty fields AND the (previously assumed unrelated) `hasVisibleError()`
+   banner — ADP's own required-field validation was correctly complaining about fields Alicia never
+   attempted. Added `splitCamel()`, inserting a space at every lower-to-upper transition
+   (`"guestFirstName"` → `"guest First Name"`) before normalizing, applied specifically to the `name`
+   and `id` attributes inside `signals()` — the two attributes actually likely to be camelCase code
+   identifiers — rather than changing `norm()` itself globally, which also processes human-readable
+   label/question text elsewhere in the file where this transformation is unnecessary (though harmless
+   as a no-op there too).
+2. Removed the temporary ADP-only diagnostic marker from `detect.js` (v1.13.31) now that the question
+   it existed to answer — was the script even executing on ADP at all — is conclusively settled (yes).
+
+**Still open:**
+- **ADP fix (item 1) is not yet verified against a live re-test** — plausible and well-evidenced, but
+  the next round needs to confirm First/Last/Email now actually fill, and that the `hasVisibleError()`
+  banner either goes away or accurately reflects a genuinely different remaining problem.
+- **Checkbox-group still fully open after 3 fix attempts.** All structural explanations are now ruled
+  out: the selector matches, the label is reachable, and every checkbox is confirmed visible, enabled,
+  and unchecked via direct live query. The one remaining question needed before touching this a 4th
+  time: does Alicia's question panel ever show an entry for the relocate-offices question at all? This
+  distinguishes "discovery never adds the item" from "discovery succeeds but the AI answer doesn't
+  clear the 55%-match threshold, correctly falling through to the human" from "it gets checked then
+  silently reverted." (A `setNativeValue()`-style fix for the `checked` property was considered as a
+  parallel to how text inputs handle React-controlled fields, but EEO radio buttons on this exact same
+  Lever tenant are confirmed working with a plain `.checked = true` assignment already, which weakens
+  that hypothesis enough that it wasn't shipped without the panel diagnostic first.)
+- General Greenhouse SPA-nav gap and the EEO race/ethnicity multi-select combobox — both still fully
+  open, no new hypotheses since their last updates.
+
+## Update 2026-07-09 — v1.13.31: confirmed the two v1.13.30 fixes hold, ruled out shadow DOM for ADP and "label unreachable" for checkbox-groups via direct live queries, added a temporary ADP-only diagnostic marker to settle "never injected" vs "fails silently"
 
 Round 28 was diagnostics-only by design and delivered exactly that: both of last round's fixes
 (date-picker asks the human instead of faking "Negotiable"; the false "didn't start" banner is gone)

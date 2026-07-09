@@ -439,8 +439,17 @@
   function wideLabelText(el) {
     return climbForLabel(el.parentElement, 4);
   }
+  // norm() lowercases and strips punctuation but never splits camelCase, so a code-style identifier
+  // like ADP's "guestFirstName" normalizes to the single unbroken token "guestfirstname" -- every
+  // contact-field matcher in this file keys off \b word-boundary regexes (e.g. \bfirst name\b), and
+  // there's no boundary between "guest" and "First" once concatenated, so the match silently fails.
+  // Confirmed live: ADP's guestFirstName/guestLastName/guestEmail fields never got recognized as
+  // contact fields at all and stayed completely untouched. Scoped to name/id specifically (the two
+  // attributes actually likely to be camelCase code identifiers) rather than changing norm() itself
+  // globally, which also feeds human-readable label/question text elsewhere in the file.
+  function splitCamel(s) { return (s || '').replace(/([a-z0-9])([A-Z])/g, '$1 $2'); }
   function signals(el) {
-    return norm([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('data-automation-id'), labelText(el)].filter(Boolean).join(' '));
+    return norm([el.getAttribute('autocomplete'), splitCamel(el.getAttribute('name')), splitCamel(el.id), el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('data-automation-id'), labelText(el)].filter(Boolean).join(' '));
   }
 
   // ---------- answer matching ----------
