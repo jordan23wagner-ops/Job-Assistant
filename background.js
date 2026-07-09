@@ -300,13 +300,21 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
   if (!ATS_HOST_RE.test(host)) return;
   var dismissedAt = atsOfferDismissed[host];
   if (dismissedAt && Date.now() - dismissedAt < OFFER_DISMISS_TTL_MS) return;
-  chrome.storage.local.get('autofillSessions', function (data) {
-    var s = (data.autofillSessions || {})[String(tabId)];
-    if (s && Date.now() - (s.startedAt || 0) < ATS_SESSION_TTL_MS) return; // autofill.js already owns this tab
-    setTimeout(function () {
+  // Re-check for an active explicit session right before actually injecting, not just once up
+  // front. The OTHER onUpdated listener above (the real apply-session handler) does its OWN
+  // independent, unsynchronized storage read on this SAME 'complete' event and may still be
+  // writing its session (its own late-adoption fallback + 800ms injection delay) at the moment
+  // THIS listener's first read runs — a genuine time-of-check-to-time-of-use race. Observed live:
+  // fields got filled by a real active session AND this passive offer still popped up regardless.
+  // Waiting out this listener's own delay before reading storage gives the other listener's write
+  // time to land first.
+  setTimeout(function () {
+    chrome.storage.local.get('autofillSessions', function (data) {
+      var s = (data.autofillSessions || {})[String(tabId)];
+      if (s && Date.now() - (s.startedAt || 0) < ATS_SESSION_TTL_MS) return; // autofill.js already owns this tab
       chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['detect.js'] }).catch(function () {});
-    }, 1200);
-  });
+    });
+  }, 1200);
 });
 
 chrome.runtime.onMessage.addListener(function (message, sender) {

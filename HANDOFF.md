@@ -1,6 +1,66 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.10: EEO categories for sexual orientation/gender identity + visible EEO-fill transparency note
+## Update 2026-07-08 (latest) — v1.13.11: location-typeahead over-match, education/employment prompt separation, passive-offer race condition
+
+Round 9 confirmed the v1.13.10 EEO fixes work as intended (sexual-orientation/transgender questions
+now silently skip instead of prompting; the EEO transparency note shows up verbatim on the terminal
+banner) and supplied concrete evidence for three NEW, previously-unreported bugs — all three root-caused
+and fixed this round, plus one important correction to how prior rounds' diagnostics should be read.
+
+1. **Root cause found for "Cypress, Texas" landing in a Yes/No travel-accommodation question.**
+   `atsFillLocationTypeahead` (Greenhouse/Lever/Ashby/SmartRecruiters' location-autocomplete filler)
+   matches ANY text input whose signals contain the bare word "location" — and the question "Are you
+   able to accommodate the location and travel requirements... Please answer YES or NO" contains that
+   word as part of a full sentence, not as a field caption. Fixed by rejecting any candidate whose
+   label reads like an actual question (contains "?", or is longer than 5 words) — a real location
+   field's label is a short caption ("Location", "Current Location"), never a full sentence.
+
+2. **Root cause found for "Truckee Meadows Community College" repeatedly appearing in "Current
+   Company" fields (Test 1 and Test 4, two different Lever tenants).** Not a code bug — a genuine
+   résumé entry (the candidate's own community college, consistent with their area code) getting
+   pulled by the AI-answer backend as if it were a current employer, because the system prompt never
+   told the model to keep the résumé's EDUCATION and WORK EXPERIENCE sections separate when a question
+   is specifically about employment. Added an explicit instruction to `callCustomAnswerBackend`'s
+   system prompt: a "current company"/"current employer" question must be answered ONLY from a
+   work-experience entry, never a school, and vice versa for education-specific questions.
+
+3. **Root cause found for the passive "Auto-fill?" banner appearing even when a real explicit session
+   was already active and correctly filling fields (Test 4, PMA Consultants).** Two independent
+   `chrome.tabs.onUpdated` listeners both fire on the same page-load-complete event and each do their
+   OWN unsynchronized `chrome.storage.local.get` read — a genuine time-of-check-to-time-of-use race:
+   the passive-offer listener's early read can see "no session yet" moments before the real
+   apply-session listener's own (slightly slower) session write lands. Fixed by moving the passive
+   listener's session check to happen right before it actually injects `detect.js` (after its own
+   1200ms delay), instead of once up front — by then the real session listener's write has reliably
+   already landed.
+
+4. **Important correction to prior rounds' diagnostics: `typeof window.__aliciaAutofillRun` is NOT a
+   reliable "did autofill.js run here" check.** Round 9 caught it directly: on the Search-path Lever
+   test, fields visibly filled (proving the script ran), yet the check still came back `"undefined"`.
+   Likely explanation: content scripts execute in an isolated JS world, so a `window.X = ...`
+   assignment made inside autofill.js isn't necessarily visible to `window.X` as evaluated in the
+   page's own console context. This means the Round 8 conclusion that leaned on this check for the
+   Zoho total-fill stall ("proves the script never ran") should be treated as unconfirmed, not proven
+   — it may have run and failed for an unrelated reason. Retiring this diagnostic; future rounds
+   should rely on whether an Alicia banner/console line ever appeared instead (real DOM/console
+   artifacts, not an isolated-world JS global).
+
+**Also clarified, not a bug:** the Tracker-vs-Search finding from last round holds up — Tracker's
+"View posting" link lands on the job LISTING page (no `/apply` in the URL) requiring an extra manual
+click to reach the real form, and even after reaching an identical `/apply` URL to the working
+Search-path tab, only the passive click-gated offer appeared. This is very likely because Tracker's
+flow never sends the `ALICIA_APPLY` message that creates an explicit session — out of scope for this
+repo (Wagner-GPT's Tracker code isn't in this session), but now narrowed down as far as it can be from
+this side.
+
+Verified: `test-round9-fixes.js` — the location-typeahead gate rejects the exact reported question
+while still matching real short location captions; the system prompt is confirmed (by reading the
+actual shipped string) to contain the education/employment separation instruction; the race-condition
+fix is reproduced with a mocked async-storage race that shows the OLD code firing the offer despite an
+active session and the NEW code correctly suppressing it. `node --check` clean on both files; all
+prior round test suites still pass unchanged.
+
+## Update 2026-07-08 — v1.13.10: EEO categories for sexual orientation/gender identity + visible EEO-fill transparency note
 
 Round 8 supplied the exact DOM/console diagnostics requested in v1.13.9, plus a new, more serious
 finding from a third test site. Net result: the two "needs live data" bugs turned out to point at

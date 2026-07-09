@@ -1152,7 +1152,11 @@
   }
 
   async function callCustomAnswerBackend(items, resumeText) {
-    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. If you cannot reasonably answer from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
+    // Observed, reproducible bug: a "Current Company"/"Current Employer"-style question got answered
+    // with the candidate's own COMMUNITY COLLEGE — not invented, genuinely in the resume, but pulled
+    // from the EDUCATION section and treated as if it were a job. The model wasn't told to keep those
+    // two resume sections separate when a question is specifically about employment.
+    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, never a school. A question specifically about education must be answered ONLY from an education entry. If you cannot reasonably answer from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
     var qLines = items.map(function (it, i) {
       var typeLabel = it.multi
         ? '[list one or more values from the resume, comma-separated]'
@@ -1772,6 +1776,14 @@
       if (!visible(el) || el.disabled || el.readOnly) continue;
       if (el.getAttribute('data-alicia-typeahead')) continue;
       if (!/\blocation\b/.test(signals(el))) continue; // location-specific only
+      // A real location-autocomplete field has a short, caption-like label ("Location", "Current
+      // Location") — not a full sentence. Observed bug: a Yes/No question merely MENTIONING
+      // location ("Are you able to accommodate the location and travel requirements...? Please
+      // answer YES or NO") matched the loose /\blocation\b/ signal check above and got "Cypress,
+      // Texas" typed into it instead of an actual answer. Reject anything that reads like a real
+      // question rather than a plain field caption.
+      var lbl = labelText(el) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
+      if (/\?/.test(lbl) || lbl.trim().split(/\s+/).filter(Boolean).length > 5) continue;
       try {
         el.focus();
         setNativeValue(el, query);
