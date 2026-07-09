@@ -575,19 +575,23 @@
       'unable to (view|see|access|answer)' + img + '|cannot (see|view|access)' + img + '|can ?t (see|view|access)' + img + '|' +
       'i (do not|don.?t|cannot|can.?t) (have|see|view|access)' + img + '|no access to (an? )?image|i.?m unable to (see|view|access)' + img + ')$').test(n);
   }
-  // Third safety net, this time deterministic rather than relying on the AI to self-police: a
-  // "current company"/"employer" question answered with an EDUCATION institution. Two rounds of
-  // prompt-only fixes (explicit "never a school" instruction, then closing a fallback loophole that
-  // let the model reach for a school anyway when it had no clean current employer) both failed to
-  // stop this same wrong answer from reappearing across FIVE different Lever tenants — confirmed with
-  // the user that the institution in question really is education-only, so this is a genuine,
-  // persistent model behavior, not something prompt wording alone reliably fixes. Used both to drop a
-  // poisoned bank record (so a bad answer banked once doesn't replay forever) and to reject a FRESH
-  // AI answer before it's ever applied to the field (so even a still-wrong new answer never gets
-  // typed in) — treated exactly like a refusal: left blank, routed to the human instead of guessed.
+  // Third safety net, this time deterministic rather than relying on the AI to self-police: an
+  // EDUCATION institution answering a question that isn't actually about education. Originally
+  // scoped narrowly to "current company/employer"-worded questions, but that kept missing the same
+  // bug on tenants that phrase Lever's identical underlying "org" field differently ("Organization",
+  // "Where do you currently work", etc. — the bug reappeared on a SIXTH and then a SEVENTH tenant
+  // after each narrower attempt). Flipped the logic around: rather than trying to enumerate every
+  // possible phrasing of "company question" (a losing game), start from the answer — if it names a
+  // school, and the CURRENT question isn't clearly ABOUT education, treat it as suspicious regardless
+  // of exactly how the question happens to be worded. A false positive here just means a legitimately
+  // school-related answer to some unrelated question gets left for the human instead of auto-filled
+  // (safe); a false negative means wrong data silently reaches the field (the actual, repeated harm) —
+  // an intentionally asymmetric trade given how many rounds the narrower version kept missing.
   function isSchoolAnsweringCompanyQuestion(question, answer) {
-    return /\b(current|present|most recent)?\s*(company|employer)\b/i.test(norm(question)) &&
-      /\b(college|university|institute|academy|polytechnic|school)\b/i.test(answer || '');
+    var hasSchool = /\b(college|university|institute|academy|polytechnic|school)\b/i.test(answer || '');
+    if (!hasSchool) return false;
+    var isEducationQuestion = /\b(school|college|university|degree|education|major|graduat|academic|coursework|gpa|alma mater)\b/i.test(norm(question));
+    return !isEducationQuestion;
   }
   // Pure random sampling from a mixed character pool (the old approach) has a real chance of
   // landing zero characters from some required class — with a 5-in-62 special-character density

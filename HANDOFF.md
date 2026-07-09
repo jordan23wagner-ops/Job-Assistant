@@ -1,6 +1,46 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.17: Ashby résumé-upload root cause (required-input preference), essay answers were capped too short, silent-exception banner
+## Update 2026-07-08 (latest) — v1.13.18: the (hopefully actually final) fix for "Truckee Meadows Community College" — stopped guessing question phrasings entirely
+
+Round 15's stated priority (deliberately hunting for a Zoho Recruit or ADP Workforce Now posting to
+settle the Tracker-vs-Search theory) came back empty after a genuinely exhaustive effort — 19 distinct
+searches across job titles, industries, and countries in Wagner-GPT's Search tab, zero hits for
+`zoho`/`adp`/`workforcenow` in any result, only Lever/Greenhouse tags ever appearing. That specific
+question stays open, not because it wasn't tested, but because the current job aggregator index
+genuinely doesn't seem to surface these platforms right now — revisit if one turns up naturally rather
+than continuing to spend rounds hunting for it.
+
+The round's real news was a side-finding: "Truckee Meadows Community College" reappeared in "Current
+Company" on an EIGHTH distinct Lever tenant (FiscalNote), despite being verified clean on the seventh
+(3Pillar Global) just one round earlier.
+
+**Root cause: the narrow "is this a company/employer-worded question" detector was still guessing at
+phrasing, and guessing eventually loses.** Lever's application form has one underlying schema field
+for this ("org" in its own internal JSON), but the VISIBLE label text for that field is not fixed
+across tenants — some say "Current company," others may say "Organization," "Where do you currently
+work," etc. `isSchoolAnsweringCompanyQuestion` only matched literal "company"/"employer" wording, so it
+worked on every tenant that happened to phrase it that way and silently did nothing on any tenant that
+didn't — which is exactly why it kept appearing to "come back" on new tenants rather than actually
+being unfixed on the ones already tested.
+
+Rather than add yet another phrasing to the regex (a losing, ever-growing game after four rounds of
+exactly that), flipped the check around entirely: it now starts from the ANSWER, not the question — if
+the proposed answer names a school/college/university, it's rejected UNLESS the current question is
+clearly and specifically ABOUT education (contains "school," "degree," "GPA," "alma mater," etc.). This
+requires no knowledge of how any given tenant phrases their "current employer" field at all. The
+trade-off is intentionally asymmetric: a false positive here just means some legitimately
+school-related answer to an unrelated question gets left for the human instead of auto-filled (safe,
+mildly inconvenient); a false negative is the actual, eight-times-repeated harm this whole saga has
+been about. Applied at the same three checkpoints as before (bank-load filter, learned-answer
+application, fresh AI answer) with no other changes needed.
+
+Verified: `test-round15-fixes.js` reproduces the FiscalNote failure mode directly (differently-worded
+questions — "Organization," "Where do you currently work?" — that the old regex would have missed) and
+confirms the new check catches all of them, while genuine education questions and genuine non-school
+answers remain completely unaffected regardless of wording. `node --check` clean; all prior round test
+suites (5 through 14) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.17: Ashby résumé-upload root cause (required-input preference), essay answers were capped too short, silent-exception banner
 
 Round 14 confirmed the v1.13.16 "Current Company" fix held on a SEVENTH distinct Lever tenant
 (3Pillar Global correctly got "Modernizing Medicine," not a school) — and supplied a clean live DOM
