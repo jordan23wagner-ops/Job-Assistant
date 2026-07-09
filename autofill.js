@@ -411,16 +411,33 @@
   // here and climb a few more ancestor levels looking for a label before giving up. Without this, the
   // combobox's question label comes back empty and the whole field is silently skipped (never asked,
   // never AI-answered, left blank) — a required-field gap the human has to find on their own.
-  function comboLabelText(trig, cont) {
-    var t = labelText(trig) || trig.getAttribute('aria-label') || '';
-    if (t) return t;
-    var node = cont;
-    for (var hop = 0; node && hop < 4; hop++) {
+  // Shared climb primitive: walk up from `node`, checking each ancestor's subtree for a label/legend,
+  // up to `maxHops` levels. Used wherever an element's real question label sits as a SIBLING several
+  // levels above it rather than inside its own nearest wrapping div — confirmed live on react-select
+  // comboboxes (GitLab/Smartsheet) AND, with identical markup shape, a react-datepicker date input on
+  // Ashby (<div class="_fieldEntry_..."><label>...</label><div class="react-datepicker-wrapper">
+  // ...<input>...</div></div> — the label is the INPUT's aunt, not an ancestor).
+  function climbForLabel(node, maxHops) {
+    for (var hop = 0; node && hop < maxHops; hop++) {
       var l = node.querySelector && node.querySelector('label,legend');
       if (l) return getText(l);
       node = node.parentElement;
     }
     return '';
+  }
+  function comboLabelText(trig, cont) {
+    var t = labelText(trig) || trig.getAttribute('aria-label') || '';
+    if (t) return t;
+    return climbForLabel(cont, 4);
+  }
+  // For any plain control (not just comboboxes) whose labelText()/aria-label both come up empty —
+  // labelText()'s own final fallback (`el.closest('.form-group,fieldset,li,div,section')`) suffers
+  // the identical closest()-stops-at-nearest-div problem already fixed for combos: it returns the
+  // control's OWN narrow wrapping div, never reaching a wider sibling-label ancestor. Purely additive
+  // — only ever consulted after labelText()/aria-label both fail, so it cannot regress any field that
+  // was already being found correctly.
+  function wideLabelText(el) {
+    return climbForLabel(el.parentElement, 4);
   }
   function signals(el) {
     return norm([el.getAttribute('autocomplete'), el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder'), el.getAttribute('data-automation-id'), labelText(el)].filter(Boolean).join(' '));
@@ -1312,7 +1329,7 @@
       if (cur && !/select|choose|--|^$/.test(cur)) continue;
       var s = signals(sel);
       if (isVoluntaryEeoKey(eeoKey(s))) continue; // voluntary self-ID only -- sponsorship/authorization must still be asked if not already answered
-      var label = labelText(sel) || sel.getAttribute('aria-label') || '';
+      var label = labelText(sel) || sel.getAttribute('aria-label') || wideLabelText(sel) || '';
       if (!label || label.length < 8) continue;
       var selCont = sel.closest('fieldset,.form-group,div') || sel.parentElement;
       if (mustNeverAnswer(label, selCont)) continue; // never AI-answer a CAPTCHA/honeypot
@@ -1370,7 +1387,15 @@
       if (el.value && el.value.trim()) continue;
       var sig = signals(el);
       if (!sig || isKnownContactField(sig, el) || eeoKey(sig)) continue;
-      var lbl = labelText(el) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '';
+      // wideLabelText only kicks in when BOTH labelText() and aria-label find nothing -- purely
+      // additive, so it can't regress a field that already resolves its label correctly today.
+      // Confirmed live: Ashby's date-picker input (<label>...</label> as a sibling several levels
+      // above the actual <input>, react-datepicker's own markup shape) fell through to its
+      // placeholder ("Pick date...", 2 words, fails the wordy gate below) instead of its real
+      // question ("When can you start a new role?"), and was silently never discovered as a question
+      // at all -- confirmed via the interaction itself working fine (typing or clicking a day both
+      // commit cleanly), so this was purely a discovery gap, not an interaction one.
+      var lbl = labelText(el) || el.getAttribute('aria-label') || wideLabelText(el) || el.getAttribute('placeholder') || '';
       lbl = lbl.replace(/\s+/g, ' ').trim();
       // Only fields whose label reads like an actual question/requirement — not bare
       // one-word fields we can't safely interpret (those stay empty for the human).

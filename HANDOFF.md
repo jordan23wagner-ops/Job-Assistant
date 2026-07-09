@@ -1,6 +1,68 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.28: self-inflicted bug fix — v1.13.27's checkbox-group question label lookup was defeated by the exact closest()-stops-too-early anti-pattern that had already been fixed elsewhere in this file
+## Update 2026-07-09 (latest) — v1.13.29: labelText()'s own foundational fallback had the same closest()-too-early bug (fixes Ashby's date-picker discovery), and detect.js now watches page content directly instead of giving up after a fixed 4-second poll (targets ADP's total miss)
+
+Round 26 delivered three genuinely new, page-console-only diagnostics (no chrome://extensions access
+available in Claude Extension's environment — noted for future rounds) that finally pinned down two
+long-open mysteries with concrete evidence, plus ruled out one hypothesis cleanly.
+
+1. **Ashby's date-picker was never discovered as a question at all — root cause confirmed via full
+   ancestor-chain markup: its `<label>` sits several DOM levels above the `<input>` as a sibling, not
+   a wrapping ancestor**, e.g. `<div class="_fieldEntry_..."><label>When can you start a new
+   role?</label><div class="react-datepicker-wrapper">...<input placeholder="Pick date..."></div></div>`.
+   `labelText()`'s own final fallback — `el.closest('.form-group,fieldset,li,div,section')` — has the
+   IDENTICAL closest()-stops-at-nearest-div bug already fixed twice this week for combos and checkbox
+   groups, just never applied to this most-foundational, most-widely-used label-lookup function
+   itself. With the label lookup failing, the field fell through to its placeholder text ("Pick
+   date...", 2 words) instead of the real question ("...start a new role?", which contains "?" and
+   would pass the wordy gate outright) and was silently never discovered. Separately confirmed live
+   that the INTERACTION mechanism itself isn't the problem — both typing a date directly and clicking
+   a calendar day commit cleanly on the page's own terms — so this really was purely a discovery gap.
+   Added a shared `climbForLabel()`/`wideLabelText()` helper (refactoring `comboLabelText` to use the
+   same primitive) and wired it in as a fallback — after `labelText()` and `aria-label`, before
+   placeholder — in the text-input and `<select>` discovery passes. Purely additive: only consulted
+   when the existing lookups already found nothing, so it cannot regress any field whose label was
+   already resolving correctly.
+2. **ADP Workforce Now's total miss, still unexplained after 3 rounds, now has a concrete root cause:
+   confirmed `window.__aliciaAutofillRun` stayed `undefined` even after clicking Alicia's own
+   "Auto-fill" offer on a DIFFERENT SPA-nav case (Smartsheet)** — meaning `autofill.js` never actually
+   executed at all, not that it ran and found nothing. Re-reading `detect.js` against the
+   already-documented gap (its own comment block: "some SPA route changes never call pushState at
+   all... no navigation event fires for them at all") shows `detect.js`'s OWN detection poll — a fixed
+   8-try/4s loop that gives up permanently — has exactly this same blind spot, and unlike
+   `autofill.js`'s own rerun logic, it had no MutationObserver fallback to catch a later-appearing
+   form when no navigation event ever fires (ADP's real form is reached via `jobId` query-param
+   changes on the identical URL path — very plausibly a pure in-memory view swap with no
+   `history.pushState` at all, matching the exact case that comment already called out). Replaced the
+   fixed poll with an open-ended (2-minute-bounded, debounced) MutationObserver watch, mirroring
+   `autofill.js`'s own approach. Also made `detect.js`'s messaging failures visible in the PAGE console
+   (`chrome.runtime.lastError` was previously silently swallowed) and gave the offer box itself
+   visible "Starting…"/timeout feedback, since a silent failure there was indistinguishable from the
+   box just closing normally — this should make the NEXT diagnostic round more informative even if
+   this fix doesn't fully close the gap.
+
+**Still open:**
+- **Checkbox-group question still not fixed after TWO shipped attempts** (v1.13.27 and its v1.13.28
+  correction) — still all-unchecked on live re-test, with no new markup evidence this round to explain
+  why. Rather than guess a third time, next round needs exactly one diagnostic:
+  `document.querySelectorAll('ul[data-qa="checkboxes"]').length` on the live Shield AI page, to
+  confirm whether the selector even matches at all before investigating further.
+- **EEO race/ethnicity multi-select combobox (Smartsheet/Greenhouse)** — ruled out both "missing
+  saved preference" (confirmed configured and working on Lever's native equivalent) and "broken label
+  association" (confirmed live: real semantic `label[for] → input[id]` markup, not a styled div).
+  Whatever's blocking this is neither of the two most obvious causes — needs fresh hypotheses, not
+  yet identified.
+- The date-picker fix (item 1) still depends on `setNativeValue()` + `fire()`'s synthetic
+  'input'/'change' events actually committing the value the same way genuine typing does for
+  react-datepicker specifically — this is plausible (the same mechanism already works broadly across
+  this codebase for other React-controlled fields) but NOT the exact interaction that was tested live
+  (real keystrokes + Tab/blur were tested, not a synthetic bulk value-set). If it's still blank next
+  round, the next hypothesis is a missing blur/focusout event specifically for date-picker-shaped
+  fields.
+- The ADP fix (item 2) is a strong, well-reasoned hypothesis but not yet confirmed against a live
+  re-test — genuinely possible ADP's total miss has additional causes beyond what this fixes.
+
+## Update 2026-07-09 — v1.13.28: self-inflicted bug fix — v1.13.27's checkbox-group question label lookup was defeated by the exact closest()-stops-too-early anti-pattern that had already been fixed elsewhere in this file
 
 Round 25 verification caught that the checkbox-group fix shipped last round did nothing at all on
 live re-test. Re-reading it against the EXACT markup already captured in round 23 found the bug

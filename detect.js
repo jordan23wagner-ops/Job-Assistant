@@ -29,7 +29,17 @@
     return false;
   }
 
-  function send(msg) { try { chrome.runtime.sendMessage(msg).catch(function () {}); } catch (e) {} }
+  // Confirmed live: clicking "Auto-fill" produced no observable effect at all — window.__aliciaAutofillRun
+  // stayed undefined in the page's own console afterward, meaning autofill.js never actually executed.
+  // The old silent .catch(function(){}) swallowed whatever went wrong. Surface any messaging failure
+  // to the PAGE console (readable without chrome://extensions access) so it's diagnosable next time.
+  function send(msg) {
+    try {
+      chrome.runtime.sendMessage(msg, function () {
+        if (chrome.runtime.lastError) console.error('[Alicia] background did not respond:', chrome.runtime.lastError.message, msg);
+      });
+    } catch (e) { console.error('[Alicia] sendMessage threw:', e); }
+  }
 
   function showOffer() {
     if (document.getElementById('alicia-detect-offer')) return;
@@ -52,18 +62,65 @@
     row.appendChild(no);
     box.appendChild(row);
     (document.body || document.documentElement).appendChild(box);
-    fill.onclick = function () { box.remove(); send({ type: 'ATS_OFFER_ACCEPT' }); };
+    fill.onclick = function () {
+      // Visible feedback that the click registered at all, and a fallback message if autofill.js
+      // never actually starts within a few seconds — otherwise a silent failure here looks IDENTICAL
+      // to the box just quietly closing, with no signal that anything went wrong.
+      msg.textContent = 'Starting…';
+      row.style.display = 'none';
+      send({ type: 'ATS_OFFER_ACCEPT' });
+      setTimeout(function () {
+        if (!document.getElementById('alicia-apply-banner')) {
+          msg.textContent = '⚠️ Alicia didn’t start — try reloading the page.';
+          setTimeout(function () { if (box.parentNode) box.remove(); }, 4000);
+        } else if (box.parentNode) { box.remove(); }
+      }, 3000);
+    };
     no.onclick = function () { box.remove(); send({ type: 'ATS_OFFER_DISMISS', host: location.hostname }); };
     // Visually auto-dismiss after 30s; not clicking "Not now" means we may offer again later.
     setTimeout(function () { if (box.parentNode) box.remove(); }, 30000);
   }
 
-  // The form may render after initial load (SPA), so poll briefly.
+  // The initial poll (form may render moments after load) plus an open-ended MutationObserver watch:
+  // some SPA route changes never fire ANY browser navigation event at all (a plain in-memory view
+  // swap with no history.pushState) — confirmed live on ADP Workforce Now, zero Alicia activity ever,
+  // and this is the SAME documented gap autofill.js's own MutationObserver was built to close (see
+  // its comment: "some SPA route changes never call pushState at all... no navigation event fires").
+  // background.js's re-injection triggers (tabs.onUpdated, webNavigation.onHistoryStateUpdated) never
+  // fire for these, so the OLD fixed 8-try/4s poll-then-give-up permanently missed any form that
+  // rendered later — there was no second chance. Watching content directly removes the dependency on
+  // any navigation event firing at all. Debounced/rate-floored to bound cost; bounded to 2 minutes
+  // total so a tab left open indefinitely doesn't watch forever.
   window.__aliciaDetectPolling = true;
+  var settled = false;
+  function checkNow() {
+    if (settled) return;
+    if (hasApplicationForm()) { settled = true; window.__aliciaDetectPolling = false; showOffer(); }
+  }
   var tries = 0;
   (function poll() {
-    if (hasApplicationForm()) { window.__aliciaDetectPolling = false; showOffer(); return; }
-    if (++tries > 8) { window.__aliciaDetectPolling = false; return; }
+    if (settled) return;
+    checkNow();
+    if (settled || ++tries > 8) return;
     setTimeout(poll, 500);
   })();
+  var lastCheckAt = 0, debounceTimer = null, mo = null;
+  try {
+    mo = new MutationObserver(function () {
+      if (settled) { mo.disconnect(); return; }
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(function () {
+        var now = Date.now();
+        if (now - lastCheckAt < 1000) return;
+        lastCheckAt = now;
+        checkNow();
+      }, 400);
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+  } catch (e) {}
+  setTimeout(function () {
+    settled = true;
+    window.__aliciaDetectPolling = false;
+    try { if (mo) mo.disconnect(); } catch (e) {}
+  }, 120000);
 })();
