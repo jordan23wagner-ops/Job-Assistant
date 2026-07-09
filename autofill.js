@@ -587,9 +587,17 @@
   // school-related answer to some unrelated question gets left for the human instead of auto-filled
   // (safe); a false negative means wrong data silently reaches the field (the actual, repeated harm) —
   // an intentionally asymmetric trade given how many rounds the narrower version kept missing.
-  function isSchoolAnsweringCompanyQuestion(question, answer) {
+  function isSchoolAnsweringCompanyQuestion(question, answer, control) {
     var hasSchool = /\b(college|university|institute|academy|polytechnic|school)\b/i.test(answer || '');
     if (!hasSchool) return false;
+    // Even the answer-driven version above kept missing this on new Lever tenants — Lever's own
+    // schema names this field "org" internally on EVERY tenant, but some tenants visibly word the
+    // question in a way that reads as ALSO covering education (e.g. "Current Company/School," to
+    // accommodate candidates who are current students), which trips the isEducationQuestion
+    // exemption below and lets a school-named answer straight through. A DOM-level signal that's
+    // fixed across every Lever tenant beats guessing at visible label wording yet again: this field
+    // is never treated as a genuine education question on Lever, no matter what its label says.
+    if (control && control.name === 'org') return true;
     var isEducationQuestion = /\b(school|college|university|degree|education|major|graduat|academic|coursework|gpa|alma mater)\b/i.test(norm(question));
     return !isEducationQuestion;
   }
@@ -1469,7 +1477,13 @@
     var req = document.querySelectorAll('[required], [aria-required="true"]');
     for (var i = 0; i < req.length; i++) {
       var el = req[i];
-      if (!visible(el) || el.disabled) continue;
+      if (el.disabled) continue;
+      // File inputs are routinely styled invisible and driven by a separate "Upload"/drag-and-drop
+      // button (attachResume already accounts for this) -- requiring visibility here made a required,
+      // still-empty résumé upload invisible to THIS check too, letting the "Filled and ready" banner
+      // fire while the résumé was never attached (observed live on Ashby). Every other control type
+      // still requires visibility, since a conditionally-hidden field genuinely doesn't apply yet.
+      if (el.type !== 'file' && !visible(el)) continue;
       if (el.tagName === 'SELECT') { if (!selectHasRealValue(el)) return true; continue; }
       if (el.type === 'checkbox') { if (!el.checked) return true; continue; }
       if (el.type === 'radio') {
@@ -2034,7 +2048,7 @@
           // covered this application site at all. Re-check against the CURRENT page's actual label,
           // not the banked record's original wording, so it's caught regardless of how the poisoned
           // record was originally phrased.
-          if (learned && isSchoolAnsweringCompanyQuestion(qItem.label, learned.answer)) learned = null;
+          if (learned && isSchoolAnsweringCompanyQuestion(qItem.label, learned.answer, qItem.control)) learned = null;
           if (learned && await applyAnswerToItem(qItem, learned.answer)) {
             learned.lastUsedAt = Date.now();
             result.learnedUsed++;
@@ -2115,7 +2129,7 @@
                 var aiItem = pass.unanswered[ui];
                 var ans = byIndex[ui + 1];
                 if (ans && looksLikeRefusalAnswer(ans)) continue; // "No image provided."/"N/A"-style non-answer -> leave empty, ask the human instead
-                if (ans && isSchoolAnsweringCompanyQuestion(aiItem.label, ans)) continue; // a fresh AI answer can still be wrong even with the prompt fix -- never type a school into a company/employer question
+                if (ans && isSchoolAnsweringCompanyQuestion(aiItem.label, ans, aiItem.control)) continue; // a fresh AI answer can still be wrong even with the prompt fix -- never type a school into a company/employer question
                 if (ans && await applyAnswerToItem(aiItem, ans)) answeredItems.push(aiItem);
               }
             }

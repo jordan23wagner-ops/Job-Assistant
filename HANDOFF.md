@@ -1,6 +1,55 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-08 (latest) — v1.13.18: the (hopefully actually final) fix for "Truckee Meadows Community College" — stopped guessing question phrasings entirely
+## Update 2026-07-08 (latest) — v1.13.19: Lever's "org" field gets an ATS-level override (stop guessing label wording for good), hidden-required-file-input gap in the "ready to submit" safety net
+
+Round 16 went back to general coverage after the dedicated Zoho/ADP hunt came up empty (19 searches,
+no hits — that thread stays open, revisit only if one surfaces naturally rather than spending more
+rounds hunting). Two real, concrete findings came out of general testing, one very familiar and one new.
+
+**"Truckee Meadows Community College" — ninth and tenth Lever tenants (Match Group, Lumafield),
+identical value both times.** The v1.13.18 answer-driven check ("does the answer name a school, unless
+the question is clearly about education") was itself still guessing at label wording for the exemption
+half — and apparently some Lever tenants word this field in a way that reads as ALSO covering
+education (plausibly something like "Current Company/School," to accommodate candidates who are
+current students), which trips the "isEducationQuestion" exemption and lets the answer through exactly
+like every prior narrower attempt. Rather than add yet another label pattern, stopped trying to read
+the label at all for this specific, extremely well-known case: Lever's own internal schema names this
+field `org` on every single tenant, regardless of how any given tenant chooses to word the visible
+question. `isSchoolAnsweringCompanyQuestion` now accepts the live control element and, when
+`control.name === 'org'`, treats it as a real company field unconditionally — no label-reading
+involved at all for this checkpoint. Wired through both live-DOM checkpoints (learned-answer
+application, fresh AI answer); the bank-load filter has no live element to check and keeps its
+label-only fallback.
+
+**New: the green "Filled and ready" banner fired on an Ashby form while the required résumé upload
+was still empty.** This directly contradicts the v1.13.13 required-field safety net, whose entire job
+is to prevent exactly this. Root cause: `hasUnfilledRequiredField()` required every candidate to be
+`visible()` before checking it — but required file inputs are routinely styled invisible and driven by
+a separate "Upload"/drag-and-drop button (the same fact `attachResume` already accounts for), so a
+still-empty, hidden-but-required résumé field was silently skipped by the safety check meant to catch
+exactly that. Fixed by exempting file inputs specifically from the visibility requirement; every other
+control type still requires visibility, since a genuinely conditionally-hidden field shouldn't be
+flagged.
+
+**Flagged, not fixed — need live DOM before attempting a fix:**
+- A stale "Alicia needs N answers" panel listed several questions as unanswered on two separate
+  Greenhouse forms even though those exact questions were already visibly answered on the page (2/2 and
+  5/5 mismatches). Plausible mechanism: these are likely custom button-pair Yes/No widgets rather than
+  native `<input type="radio">` elements, and whatever discovers/tracks their answered state may be
+  reading stale info — but this needs the actual markup of one such widget to diagnose safely rather
+  than guess.
+- Three required Yes/No "button-pair" questions on an Ashby form (explicitly noted as not native radio
+  buttons) weren't caught by the required-field safety net either — likely the same underlying gap as
+  the panel issue above (a widget shape the discovery/required-check logic doesn't recognize), also
+  needs real markup before a targeted fix.
+
+Verified: `test-round16-fixes.js` — the Lever `org`-field override catches the exact reproduced
+"Company/School"-style label regardless of wording, while leaving a genuine education field (no `org`
+control) unaffected; the file-input visibility exemption is confirmed to detect a hidden required
+résumé field while a genuinely conditionally-hidden required TEXT field remains correctly exempt.
+`node --check` clean; all prior round test suites (5 through 15) still pass unchanged.
+
+## Update 2026-07-08 — v1.13.18: the (hopefully actually final) fix for "Truckee Meadows Community College" — stopped guessing question phrasings entirely
 
 Round 15's stated priority (deliberately hunting for a Zoho Recruit or ADP Workforce Now posting to
 settle the Tracker-vs-Search theory) came back empty after a genuinely exhaustive effort — 19 distinct
