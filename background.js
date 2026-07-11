@@ -47,12 +47,37 @@ function baseDomain(host) {
   return parts.length <= 2 ? host : parts.slice(-2).join('.');
 }
 
-// Normalize a URL to origin+pathname (no query/hash) for matching web-app apply requests to the
-// tabs the web app opens.
+// Normalize a URL to host+pathname (no scheme/www/query/hash) for matching web-app apply requests
+// to the tabs the web app opens. Scheme and "www." are dropped on purpose: an http->https upgrade
+// or a www redirect used to break the exact-equality match and orphan the session.
 function normUrl(u) {
-  try { var x = new URL(u); return (x.origin + x.pathname).replace(/\/+$/, ''); } catch (e) { return String(u || '').split('?')[0].replace(/\/+$/, ''); }
+  try {
+    var x = new URL(u);
+    return (x.hostname.toLowerCase().replace(/^www\./, '') + x.pathname).replace(/\/+$/, '');
+  } catch (e) { return String(u || '').split('?')[0].replace(/^https?:\/\/(www\.)?/i, '').replace(/\/+$/, ''); }
 }
 var PENDING_APPLY_TTL_MS = 10 * 60 * 1000;
+
+// Match a tab URL against pendingApplyUrls: exact normalized key first, else a same-host entry
+// whose path is a '/'-boundary prefix of the tab's path (or vice versa). Custom-domain postings
+// (Stripe: /jobs/listing/x/123 -> /jobs/listing/x/123/apply) change pathname between the listing
+// and the real form, which exact matching can never bind. Same-host-prefix is strictly narrower
+// than what an explicit session may already follow via redirects, so this loosens nothing safety-
+// relevant. Returns { key, entry } or null.
+function findPendingMatch(pending, url) {
+  var key = normUrl(url);
+  var now = Date.now();
+  var live = function (k) { return pending[k] && now - (pending[k].ts || 0) <= PENDING_APPLY_TTL_MS; };
+  if (live(key)) return { key: key, entry: pending[key] };
+  var host = key.split('/')[0];
+  var ks = Object.keys(pending);
+  for (var i = 0; i < ks.length; i++) {
+    var k = ks[i];
+    if (!live(k) || k.split('/')[0] !== host) continue;
+    if (key.indexOf(k + '/') === 0 || k.indexOf(key + '/') === 0) return { key: k, entry: pending[k] };
+  }
+  return null;
+}
 
 // Injected into an aggregator landing page (Adzuna/Indeed/etc.) during an explicit apply session:
 // dismiss the email-capture modal and click through to the employer's application. The pop-up/button
@@ -107,17 +132,16 @@ chrome.webNavigation.onBeforeNavigate.addListener(function (details) {
     var sessions = data.autofillSessions || {};
     if (sessions[String(details.tabId)]) { console.log('[Alicia][apply-debug] onBeforeNavigate: tab', details.tabId, 'already has a session — skipping'); return; }
     var pending = data.pendingApplyUrls || {};
-    var key = normUrl(details.url);
-    var match = pending[key];
-    console.log('[Alicia][apply-debug] onBeforeNavigate: tab', details.tabId, 'url', details.url, 'normalized key', key, 'pending keys', Object.keys(pending), 'match?', !!match);
-    if (!match || Date.now() - (match.ts || 0) > PENDING_APPLY_TTL_MS) { console.log('[Alicia][apply-debug] onBeforeNavigate: no matching pending entry (or expired) — session NOT created for tab', details.tabId); return; }
+    var m = findPendingMatch(pending, details.url);
+    console.log('[Alicia][apply-debug] onBeforeNavigate: tab', details.tabId, 'url', details.url, 'normalized key', normUrl(details.url), 'pending keys', Object.keys(pending), 'match?', !!m);
+    if (!m) { console.log('[Alicia][apply-debug] onBeforeNavigate: no matching pending entry (or expired) — session NOT created for tab', details.tabId); return; }
     var mHost = '';
     try { mHost = new URL(details.url).hostname; } catch (e) {}
     sessions[String(details.tabId)] = {
       hostname: mHost, startedAt: Date.now(), explicit: true,
-      tailoredResume: match.resumeText || '', origUrl: key, navs: 0,
+      tailoredResume: m.entry.resumeText || '', origUrl: m.key, navs: 0,
     };
-    delete pending[key];
+    delete pending[m.key];
     console.log('[Alicia][apply-debug] onBeforeNavigate: BOUND explicit session for tab', details.tabId, 'hostname', mHost);
     chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
   });
@@ -132,16 +156,16 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     var s = sessions[String(tabId)];
     console.log('[Alicia][apply-debug] onUpdated complete: tab', tabId, 'url', tab.url, 'existing session?', !!s);
     if (!s) {
-      // Late adoption fallback (final URL matched directly, or onBeforeNavigate missed it).
-      var key = normUrl(tab.url);
-      var match = pending[key];
-      if (match && Date.now() - (match.ts || 0) < PENDING_APPLY_TTL_MS) {
+      // Late adoption fallback (final URL matched, possibly by host+path-prefix, or
+      // onBeforeNavigate missed it).
+      var m = findPendingMatch(pending, tab.url);
+      if (m) {
         var mHost = '';
         try { mHost = new URL(tab.url).hostname; } catch (e) {}
-        s = { hostname: mHost, startedAt: Date.now(), explicit: true, tailoredResume: match.resumeText || '', origUrl: key, navs: 0 };
+        s = { hostname: mHost, startedAt: Date.now(), explicit: true, tailoredResume: m.entry.resumeText || '', origUrl: m.key, navs: 0 };
         sessions[String(tabId)] = s;
-        delete pending[key];
-        console.log('[Alicia][apply-debug] onUpdated: late-adopted tab', tabId, 'via pending match', key);
+        delete pending[m.key];
+        console.log('[Alicia][apply-debug] onUpdated: late-adopted tab', tabId, 'via pending match', m.key);
         chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
       } else {
         console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'has no session and no pending match (key would be', normUrl(tab.url), ') — nothing will be injected');
@@ -388,10 +412,68 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       // accepted vs requested lets the web app surface the 5-per-batch cap instead of silently
       // never filling job 6+.
       try { sendResponse({ ok: true, count: jobs.length, requested: requested }); } catch (e) {}
+      adoptOpenTabsForPending();
     });
   });
   return true; // async sendResponse
 });
+
+// The web app opens each posting tab BEFORE this registration can possibly land here (postMessage
+// -> bridge.js -> runtime.sendMessage -> service-worker wake -> storage round-trips), so the
+// navigation-event binders above routinely fire first, find no pending entry, and miss. On a
+// custom-domain posting that never redirects (Stripe's greenhouse-backed careers site — the
+// v1.13.34 live repro) there is no second navigation to retry on, so no session was ever bound and
+// autofill.js was never injected on ANY page of that tab. Registration-time adoption closes the
+// race deterministically: scan the tabs that already exist and bind/inject any that match a
+// pending entry, exactly as the navigation binders would have.
+function adoptOpenTabsForPending() {
+  chrome.tabs.query({}, function (tabs) {
+    if (!tabs || !tabs.length) return;
+    chrome.storage.local.get(['autofillSessions', 'pendingApplyUrls'], function (data) {
+      var sessions = data.autofillSessions || {};
+      var pending = data.pendingApplyUrls || {};
+      if (!Object.keys(pending).length) return;
+      var changed = false;
+      tabs.forEach(function (tab) {
+        if (!tab || !tab.id || !tab.url || !/^https?:/i.test(tab.url)) return;
+        if (/(^|\.)linkedin\.com/i.test(tab.url)) return;
+        if (sessions[String(tab.id)]) return;
+        var m = findPendingMatch(pending, tab.url);
+        if (!m) return;
+        var host = '';
+        try { host = new URL(tab.url).hostname; } catch (e) {}
+        var s = { hostname: host, startedAt: Date.now(), explicit: true, tailoredResume: m.entry.resumeText || '', origUrl: m.key, navs: 0 };
+        sessions[String(tab.id)] = s;
+        delete pending[m.key];
+        changed = true;
+        console.log('[Alicia][apply-debug] WEBAPP_APPLY: adopted already-open tab', tab.id, tab.url, 'for pending', m.key);
+        // Mirror onUpdated's post-bind behavior for tabs that have already finished loading; a tab
+        // still loading is handled by onUpdated 'complete' via the session that now exists.
+        if (tab.status === 'complete') {
+          (function (tabId, sess, h) {
+            if (/(^|\.)adzuna\./i.test(h) && !sess.adzunaTried) {
+              sess.adzunaTried = true;
+              resolveAdzunaViaFetch(tab.url).then(function (employer) {
+                if (employer) { chrome.tabs.update(tabId, { url: employer }).catch(function () {}); }
+                else { chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {}); }
+              });
+              return;
+            }
+            setTimeout(function () {
+              if (AGGREGATOR_HOST_RE.test(h)) {
+                chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
+              } else {
+                console.log('[Alicia][apply-debug] WEBAPP_APPLY: injecting autofill.js into adopted tab', tabId, '(host', h, ')');
+                injectAutofillWithTailoredResume(tabId, sess);
+              }
+            }, 800);
+          })(tab.id, s, host);
+        }
+      });
+      if (changed) chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
+    });
+  });
+}
 
 // ===== Web-app sync (Wagner-GPT is the source of truth for the résumé/profile) =====
 // The Jobs tab pushes its active (or tailored) résumé + contact profile through bridge.js; store

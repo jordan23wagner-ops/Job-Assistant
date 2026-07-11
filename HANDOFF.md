@@ -1,6 +1,54 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-11 (latest) — v1.13.34: temporary diagnostic logging for a live repro of "web-app Apply opens the posting, then nothing fills" on a custom (non-ATS-allowlisted) careers site
+## Update 2026-07-11 (latest) — v1.13.35: the "Apply opens the posting, then nothing fills" root cause found by a full static trace — the pending-URL registration RACES the tab's own navigation and always loses; fixed with registration-time tab adoption + host/path-prefix matching
+
+The v1.13.34 repro (Stripe posting via the web-app Apply: description page opens, no auto-advance,
+manual click to the real `/apply` form also fills nothing, zero banners) is explained end-to-end
+without needing the live logs:
+
+1. **The race.** `Jobs.jsx` calls `window.open(job.url)` FIRST (it must — the user gesture) and
+   `sendApply()` after. The tab starts navigating immediately, while the registration still has to
+   travel postMessage → bridge.js → `runtime.sendMessage` → MV3 service-worker wake → two
+   `chrome.storage` round-trips. `onBeforeNavigate` therefore fires with `pendingApplyUrls` still
+   empty ("no matching pending entry — session NOT created"), and `onUpdated`'s late-adoption is
+   racing the very same write, losing on any fast load or cold service worker.
+2. **No second chance on a custom domain.** Aggregator links redirect (each hop is another chance to
+   bind), which is why this mostly worked before. Stripe's Greenhouse board returns `absolute_url`
+   directly on `stripe.com` — no redirect, so the one-and-only navigation is the one that raced.
+3. **The manual click can never recover.** Only the LISTING pathname was registered
+   (`…/jobs/listing/x/123`); the real form is a DIFFERENT pathname (`…/123/apply`), and both binding
+   predicates used exact normalized-URL equality — so even the user clicking through by hand binds
+   nothing. With no session, `onHistoryStateUpdated` skips too, and `stripe.com` isn't in
+   `ATS_HOST_RE` so no passive path exists either. autofill.js was simply never injected: exactly
+   the observed total silence (this also predicts the live logs would show `WEBAPP_APPLY: registered`
+   then nothing — no `run() start` line in the page console).
+
+Fix (all in `background.js` + one ordering change in the web app):
+
+- **Registration-time adoption (the core fix): `adoptOpenTabsForPending()`.** After `WEBAPP_APPLY`
+  stores its pending URLs, scan the ALREADY-OPEN tabs and bind/inject any that match — the mirror
+  image of the navigation-event binders, so it no longer matters which of the two arrives first.
+  Adopted complete tabs get the same treatment `onUpdated` would give them (Adzuna resolve /
+  aggregator click-through / `injectAutofillWithTailoredResume`).
+- **Host + path-prefix matching: `findPendingMatch()`.** Exact key first, else a same-host entry
+  whose path is a '/'-boundary prefix of the tab's (or vice versa) — binds the listing→`/apply`
+  pathname change. Strictly narrower than what an explicit session may already follow via
+  redirects, so no safety loosening.
+- **`normUrl` hardened**: scheme and `www.` dropped from the key (an http→https or www redirect
+  used to break equality).
+- **Web app (`Jobs.jsx` applyOne)**: `sendApply()` now fires (synchronously, un-awaited) BEFORE
+  `window.open`, giving registration a head start; the batch flow keeps its open-first order
+  (pop-up counting) and relies on adoption.
+
+Verified: `node --check` clean; the real `normUrl`/`findPendingMatch` (textually extracted so the
+test can't drift) pass 9 logic cases incl. the Stripe listing→apply shape, www/scheme drift, the
+`/jobs/12`-vs-`/jobs/123` boundary, expired entries, and cross-host rejection. NOT yet live-tested
+(needs the user's browser): re-run the same Stripe apply; expect `[Alicia][apply-debug]
+WEBAPP_APPLY: adopted already-open tab …` in the service-worker console and `run() start` in the
+page console, then auto-advance to the form. The apply-debug logging stays in until that live
+confirmation; remove it once closed.
+
+## Update 2026-07-11 — v1.13.34: temporary diagnostic logging for a live repro of "web-app Apply opens the posting, then nothing fills" on a custom (non-ATS-allowlisted) careers site
 
 Live repro from the user: searched via the Wagner-GPT Jobs tab, clicked Apply on a Stripe posting
 (`stripe.com/jobs/listing/...`, tagged "greenhouse" as its source — Stripe serves its own custom-
