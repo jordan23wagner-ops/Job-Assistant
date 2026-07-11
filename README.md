@@ -16,20 +16,20 @@ AI feature runs on a free backend, no API key required.
 
 ## Features
 
-### Job Search (full-page tab)
+### Job Search
 
-- **Search Jobs by Title & Industry** — opens a full-page search tab backed by the Adzuna
-  jobs API. Filter by title, industry, location, salary minimum, country, remote-only, and
-  full-time. Results are ranked by résumé fit (AI-scored when a résumé is saved, lexical
-  fallback otherwise), best first.
-- **8 curated industries** (Software/IT, Cybersecurity, AI/ML, Oil & Gas, Healthcare Tech,
-  Manufacturing, Engineering, Any) with smart Adzuna category mapping — never hardcodes tags,
-  always resolves against live categories.
-- **⚡ auto-fill ready** badge on cards whose posting URL is a known ATS host.
-- **Apply** opens the posting in a new tab and automatically starts the autofill session —
-  no side-panel button click needed. The job is also saved to the Tracker as "Applied".
-- **✏ Tailor résumé** — opens a modal with a multi-turn AI conversation (see _Resume tools_
+- **General multi-source search** now lives in [Wagner-GPT](https://wagner-gpt.vercel.app)'s
+  **Jobs** tab — pulls postings directly from company career boards (Greenhouse/Lever/Ashby/
+  Workable/etc.) across your chosen industry, ranked by résumé fit, with its own résumé bank
+  and application tracker. The side panel's **Search Jobs in Wagner-GPT** button just opens it
+  (`wagner-gpt.vercel.app/?tab=jobs`). The old standalone full-page search tab in this extension
+  (`jobsearch.html`) has been removed — it was a duplicate of the same backend.
+- **Apply**, wherever it's clicked from (the web app's Jobs tab, the Easy Apply Queue, or the
+  side panel), opens the posting and automatically starts the autofill session — no separate
+  autofill button click needed. The Wagner-GPT case is handled by `bridge.js` (see Architecture
   below).
+- **Search LinkedIn Jobs** and **Scan & Rank These Jobs** remain in the side panel as
+  LinkedIn-specific tools (see _Job search & fit (LinkedIn)_ below).
 
 ### Job search & fit (LinkedIn)
 
@@ -46,14 +46,14 @@ AI feature runs on a free backend, no API key required.
 - Upload or paste a résumé (PDF/DOCX/plain text, parsed locally — no external service).
 - **Build a Resume from Scratch** — guided Q&A that generates a full résumé for candidates who
   don't have one yet.
-- **Tailor Resume** — two modes available:
-  - *From the side panel* — Quick Tailor or Deep Dive for the currently detected LinkedIn job.
-  - *From the Job Search tab* — click **✏ Tailor résumé** on any job card. A modal opens where
-    Alicia reviews the job description vs. your résumé and asks one targeted question at a time
-    about your real experience (gaps, relevant skills not clearly shown). After 3–5 rounds (or
-    say "generate"), it outputs the full tailored résumé. **Save as active résumé** stores it
-    in your résumé bank and sets it as the active résumé for future autofill — Alicia never
-    invents experience; only adds what you explicitly confirm.
+- **Tailor Resume** — *Interactive Resume Tailoring* in the side panel: Quick Tailor or Deep
+  Dive for the currently detected LinkedIn job. Alicia reviews the job description vs. your
+  résumé and asks one targeted question at a time about your real experience (gaps, relevant
+  skills not clearly shown). After 3–5 rounds (or say "generate"), it outputs the full tailored
+  résumé. **Save as active résumé** stores it in your résumé bank and sets it as the active
+  résumé for future autofill — Alicia never invents experience; only adds what you explicitly
+  confirm. (Tailoring for a job found via Wagner-GPT's Jobs tab — Quick tailor & apply / Deep
+  rewrite & apply — happens there instead; Wagner-GPT is the source of truth for that résumé.)
 - **Match Score** — % fit plus matched/missing keywords.
 - **Analyze Job** and **Cover Letter** generation.
 
@@ -140,9 +140,9 @@ open — the content script in an already-open tab doesn't update until the page
 | `content.js` | Runs on linkedin.com: job detection, Scan & Rank, People scraping, Easy Apply auto-fill + auto-advance + custom-question AI answering, Match Score overlay, Apply Queue |
 | `autofill.js` | Self-contained external-ATS fill engine: injected by background.js into any non-LinkedIn ATS page. Handles all adapters, multi-step advance, account creation, resume file attach, learned-answer bank, AI custom questions |
 | `detect.js` | Tiny offer script injected on known ATS pages — checks for an application form and floats "⚡ Auto-fill this application?" |
-| `bridge.js` | Content script on the Wagner-GPT web app origin. Announces the extension to the web app's **Jobs** tab and relays its "apply to these jobs" request to `background.js`, which opens each posting (paced) and starts the normal autofill session — stopping before Submit. |
-| `jobsearch.html` / `jobsearch.js` | Full-page job search tab: Adzuna-backed search, industry/filter UI, résumé-fit ranking, Apply (auto-starts autofill + saves to Tracker), Tailor résumé modal |
-| `sidepanel.html` / `sidepanel.js` | Side panel UI and logic — résumé tools, chat, tracker, universal auto-fill button, Learned Answers, Site Passwords |
+| `bridge.js` | Content script on the Wagner-GPT web app origin. Announces the extension to the web app's **Jobs** tab and relays its "apply to these jobs" request (plus a résumé/profile sync push) to `background.js`, which opens each posting (paced) and starts the normal autofill session — stopping before Submit — and forwards fill-status back to the web app's tracker. |
+| `sidepanel.html` / `sidepanel.js` | Side panel UI and logic — résumé tools, LinkedIn-specific job search + Scan & Rank, chat, tracker, universal auto-fill button, Learned Answers, Site Passwords. The old standalone full-page job search tab (`jobsearch.html`/`.js`) has been removed — general search now lives in Wagner-GPT's Jobs tab. |
+| `account.js` | Alicia account: Supabase email-OTP sign-in (shared Supabase project, plain REST) for a higher daily AI allowance and Alicia Pro upgrades. Signed-out users keep working on the anonymous tier. |
 | `parsers.js` | Self-contained PDF/DOCX text extraction (no external libraries) |
 | `resume-preview.html` / `resume-preview.js` | Print-to-PDF preview for generated/tailored résumés |
 | `styles.css` | Theming (4 themes) for the side panel |
@@ -151,8 +151,8 @@ open — the content script in an already-open tab doesn't update until the page
 
 | Endpoint | Backend | Purpose |
 |---|---|---|
-| `/api/chat` | [Wagner-GPT](https://wagner-gpt.vercel.app) | All AI calls from Job Search tab (fit ranking, résumé tailoring) |
-| `/api/jobs` | [Wagner-GPT](https://wagner-gpt.vercel.app) | Adzuna jobs proxy — keeps API key server-side |
-| `/api/chat` | [Chatwillow](https://chatwillow.com) | AI calls from the side panel (match score, tailor, cover letter, chat) |
+| `/api/chat` | [Wagner-GPT](https://wagner-gpt.vercel.app) | AI calls behind the web-app apply handoff (résumé tailoring/ranking in the Jobs tab) |
+| `/api/jobs` | [Wagner-GPT](https://wagner-gpt.vercel.app) | Multi-source job search — now lives entirely in the Jobs tab, not in this repo |
+| `/api/chat` | [Chatwillow](https://chatwillow.com) | AI calls from the side panel (match score, tailor, cover letter, chat, interview prep) |
 
 Both backends are free-tier only — $0/month, no persistent server.
