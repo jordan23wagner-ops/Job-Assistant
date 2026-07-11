@@ -1877,8 +1877,11 @@ function scheduleAutoFill() {
     autofillPassRunning = true;
     safeStorageGet(['eeoPrefs', 'profile', 'autoFillEasyApply'], function (data) {
       // Master switch: when the user turns off "Auto-fill applications", do nothing at all — no
-      // field fill, no custom-question answering, no auto-advance. Default is on (undefined).
-      if (data.autoFillEasyApply === false) { autofillPassRunning = false; return; }
+      // field fill, no custom-question answering, no auto-advance. Default is OFF (undefined) --
+      // LinkedIn's ToS (Section 8.2) explicitly bans automated application tools, with enforcement
+      // up to a permanent account ban; every other ATS's autofill (autofill.js, a separate file)
+      // is unaffected by this. Must be explicitly turned on via the side panel toggle to run.
+      if (data.autoFillEasyApply !== true) { autofillPassRunning = false; return; }
       // Strictly sequential: fill everything (including async typeahead picks and any AI
       // custom-question call) BEFORE ever checking whether to auto-advance — otherwise
       // Next could be clicked while a fill on this same step is still resolving.
@@ -1960,7 +1963,7 @@ var queuePageDeadline = 0;
 var queueSubmitReported = false;
 var queueSkipReported = false;
 var queueLimitReported = false;
-var autoFillEnabled = true; // cached master "Auto-fill applications" toggle (gates post-apply dismiss)
+var autoFillEnabled = false; // cached master "Auto-fill applications" toggle (gates post-apply dismiss) -- off by default, see scheduleAutoFill
 
 function refreshQueueState(cb) {
   safeStorageGet(['queueActive', 'queuePaused', 'queueAutoOpen', 'applyQueue', 'queueIndex', 'autoFillEasyApply'], function (d) {
@@ -1969,7 +1972,7 @@ function refreshQueueState(cb) {
     QUEUE.autoOpen = d.queueAutoOpen !== false;
     QUEUE.jobs = d.applyQueue || [];
     QUEUE.index = d.queueIndex || 0;
-    autoFillEnabled = d.autoFillEasyApply !== false;
+    autoFillEnabled = d.autoFillEasyApply === true;
     if (cb) cb();
   });
 }
@@ -2065,6 +2068,15 @@ function driveQueueJobPage() {
   if (linkedInDailyLimitReached()) { reportQueueDailyLimit(); return; } // LinkedIn daily cap — stop, don't skip
   if (!queuePageDeadline) queuePageDeadline = Date.now() + 45000; // give the page time to render/settle
   if (findEasyApplyModalRaw()) return; // modal is open — the autofill/advance engine owns it now
+
+  // Auto-fill off (the default) means auto-clicking through Easy Apply buttons here would just be
+  // an empty, unfilled modal per job -- no benefit, and it's the more bot-pattern-looking half of
+  // this feature (rapid, timed clicks across many postings) even without any fields being typed
+  // into. Bail out with an explanation rather than silently doing nothing useful.
+  if (!autoFillEnabled) {
+    showEasyApplyBanner('Auto-fill is off — turn it on in the side panel to run the Easy Apply queue.', '#3a7afe');
+    return;
+  }
 
   if (!QUEUE.autoOpen) {
     showEasyApplyBanner('Queue: open "Easy Apply" on this job when ready — Alicia fills the rest.', '#3a7afe');

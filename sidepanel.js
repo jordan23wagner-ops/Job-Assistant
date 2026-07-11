@@ -2654,10 +2654,13 @@ if (autoAdvanceToggle) {
   });
 }
 
-// Master auto-fill switch: when off, content.js does no auto-fill/auto-advance at all. Default on.
+// Master auto-fill switch: when off, content.js does no auto-fill/auto-advance at all on LinkedIn
+// (this is LinkedIn-only -- content.js only runs on linkedin.com; every other ATS's autofill lives
+// in autofill.js and is unaffected). Default OFF: LinkedIn's ToS explicitly bans automated
+// application tools, so this requires an explicit opt-in rather than opting everyone in by default.
 const autofillToggle = document.getElementById('autofill-toggle');
 if (autofillToggle) {
-  chrome.storage.local.get('autoFillEasyApply', function (d) { autofillToggle.checked = d.autoFillEasyApply !== false; });
+  chrome.storage.local.get('autoFillEasyApply', function (d) { autofillToggle.checked = d.autoFillEasyApply === true; });
   autofillToggle.addEventListener('change', function () {
     chrome.storage.local.set({ autoFillEasyApply: autofillToggle.checked });
   });

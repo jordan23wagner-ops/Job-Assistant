@@ -1,5 +1,31 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (later) — v1.13.38: LinkedIn Easy Apply auto-fill now defaults to OFF
+
+A gap audit flagged a real account risk that was previously just accepted implicitly: LinkedIn's
+ToS (Section 8.2) explicitly bans automated application tools, with enforcement up to a permanent
+ban — a different, higher-stakes risk category than autofilling any other ATS (Greenhouse, Workday,
+etc.), which have no such blanket prohibition. Jordon's decision: keep autofill everywhere else,
+disable it on LinkedIn by default.
+
+- **`content.js`** (LinkedIn-only — this doesn't touch `autofill.js`, which handles every other ATS
+  and is unaffected): the master `autoFillEasyApply` flag now defaults to OFF (`!== true` gates the
+  fill/advance pass, was `=== false`) instead of defaulting ON. Applies to both the per-form
+  fill/advance engine and the batch "Queue" auto-open-Easy-Apply behavior — running the queue with
+  fill disabled would just auto-click through empty, unfilled modals across many postings, which is
+  both useless AND the more bot-pattern-looking half of the feature (rapid timed clicks across many
+  jobs) even without any field ever being typed into, so it's gated the same way with an explanatory
+  banner instead of silently doing nothing.
+- **`sidepanel.html`/`sidepanel.js`**: the existing "Auto-fill applications" toggle (already
+  LinkedIn-scoped, already user-facing — this was a real explicit opt-in point already built, not a
+  new feature) now starts unchecked, and its label spells out the LinkedIn ToS risk so turning it
+  back on is an informed choice, not an accidental default.
+- Manual "Auto-Fill Open Application" button (one explicit user-triggered click on the currently
+  open form) is untouched — it's a deliberate one-off action, not the unattended background
+  automation the ToS risk is actually about.
+- No changes to job search/discovery on LinkedIn (`scrapeJobList`/`harvestJobs`-style code )— only
+  the apply-automation surface is affected.
+
 ## Update 2026-07-11 (latest) — v1.13.37: fixes driven by a live 10-job apply test — the custom-domain binding bug is properly fixed this time (root architecture change, not another patch), plus the Databricks iframe stall, the Workday nav-panel tie, and a large Workday company-name data-quality issue
 
 A live 10-job end-to-end test (Claude in Chrome, real résumé, real postings) surfaced concrete
