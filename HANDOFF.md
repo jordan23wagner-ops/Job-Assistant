@@ -1,6 +1,45 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-09 (latest) — v1.13.33: checkbox-group question CONFIRMED fixed after 3 attempts (round 23→30, closed); ADP's value-commit step now includes focus/blur, following a fully isolated live repro of the framework reverting a bare synthetic value-set
+## Update 2026-07-11 (latest) — v1.13.34: temporary diagnostic logging for a live repro of "web-app Apply opens the posting, then nothing fills" on a custom (non-ATS-allowlisted) careers site
+
+Live repro from the user: searched via the Wagner-GPT Jobs tab, clicked Apply on a Stripe posting
+(`stripe.com/jobs/listing/...`, tagged "greenhouse" as its source — Stripe serves its own custom-
+skinned careers site over the Greenhouse API rather than a `boards.greenhouse.io` URL). The chat
+confirmed the extension accepted the apply handoff ("Alicia is auto-filling..."), but the opened tab
+just showed the plain job description with no visible activity. Manually clicking Stripe's own
+"Apply for this role" button (same-origin path change to `.../8036325/apply`) landed on a real form
+(First/Last/Email visible) — and that also stayed completely blank; no banner, nothing.
+
+**Root cause not yet confirmed** — code reading (not a live test; this sandbox's egress is blocked
+to arbitrary sites like stripe.com, confirmed via the proxy's `recentRelayFailures`) shows several
+mechanisms that SHOULD have handled this:
+- The explicit web-app apply session (`autofillSessions`, set in `onBeforeNavigate`/`onUpdated` in
+  `background.js`) is NOT gated by `ATS_HOST_RE` — a custom, unlisted host like `stripe.com` should
+  still get an explicit session and an `autofill.js` injection.
+- `autofill.js` already has a details-page-to-form auto-advance step
+  (`advanceToApplicationForm()`/`findApplyStartButton()`) specifically for "Apply Now"-style buttons
+  on a details page with no form yet — Stripe's actual button text ("Apply for this role") matches
+  its `APPLY_START_PATTERNS`, so it should have auto-clicked through without the user needing to.
+- The same-origin path change (`/8036325` -> `/8036325/apply`) should be caught by either a full
+  navigation (`chrome.tabs.onUpdated`) or, if it's an SPA route push, by
+  `chrome.webNavigation.onHistoryStateUpdated`.
+
+Since NEITHER the self-driven advance nor the user's own manual click resulted in a fill, the most
+likely explanation is that the explicit session was never actually bound to this tab in the first
+place (so nothing ever got injected on the first page, and the SPA-nav/full-nav listeners for the
+second page found no session to work from either) — but this needs a live re-test to confirm rather
+than more speculation.
+
+Added temporary `[Alicia][apply-debug]` console logging (removable once this is closed) at every
+handoff step in `background.js` (`WEBAPP_APPLY` registration, `onBeforeNavigate` binding,
+`onUpdated`'s inject-or-skip decision, `onHistoryStateUpdated`'s SPA re-inject) and in
+`autofill.js`'s `run()` entry (current URL + `hasRecognizedForm()`, `findApplyStartButton()` hit,
+`advanceToApplicationForm()` result). **Next step:** reproduce the same Stripe (or similar
+custom-careers-site) apply once more, then paste back both the background service worker's console
+(`chrome://extensions` -> Alicia -> "service worker" -> Inspect) and the applied tab's own DevTools
+console — the `[Alicia][apply-debug]` lines will show exactly which step the chain breaks at.
+
+## Update 2026-07-09 — v1.13.33: checkbox-group question CONFIRMED fixed after 3 attempts (round 23→30, closed); ADP's value-commit step now includes focus/blur, following a fully isolated live repro of the framework reverting a bare synthetic value-set
 
 Rounds 30-32 finally closed the two longest-running mysteries of the session down to one, with the
 other genuinely fixed and verified.

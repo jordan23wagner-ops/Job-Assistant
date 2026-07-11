@@ -105,11 +105,12 @@ chrome.webNavigation.onBeforeNavigate.addListener(function (details) {
   if (details.frameId !== 0 || !/^https?:/i.test(details.url || '')) return;
   chrome.storage.local.get(['autofillSessions', 'pendingApplyUrls'], function (data) {
     var sessions = data.autofillSessions || {};
-    if (sessions[String(details.tabId)]) return; // already adopted
+    if (sessions[String(details.tabId)]) { console.log('[Alicia][apply-debug] onBeforeNavigate: tab', details.tabId, 'already has a session — skipping'); return; }
     var pending = data.pendingApplyUrls || {};
     var key = normUrl(details.url);
     var match = pending[key];
-    if (!match || Date.now() - (match.ts || 0) > PENDING_APPLY_TTL_MS) return;
+    console.log('[Alicia][apply-debug] onBeforeNavigate: tab', details.tabId, 'url', details.url, 'normalized key', key, 'pending keys', Object.keys(pending), 'match?', !!match);
+    if (!match || Date.now() - (match.ts || 0) > PENDING_APPLY_TTL_MS) { console.log('[Alicia][apply-debug] onBeforeNavigate: no matching pending entry (or expired) — session NOT created for tab', details.tabId); return; }
     var mHost = '';
     try { mHost = new URL(details.url).hostname; } catch (e) {}
     sessions[String(details.tabId)] = {
@@ -117,6 +118,7 @@ chrome.webNavigation.onBeforeNavigate.addListener(function (details) {
       tailoredResume: match.resumeText || '', origUrl: key, navs: 0,
     };
     delete pending[key];
+    console.log('[Alicia][apply-debug] onBeforeNavigate: BOUND explicit session for tab', details.tabId, 'hostname', mHost);
     chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
   });
 });
@@ -128,6 +130,7 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     var sessions = data.autofillSessions || {};
     var pending = data.pendingApplyUrls || {};
     var s = sessions[String(tabId)];
+    console.log('[Alicia][apply-debug] onUpdated complete: tab', tabId, 'url', tab.url, 'existing session?', !!s);
     if (!s) {
       // Late adoption fallback (final URL matched directly, or onBeforeNavigate missed it).
       var key = normUrl(tab.url);
@@ -138,12 +141,15 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
         s = { hostname: mHost, startedAt: Date.now(), explicit: true, tailoredResume: match.resumeText || '', origUrl: key, navs: 0 };
         sessions[String(tabId)] = s;
         delete pending[key];
+        console.log('[Alicia][apply-debug] onUpdated: late-adopted tab', tabId, 'via pending match', key);
         chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
       } else {
+        console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'has no session and no pending match (key would be', normUrl(tab.url), ') — nothing will be injected');
         return;
       }
     }
     if (Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) {
+      console.log('[Alicia][apply-debug] onUpdated: session for tab', tabId, 'expired — dropping');
       delete sessions[String(tabId)];
       chrome.storage.local.set({ autofillSessions: sessions });
       return;
@@ -157,12 +163,14 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     if (s.explicit) {
       s.navs = (s.navs || 0) + 1;
       if (s.navs > EXPLICIT_SESSION_MAX_NAVS && !sameSite && !ATS_HOST_RE.test(host)) {
+        console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'exceeded nav cap off-site — dropping session');
         delete sessions[String(tabId)];
         chrome.storage.local.set({ autofillSessions: sessions });
         return;
       }
       chrome.storage.local.set({ autofillSessions: sessions });
     } else if (!sameSite && !ATS_HOST_RE.test(host)) {
+      console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'non-explicit session, off-site + unknown ATS — leaving alone');
       return; // user wandered off — leave the page alone
     }
     // On an Adzuna page during an explicit apply: resolve to the employer from the residential IP
@@ -182,8 +190,10 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
     setTimeout(function () {
       if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
         // On an aggregator landing page: click through to the employer application instead of filling.
+        console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'host', host, 'matched AGGREGATOR_HOST_RE — clicking through instead of injecting autofill.js');
         chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
       } else {
+        console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'injecting autofill.js now (host', host, ', navs', s.navs, ')');
         injectAutofillWithTailoredResume(tabId, s);
       }
     }, 800);
@@ -245,9 +255,11 @@ function injectAutofillWithTailoredResume(tabId, s) {
 // autofill.js, which just re-invokes the existing run function instead of re-declaring anything.
 chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
   if (details.frameId !== 0 || /(^|\.)linkedin\.com/i.test(details.url || '')) return; // LinkedIn handled above
+  console.log('[Alicia][apply-debug] onHistoryStateUpdated (SPA nav): tab', details.tabId, 'new url', details.url);
   chrome.storage.local.get('autofillSessions', function (data) {
     var s = (data.autofillSessions || {})[String(details.tabId)];
-    if (!s || Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) return;
+    if (!s || Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) { console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 'has no live session — skipping re-inject'); return; }
+    console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 're-injecting autofill.js for SPA nav');
     setTimeout(function () { injectAutofillWithTailoredResume(details.tabId, s); }, 500); // let the SPA render the new view first
   });
 });
@@ -371,6 +383,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     jobs.forEach(function (j) {
       if (j && j.url && /^https?:/i.test(j.url)) pending[normUrl(j.url)] = { ts: now, resumeText: j.resumeText || '' };
     });
+    console.log('[Alicia][apply-debug] WEBAPP_APPLY: registered', jobs.length, 'pending URL(s):', jobs.map(function (j) { return j && j.url; }));
     chrome.storage.local.set({ pendingApplyUrls: pending }, function () {
       // accepted vs requested lets the web app surface the 5-per-batch cap instead of silently
       // never filling job 6+.

@@ -2303,6 +2303,7 @@
       window.__aliciaNavHandled = false;
       try { removeNavPanel(); } catch (e) {}
     }
+    console.log('[Alicia][apply-debug] autofill.js run() start — url', location.href, 'hasRecognizedForm?', hasRecognizedForm());
     busy = true;
     var state = { generatedCredential: null };
     var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, eeoFilled: 0, ats: 'generic' };
@@ -2463,8 +2464,10 @@
       // no form yet — just an "Apply Now" button. Click through to the actual application before
       // giving up, so the user doesn't see "nothing happen" after landing on the details page.
       if (!hasRecognizedForm()) {
+        console.log('[Alicia][apply-debug] no recognized form yet — trying advanceToApplicationForm(); findApplyStartButton() found?', !!findApplyStartButton());
         showBanner('Opening the application…', '#4caf50');
         var advanced = await advanceToApplicationForm();
+        console.log('[Alicia][apply-debug] advanceToApplicationForm() ->', advanced, '; hasRecognizedForm() now', hasRecognizedForm());
         if (advanced) result.advancedToForm = true;
       }
 
