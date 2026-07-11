@@ -281,6 +281,19 @@
   // an empty password. "Apply"/"Apply Now" are deliberately NOT here — recognizing and clicking
   // those to OPEN an application (never submit one) is this panel's entire purpose.
   var NAV_NEVER_RE = /submit application|submit your application|^submit$|finish application|complete application|create (my |your )?(account|profile)|^sign up$|^register$/i;
+  // A navigational "Apply" control must OPEN an application, never submit one. If the candidate
+  // sits inside a <form> that has visible text-ish inputs, it is almost certainly that form's
+  // submit button: tiny 1-2 field applications fail hasRecognizedForm()'s >=3-input test, land in
+  // the no-form path, and clicking their "Apply" IS the submit — the one hole in the never-auto-
+  // submit rule found by the completion audit. A true details-page Apply link/button lives outside
+  // any input-bearing form, so skipping these costs nothing on the pages this path exists for.
+  function looksLikeInlineFormSubmit(el) {
+    var form = el && el.closest ? el.closest('form') : null;
+    if (!form) return false;
+    var inputs = form.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input:not([type]), textarea');
+    for (var i = 0; i < inputs.length; i++) { if (visible(inputs[i])) return true; }
+    return false;
+  }
   function navCandidates() {
     var out = [], seen = {}, seenEl = [];
     var push = function (el, t) {
@@ -288,7 +301,7 @@
       t = (t || getText(el) || el.value || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
       if (!t || t.length > 60) return;
       var key = norm(t);
-      if (!key || seen[key] || seenEl.indexOf(el) >= 0 || NAV_NOISE_RE.test(key) || NAV_NEVER_RE.test(key)) return;
+      if (!key || seen[key] || seenEl.indexOf(el) >= 0 || NAV_NOISE_RE.test(key) || NAV_NEVER_RE.test(key) || looksLikeInlineFormSubmit(el)) return;
       seen[key] = 1; seenEl.push(el);
       out.push({ el: el, text: t, score: navScore(t) });
     };
@@ -1742,6 +1755,7 @@
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
       if (el.disabled || !visible(el)) continue;
+      if (looksLikeInlineFormSubmit(el)) continue; // "Apply" that would SUBMIT a small inline form, not open one
       var t = norm((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || el.value || el.textContent || ''));
       if (!t || t.length > 40) continue;
       for (var p = 0; p < APPLY_START_PATTERNS.length; p++) { if (APPLY_START_PATTERNS[p].test(t)) return el; }

@@ -1,6 +1,34 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-11 (latest) — v1.13.35: the "Apply opens the posting, then nothing fills" root cause found by a full static trace — the pending-URL registration RACES the tab's own navigation and always loses; fixed with registration-time tab adoption + host/path-prefix matching
+## Update 2026-07-11 (latest) — v1.13.36: autofill completion audit — submit-stop enforcement mapped, one real auto-submit hole closed (tiny inline forms), one convention-dependent risk documented
+
+A full engine audit (completion + safety) confirmed the multi-step advance design is sound: STOP
+patterns are checked BEFORE advance every pass (`autofill.js` wizard loop), so a submit button
+coexisting with a Next button always wins; advance is allowlist-only; unrecognized/localized labels
+stall safely rather than guess. The whole never-auto-submit guarantee funnels through (a) the
+stop-before-advance comparison order in the wizard loop, (b) the contents of `STOP_PATTERNS`, and
+(c) `hasRecognizedForm()` keeping `^apply$` on the safe STOP side — treat any change to those three
+as a submit-safety regression.
+
+**Closed this round — the minimal-inline-form hole.** `hasRecognizedForm()` requires a password/file
+input or ≥3 text-ish controls, so a 1–2 field application (name+email, no résumé upload) fell into
+the NO-form path, where an "Apply" button is deliberately auto-clicked to OPEN the application — but
+on such a page that button IS the submit of the tiny form. New `looksLikeInlineFormSubmit()` guard:
+any nav/apply-start candidate sitting inside a `<form>` with visible text inputs is skipped (applied
+in `findApplyStartButton()` and `navCandidates()`, which also covers learned-clicks, the single-
+strong-candidate auto-click, and the choice panel's options). A real details-page Apply link lives
+outside any input-bearing form, so this costs nothing on legitimate pages. Syntax-checked; NOT yet
+live-tested (needs a real tiny-form page).
+
+**Documented, not fixed (convention-dependent, any heuristic risks breaking legitimate advances):**
+a site whose FINAL submit is labeled exactly "Continue"/"Proceed"/"Review"/"Next" with no
+stop-matching button present would be advance-clicked. No known ATS does this; revisit only with a
+live example in hand.
+
+Known stall gaps (safe stalls, still open): Greenhouse SPA-nav, EEO race/ethnicity multi-select
+combobox, non-English button labels, LinkedIn bare "Submit", ADP "+1" phone prefill.
+
+## Update 2026-07-11 — v1.13.35: the "Apply opens the posting, then nothing fills" root cause found by a full static trace — the pending-URL registration RACES the tab's own navigation and always loses; fixed with registration-time tab adoption + host/path-prefix matching
 
 The v1.13.34 repro (Stripe posting via the web-app Apply: description page opens, no auto-advance,
 manual click to the real `/apply` form also fills nothing, zero banners) is explained end-to-end
