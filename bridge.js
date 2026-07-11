@@ -44,12 +44,13 @@
     }
     if (e.data.type !== 'ALICIA_APPLY') return;
     var nonce = e.data.nonce;
-    var jobs = Array.isArray(e.data.jobs) ? e.data.jobs.slice(0, 5) : []; // cap 5 per batch
+    var jobs = Array.isArray(e.data.jobs) ? e.data.jobs.slice(0, 10) : []; // cap 10 per batch
     try {
       chrome.runtime.sendMessage({ type: 'WEBAPP_APPLY', jobs: jobs, options: e.data.options || {} }, function (resp) {
-        // ok=true only if the background worker actually handled it (so the web app's status is honest).
-        var ok = !chrome.runtime.lastError && resp && resp.ok;
-        try { window.postMessage({ source: 'alicia-ext', type: 'APPLY_ACK', nonce: nonce, ok: !!ok, count: (resp && resp.count) || 0, requested: (resp && resp.requested) || jobs.length }, '*'); } catch (e2) {}
+        // ok=true only if the background worker actually opened+bound at least one tab (so the
+        // web app's status is honest, not just "message received").
+        var ok = !chrome.runtime.lastError && resp && resp.ok && resp.count > 0;
+        try { window.postMessage({ source: 'alicia-ext', type: 'APPLY_ACK', nonce: nonce, ok: !!ok, count: (resp && resp.count) || 0, requested: (resp && resp.requested) || jobs.length, tabIds: (resp && resp.tabIds) || [] }, '*'); } catch (e2) {}
       });
     } catch (err) {
       try { window.postMessage({ source: 'alicia-ext', type: 'APPLY_ACK', nonce: nonce, ok: false, error: String(err) }, '*'); } catch (e2) {}

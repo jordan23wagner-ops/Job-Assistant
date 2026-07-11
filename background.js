@@ -245,6 +245,44 @@ function injectIntoRecognizedChildFrames(tabId, topHost) {
   });
 }
 
+// A one-time child-frame scan at injection time misses ATS forms embedded as an iframe that isn't
+// populated with a real src until AFTER a same-page "Apply"/reveal click — confirmed live: Databricks
+// embeds its Greenhouse form as <iframe id="grnhse_iframe">, empty/unrecognized at initial injection,
+// which left the top-frame instance looping the nav-choice panel forever (it can never find a form
+// in ITS OWN document, since the real fields are in a separate document the top frame can't see).
+// This listener catches the frame's real navigation (its src actually being set/changed) as it
+// happens, and injects immediately — no dependency on WHEN inside the page lifecycle that occurs.
+chrome.webNavigation.onCommitted.addListener(function (details) {
+  if (details.frameId === 0 || !/^https?:/i.test(details.url || '')) return;
+  var host = ''; try { host = new URL(details.url).hostname; } catch (e) { return; }
+  if (!ATS_HOST_RE.test(host)) return; // only known ATS iframe hosts — never an arbitrary third-party frame
+  chrome.storage.local.get('autofillSessions', function (data) {
+    var s = (data.autofillSessions || {})[String(details.tabId)];
+    if (!s || Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) return; // no live session for this tab
+    console.log('[Alicia][apply-debug] onCommitted: ATS child frame', host, 'appeared in tab', details.tabId, '— injecting');
+    var inject = function () {
+      chrome.scripting.executeScript({ target: { tabId: details.tabId, frameIds: [details.frameId] }, files: ['autofill.js'] }).catch(function () {});
+    };
+    if (s.tailoredResume) {
+      chrome.scripting.executeScript({
+        target: { tabId: details.tabId, frameIds: [details.frameId] },
+        func: function (t) { window.__aliciaTailoredResume = t; },
+        args: [s.tailoredResume],
+      }).then(inject, inject);
+    } else inject();
+  });
+});
+
+// Companion to the listener above: when autofill.js's own top-frame retry loop (the nav-choice
+// panel, or a plain "still no recognized form here") suspects the real form lives in a child frame
+// it can't see, it asks the background script to rescan NOW rather than only relying on the
+// onCommitted listener catching a frame src change it may have already missed before injection.
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (!message || message.type !== 'RESCAN_CHILD_FRAMES' || !sender.tab) return;
+  var host = ''; try { host = new URL(sender.tab.url).hostname; } catch (e) { return; }
+  injectIntoRecognizedChildFrames(sender.tab.id, host);
+});
+
 // Deliver the web app's per-job TAILORED résumé to the engine before it runs — autofill.js prefers
 // window.__aliciaTailoredResume over the stored generic resumeText — then inject/re-run autofill.js.
 function injectAutofillWithTailoredResume(tabId, s) {
@@ -392,27 +430,45 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
 
 // ===== Web-app handoff (Wagner-GPT "Jobs" tab -> auto-apply) =====
 // bridge.js (content script on the Wagner-GPT origin) relays the web app's "apply to these jobs"
-// request here. The WEB APP opens the posting tabs itself (reliable, gesture-preserved); we just
-// REGISTER the URLs so that when each posting loads, the onUpdated handler above adopts that tab as
-// an explicit autofill session and fills it (following redirects, skipping aggregator interstitials).
-// As always, the engine stops before the final Submit; a human clicks Submit on each application.
+// request here. THE EXTENSION opens each posting tab itself via chrome.tabs.create — not the web
+// app via window.open — and binds the explicit session to the exact returned tab.id in the SAME
+// callback. This replaces the earlier URL-matching design (register a pending URL, hope a
+// navigation-event listener matches it before/after the tab exists) which raced the web app's own
+// window.open and lost on custom-domain postings with no redirect to retry on (confirmed live:
+// Stripe and Databricks both got zero autofill activity even after the v1.13.35 registration-order
+// + tab-adoption fix). chrome.tabs.create from a privileged extension background context is NOT
+// subject to popup-blocking the way page-JS window.open is, so the web app no longer needs to open
+// the tab itself for this path — see aliciaBridge.js's corresponding change. `pendingApplyUrls` /
+// `findPendingMatch` are kept as a fallback for any tab that navigates to a matching URL through
+// some other path (e.g. a redirect chain), but are no longer load-bearing for the common case.
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message || message.type !== 'WEBAPP_APPLY') return;
   var requested = Array.isArray(message.jobs) ? message.jobs.length : 0;
-  var jobs = Array.isArray(message.jobs) ? message.jobs.slice(0, 5) : [];
-  chrome.storage.local.get('pendingApplyUrls', function (data) {
-    var pending = data.pendingApplyUrls || {};
-    var now = Date.now();
-    Object.keys(pending).forEach(function (k) { if (now - (pending[k].ts || 0) > PENDING_APPLY_TTL_MS) delete pending[k]; });
-    jobs.forEach(function (j) {
-      if (j && j.url && /^https?:/i.test(j.url)) pending[normUrl(j.url)] = { ts: now, resumeText: j.resumeText || '' };
-    });
-    console.log('[Alicia][apply-debug] WEBAPP_APPLY: registered', jobs.length, 'pending URL(s):', jobs.map(function (j) { return j && j.url; }));
-    chrome.storage.local.set({ pendingApplyUrls: pending }, function () {
-      // accepted vs requested lets the web app surface the 5-per-batch cap instead of silently
-      // never filling job 6+.
-      try { sendResponse({ ok: true, count: jobs.length, requested: requested }); } catch (e) {}
-      adoptOpenTabsForPending();
+  var jobs = Array.isArray(message.jobs) ? message.jobs.slice(0, 10) : [];
+  jobs = jobs.filter(function (j) { return j && j.url && /^https?:/i.test(j.url); });
+  console.log('[Alicia][apply-debug] WEBAPP_APPLY: opening', jobs.length, 'tab(s) directly:', jobs.map(function (j) { return j && j.url; }));
+  var opened = [];
+  var remaining = jobs.length;
+  if (!remaining) { try { sendResponse({ ok: true, count: 0, requested: requested, tabIds: [] }); } catch (e) {} return; }
+  jobs.forEach(function (j) {
+    chrome.tabs.create({ url: j.url, active: opened.length === 0 }, function (tab) {
+      remaining--;
+      if (chrome.runtime.lastError || !tab || !tab.id) {
+        console.log('[Alicia][apply-debug] WEBAPP_APPLY: tabs.create failed for', j.url, chrome.runtime.lastError && chrome.runtime.lastError.message);
+      } else {
+        opened.push(tab.id);
+        var host = ''; try { host = new URL(j.url).hostname; } catch (e) {}
+        chrome.storage.local.get('autofillSessions', function (data) {
+          var sessions = data.autofillSessions || {};
+          sessions[String(tab.id)] = {
+            hostname: host, startedAt: Date.now(), explicit: true,
+            tailoredResume: j.resumeText || '', origUrl: normUrl(j.url), navs: 0,
+          };
+          console.log('[Alicia][apply-debug] WEBAPP_APPLY: bound explicit session directly to new tab', tab.id, 'for', j.url);
+          chrome.storage.local.set({ autofillSessions: sessions });
+        });
+      }
+      if (remaining === 0) { try { sendResponse({ ok: true, count: opened.length, requested: requested, tabIds: opened }); } catch (e) {} }
     });
   });
   return true; // async sendResponse

@@ -243,6 +243,14 @@
     // Dead-ends FIRST — the aggregator engagement buttons ("I applied…", "I didn't actually
     // apply") contain the word "apply", so they'd otherwise tie the real Apply button.
     if (/i applied|contact hiring|engage later|didn.?t (actually )?apply|try premium|^premium$|sign in|log ?in|review \w/.test(n)) return 1;
+    // Workday's own "Start Your Application" modal offers "Apply Manually" alongside "Apply With
+    // LinkedIn"/"Apply With Indeed"/etc — both matched the generic apply-tier pattern below equally,
+    // so neither ever won as a single strong candidate and every Workday posting needed a human
+    // pick (confirmed live on two separate Workday tenants). An OAuth-handoff "Apply With X" button
+    // should never be auto-clicked anyway — that's a third-party login the user should choose
+    // deliberately, the same reasoning that keeps account-creation out of this generic panel — so
+    // excluding it from the apply tier both fixes the tie AND is the safer default on its own.
+    if (/^apply with /.test(n)) return 1;
     if (/apply now|apply for|apply on|^apply$|^apply .{0,20}$/.test(n)) return 6;
     if (/continue to (apply|application|job)|start application|begin application|proceed|go to (the )?job|view (the )?job|take me to/.test(n)) return 5;
     if (/^continue$|^next$|^start$/.test(n)) return 4;
@@ -2489,6 +2497,16 @@
       result.filled += pass.filled;
 
       if (!hasRecognizedForm()) {
+        // The real form may live in an embedded ATS iframe (e.g. Greenhouse) that only gets a real
+        // src after a same-page reveal click — well after the one-time child-frame scan at initial
+        // injection ran, so it's invisible to THIS frame no matter what we click here. Confirmed
+        // live on Databricks: the top frame never finds a form and loops the nav panel forever while
+        // the actual fields sit in a separate <iframe id="grnhse_iframe">. Ask the background script
+        // to rescan for a newly-appeared ATS child frame now, in parallel with the fallbacks below —
+        // harmless no-op if there isn't one (re-injecting an already-running frame is a safe no-op
+        // per the run-once guard), and it may make this frame's own nav-panel search moot if the
+        // child frame's own instance finds and fills the real form.
+        try { chrome.runtime.sendMessage({ type: 'RESCAN_CHILD_FRAMES' }); } catch (e) {}
         // No form here — this is a listing/aggregator/interstitial page. Try a learned "click this
         // button to proceed" choice for this host; else ask the human which button moves forward
         // (and remember it). window.__aliciaNavHandled stops us re-asking on a re-injection.

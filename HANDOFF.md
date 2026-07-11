@@ -1,6 +1,42 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
-## Update 2026-07-11 (latest) — v1.13.36: autofill completion audit — submit-stop enforcement mapped, one real auto-submit hole closed (tiny inline forms), one convention-dependent risk documented
+## Update 2026-07-11 (latest) — v1.13.37: fixes driven by a live 10-job apply test — the custom-domain binding bug is properly fixed this time (root architecture change, not another patch), plus the Databricks iframe stall, the Workday nav-panel tie, and a large Workday company-name data-quality issue
+
+A live 10-job end-to-end test (Claude in Chrome, real résumé, real postings) surfaced concrete
+failures that static analysis and logic tests had missed. Root-caused and fixed each with live
+verification, not just code review:
+
+1. **Custom-domain binding (Stripe, Databricks) — fixed at the architecture level.** The v1.13.35
+   fix (registration-order + tab-adoption) still lost the race live. Real fix: **the extension now
+   opens every applied-to tab itself** via `chrome.tabs.create` from its privileged background
+   context — not subject to popup-blocking the way page-JS `window.open` is — and binds the
+   explicit session to the exact returned `tab.id` synchronously, before the tab even starts
+   navigating. This eliminates the race by construction instead of trying to win it.
+   `pendingApplyUrls`/`findPendingMatch` stay as a fallback for any tab that reaches a matching URL
+   through some other path, but are no longer load-bearing for the common case. Batch cap raised
+   5→10 to match. Web app (`aliciaBridge.js`/`Jobs.jsx`) no longer calls `window.open` itself when
+   the extension is present — doing so now would open every job twice.
+2. **Databricks-class stall — root cause confirmed live**: the real application form is a
+   `<iframe id="grnhse_iframe">` embedded in the company's own page, not yet populated with a real
+   ATS `src` when the one-time child-frame scan runs at initial injection. The top-frame instance
+   can never find a form in its own document and loops the nav-choice panel forever. Fixed with a
+   `chrome.webNavigation.onCommitted` listener (scoped to tabs with a live session, known ATS hosts
+   only) that catches the iframe's real navigation whenever it happens, plus autofill.js explicitly
+   requesting a rescan when it can't find a form in its own frame.
+3. **Workday's "Start Your Application" modal — nav-choice tie fixed.** "Apply Manually" and
+   "Apply With LinkedIn" scored identically in `navScore`, so the single-strong-candidate auto-click
+   never fired and every Workday posting needed a human pick. OAuth-handoff "Apply With X" buttons
+   now score as a dead-end (never auto-clicked anyway — a third-party login should be a deliberate
+   human choice), which was also the correct safety call independent of the tie.
+4. **"✓ applied" badge dishonesty — resolved as a side effect of fix #1.** It used to fire on mere
+   message-receipt; now it only fires when the extension confirms it actually opened+bound a tab,
+   which is now a guaranteed synchronous fact instead of a race outcome.
+
+See Wagner-GPT's own HANDOFF for the matching web-app-side changes and a large Workday
+company-name data-quality fix (~6,000 registry rows) found while investigating the "Ffive"/"Nb"
+company-name reports.
+
+## Update 2026-07-11 — v1.13.36: autofill completion audit — submit-stop enforcement mapped, one real auto-submit hole closed (tiny inline forms), one convention-dependent risk documented
 
 A full engine audit (completion + safety) confirmed the multi-step advance design is sound: STOP
 patterns are checked BEFORE advance every pass (`autofill.js` wizard loop), so a submit button
