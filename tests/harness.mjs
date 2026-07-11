@@ -72,6 +72,14 @@ export async function runAutofill(html, { url, storage = {}, timeoutMs = 4000 } 
   // No network calls should happen in these fixture tests (all fields are standard-matched) --
   // fail loudly rather than hang or silently hit a real endpoint if that assumption breaks.
   window.fetch = () => Promise.reject(new Error('unexpected network call from a fixture test'))
+  // Workday's "Create Account" button IS meant to be auto-clicked (WD_ADVANCE explicitly includes
+  // it -- it's a real wizard step, not the final application submit, which is a separate,
+  // never-clicked STOP pattern). That click reaches jsdom's own internal, unimplemented
+  // HTMLFormElementImpl.requestSubmit and logs a harmless "not implemented" line on every run --
+  // patching window.HTMLFormElement.prototype.requestSubmit does NOT suppress it (jsdom's button
+  // activation behavior calls its own internal impl directly, bypassing the exposed prototype
+  // method), so this is expected console noise on Workday fixture runs, not a real error and not
+  // worth fighting jsdom internals over. All assertions still pass regardless.
 
   const timer = setTimeout(() => rejectResult(new Error(`timed out after ${timeoutMs}ms waiting for UNIVERSAL_FILL_RESULT — did the fixture trigger an unmocked code path (e.g. an AI-answered custom question)?`)), timeoutMs)
 

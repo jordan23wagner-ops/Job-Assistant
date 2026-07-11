@@ -1,0 +1,45 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL Workday "Create Account" page (captured live
+  from axiomspace.wd5.myworkdayjobs.com's actual apply flow, structure only — no real applicant
+  data). This is the page Workday shows BEFORE the contact-info form (see wdBlockingWall /
+  fillPasswordFields / tickAccountAgreement in autofill.js) -- a third, distinct field-matching
+  shape from greenhouse.html/lever.html: fields are matched almost entirely by
+  `data-automation-id`, since Workday's own `id`/`label[for]` are randomly generated per-session
+  (e.g. "input-4") and carry no semantic meaning at all.
+
+  The `beecatcher` field is a REAL honeypot, copied faithfully from the live page's own computed
+  style: display:block, visibility:visible, a real offsetParent -- it passes every visibility
+  check a bot-detector (or, it turns out, autofill.js's own visible() check) would run. Its
+  name="website" is what a genuine bot-trap wants: a plausible-looking field a script that just
+  fills anything matching "website" would dutifully fall into.
+-->
+<form>
+  <div class="css-form">
+    <div class="css-fieldGroup">
+      <label for="input-4">Email Address<span aria-hidden="true">*</span></label>
+      <input id="input-4" type="text" data-automation-id="email" aria-required="true" value="">
+    </div>
+    <div class="css-fieldGroup">
+      <label for="input-5">Password<span aria-hidden="true">*</span></label>
+      <input id="input-5" type="password" data-automation-id="password" aria-required="true" value="">
+    </div>
+    <div class="css-fieldGroup">
+      <label for="input-6">Verify New Password<span aria-hidden="true">*</span></label>
+      <input id="input-6" type="password" data-automation-id="verifyPassword" aria-required="true" value="">
+    </div>
+    <!-- Real honeypot, including its real <label> text (captured live, not paraphrased) -- this
+         exact wording is what looksLikeHoneypot's regex is built to catch ("do not enter"). It's
+         visually off-screen via CSS the fixture doesn't need to reproduce (jsdom does no layout
+         anyway), but NOT via display:none/hidden/type=hidden -- exactly why it passes
+         autofill.js's own visible() check on the real page too. -->
+    <div class="css-beecatcherWrap">
+      <label for="215f19ff-honeypot">Enter website. This input is for robots only, do not enter if you're human.</label>
+      <input id="215f19ff-honeypot" type="text" name="website" data-automation-id="beecatcher" value="">
+    </div>
+    <div class="css-fieldGroup">
+      <input id="input-9" type="checkbox" data-automation-id="createAccountCheckbox">
+      <label for="input-9">I Accept the Terms and Conditions</label>
+    </div>
+  </div>
+  <button type="submit" data-automation-id="createAccountSubmitButton">Create Account</button>
+</form>

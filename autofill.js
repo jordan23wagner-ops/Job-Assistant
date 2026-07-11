@@ -786,6 +786,13 @@
       if (el.value && el.value.trim()) continue;
       if (!visible(el)) continue;
       if (isComboControl(el)) continue; // dropdown widgets are SELECTED (fillStdCombos), never typed into
+      // Anti-bot honeypot fields (Workday's "beecatcher" and others) are deliberately styled to
+      // pass this exact visible() check while a human never sees them -- looksLikeHoneypot was
+      // already built for the custom-question path but never wired in here, so a field whose
+      // name/label matches a real contact-field pattern (Workday's beecatcher is name="website",
+      // which satisfies the website matcher below) got typed into like any other field. Live-
+      // confirmed: this is a real one, not a hypothetical -- see tests/fixtures/workday.html.
+      if (looksLikeHoneypot(labelText(el) || el.getAttribute('aria-label') || '')) continue;
       var s = signals(el);
       if (!s) continue;
       for (var f = 0; f < STD.length; f++) {

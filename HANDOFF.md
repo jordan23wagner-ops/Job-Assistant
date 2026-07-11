@@ -1,5 +1,28 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (later still) — Workday fixture found and fixed a real live bug: honeypot field was getting filled
+
+Added `tests/fixtures/workday.html` (the "Create Account" page — real field structure captured
+live from axiomspace.wd5.myworkdayjobs.com, a third distinct field-matching shape after
+Greenhouse's id-based and Lever's name-based: Workday keys everything off `data-automation-id`,
+since its own `id`/`label[for]` are randomly generated per session and carry no semantic meaning).
+
+While capturing it, found a real, currently-live bug, not a hypothetical: Workday's `beecatcher`
+field is a genuine anti-bot honeypot — `name="website"` (so anything that fills a field matching
+"website" walks right into it) styled `display:block` with a real `offsetParent` (confirmed
+against the live page's own computed style) specifically so it passes the same `visible()` check
+`autofill.js` itself uses, while a human never sees it. `autofill.js` already had honeypot
+detection (`looksLikeHoneypot`/`mustNeverAnswer`) — but it was only ever wired into the AI-answered
+custom-question path, never into `fillStdFields`, which is what actually matches this field (its
+`name="website"` satisfies the existing website matcher). Wrote the test expecting it to fail
+(`profile.website` really did end up typed into the honeypot) before fixing it — confirmed via the
+new fixture, not assumed. Fix: one added line in `fillStdFields` reusing the existing
+`looksLikeHoneypot` check, no new logic. This is exactly the kind of thing the new test suite
+exists to catch — see the entry below — and it found one on its third fixture.
+
+6/6 tests passing now (2 new Workday ones: fields-fill-correctly, and the honeypot check).
+`npm test` from the repo root.
+
 ## Update 2026-07-11 (latest) — first automated test suite, against the REAL autofill.js
 
 Closes a gap flagged in the same audit that led to the LinkedIn default-off change below: every

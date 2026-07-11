@@ -6,12 +6,14 @@
 // meaning a future edit to the shared field-matching code could silently break a platform that
 // used to work, with nothing catching it until the next live test happens to hit it.
 //
-// Coverage today is intentionally NOT exhaustive across every supported ATS (Workday, Ashby,
-// SmartRecruiters, Workable, Recruitee, iCIMS, Taleo have no fixture yet) -- two platforms with
-// genuinely different field-matching shapes (separate first/last name vs. one combined name
-// field) are enough to prove the harness works against the unmodified production code. Add a
-// fixture the same way for the next platform: capture real (sanitized, no personal data) field
-// structure from a live posting, hand-compose a trimmed HTML fixture, write assertions.
+// Coverage today is intentionally NOT exhaustive across every supported ATS (Ashby,
+// SmartRecruiters, Workable, Recruitee, iCIMS, Taleo have no fixture yet) -- three platforms with
+// genuinely different field-matching shapes (Greenhouse: separate first/last name, id-based;
+// Lever: one combined name field, name-attribute-based; Workday: data-automation-id-based, no
+// semantic id/name at all) are enough to prove the harness works against the unmodified
+// production code. Add a fixture the same way for the next platform: capture real (sanitized, no
+// personal data) field structure from a live posting, hand-compose a trimmed HTML fixture, write
+// assertions.
 import { test } from 'node:test'
 import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
@@ -84,4 +86,40 @@ test('lever: no profile at all -> reports no_profile and fills nothing', async (
   })
   assert.strictEqual(result.status, 'no_profile')
   assert.strictEqual(document.querySelector('input[name="email"]').value, '')
+})
+
+test('workday: fills the create-account page (email via data-automation-id, generated password, agree-to-terms checkbox)', async () => {
+  const { result, document } = await runAutofill(fixture('workday.html'), {
+    url: 'https://axiomspace.wd5.myworkdayjobs.com/en-US/external_career_site/job/Houston/apply/applyManually',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.ats, 'workday')
+  assert.strictEqual(document.querySelector('[data-automation-id="email"]').value, TEST_PROFILE.email)
+
+  const pw = document.querySelector('[data-automation-id="password"]').value
+  const pw2 = document.querySelector('[data-automation-id="verifyPassword"]').value
+  assert.ok(pw.length >= 8, `expected a generated password, got ${JSON.stringify(pw)}`)
+  assert.strictEqual(pw, pw2, 'password and verify-password must match')
+
+  assert.strictEqual(document.querySelector('[data-automation-id="createAccountCheckbox"]').checked, true)
+})
+
+// This one is expected to demonstrate a REAL bug, not confirm correct behavior -- found while
+// building this fixture, not assumed going in. Workday's beecatcher field is a genuine honeypot:
+// name="website" (so a script that fills anything matching "website" walks right into it) styled
+// with display:block / a real offsetParent (confirmed live against the real page's own computed
+// style) specifically so it passes the same visible() check autofill.js itself uses, while a
+// human never sees it. autofill.js DOES have honeypot detection (mustNeverAnswer/
+// looksLikeHoneypot) -- but only on the AI-answered custom-question path, never checked by
+// fillStdFields, which is what actually matches this field (its name="website" satisfies
+// buildStdMatchers' website regex). If this assertion fails, that's the bug being real, not a
+// broken test -- see HANDOFF.md for whether it's been fixed yet.
+test('workday: does NOT fill the honeypot field, even though profile.website is set', async () => {
+  const { document } = await runAutofill(fixture('workday.html'), {
+    url: 'https://axiomspace.wd5.myworkdayjobs.com/en-US/external_career_site/job/Houston/apply/applyManually',
+    storage: { profile: TEST_PROFILE },
+  })
+  const honeypot = document.querySelector('[data-automation-id="beecatcher"]')
+  assert.strictEqual(honeypot.value, '', 'the honeypot field must never be filled, or Workday can flag the whole application as bot-submitted')
 })
