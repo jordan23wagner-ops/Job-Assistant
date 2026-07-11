@@ -118,6 +118,50 @@ AI feature runs on a free backend, no API key required.
 
 ---
 
+## Testing
+
+`npm install && npm test` runs an integration test suite against the REAL, unmodified
+`autofill.js` — not a reimplementation of its logic. Every ATS-specific fix this project has
+shipped (Databricks iframe stall, Workday nav-panel tie, LinkedIn ToS default, company-name
+mangling, ...) was found by manually clicking through a real posting, not by a test, meaning a
+future edit to the shared field-matching code could silently break a platform that used to work
+with nothing catching it until the next live test happens to hit it. This closes that gap for the
+platforms it covers.
+
+**How it works** (`tests/harness.mjs`): loads a fixture HTML page into a `jsdom` window, mocks
+`chrome.storage`/`chrome.runtime` in memory, `eval()`s the real `autofill.js` source into that
+window (it's a plain content-script IIFE with no build step or exports — `window.eval` is the
+only way to run it unmodified), and waits for the `UNIVERSAL_FILL_RESULT` message the real code
+sends via `chrome.runtime.sendMessage` — the same message `background.js` listens for in
+production — rather than reaching into internal functions.
+
+**Fixtures** (`tests/fixtures/*.html`) are hand-composed but modeled on REAL field structure
+captured live from real postings (Cloudflare on Greenhouse, Palantir on Lever) — real `id`/`name`/
+`autocomplete`/`aria-label` attributes and label associations, not synthetic markup that might not
+match real-world quirks. Coverage today is two platforms with genuinely different field-matching
+shapes (Greenhouse: separate first/last name fields, id-based `<label for>`; Lever: one combined
+name field matched by its `name` attribute, no real `<label>` tag at all) — proof the harness works
+against unmodified production code, not exhaustive coverage of every supported ATS. Workday, Ashby,
+SmartRecruiters, Workable, Recruitee, iCIMS, and Taleo have no fixture yet. To add one: open a real
+posting, capture field structure via the browser's console (`document.querySelectorAll('input,
+select, textarea')` → id/name/label/autocomplete — never capture real filled-in values), hand-write
+a trimmed fixture from that, then assertions.
+
+**Three jsdom-specific gotchas the harness works around** (all documented inline in
+`harness.mjs`), worth knowing before extending this:
+- jsdom does no real layout, so `offsetParent` is always `null` — `autofill.js`'s `visible()`
+  check would otherwise skip every field in every fixture. The harness patches `offsetParent` to
+  return truthy for anything not explicitly hidden.
+- `autofill.js` watches `document.body` with a `MutationObserver` and re-runs itself on every
+  childList mutation, by design — exactly right in a real tab, but a genuine infinite loop in a
+  test with nothing to stop it. The harness stubs `MutationObserver` out entirely; a test only
+  needs one clean fill pass.
+- Node's test runner needs `--test-force-exit` (already in `npm test`) — without it a run that
+  passes cleanly still hangs for ~30s before exiting, from lingering jsdom timer handles.
+
+`node --test tests/` (a bare directory) doesn't reliably discover files on this Node version — use
+an explicit glob (`tests/*.test.mjs`, already how `npm test` is wired) or list files by name.
+
 ## Setup
 
 1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select this folder.

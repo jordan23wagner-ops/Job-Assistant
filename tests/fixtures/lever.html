@@ -1,0 +1,34 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL Lever application form
+  (captured live from jobs.lever.co/palantir/.../apply, structure only — no real applicant
+  data). Deliberately different shape from greenhouse.html: Lever keys fields by `name`
+  attribute (name="name" is a SINGLE combined full-name field, not separate first/last) with
+  a sibling <div class="application-label"> instead of a real <label> tag — the field-matching
+  code in autofill.js relies on the `name` attribute itself here, not the label div, which this
+  fixture exercises for real.
+-->
+<form class="application-form">
+  <ul>
+    <li class="application-question">
+      <div class="application-label">Resume/CV<span class="required">✱</span></div>
+      <input type="file" id="resume-upload-input" name="resume">
+    </li>
+    <li class="application-question">
+      <div class="application-label">Full name<span class="required">✱</span></div>
+      <input type="text" name="name" required value="">
+    </li>
+    <li class="application-question">
+      <div class="application-label">Email<span class="required">✱</span></div>
+      <input type="email" name="email" required value="">
+    </li>
+    <li class="application-question">
+      <div class="application-label">Phone</div>
+      <input type="text" name="phone" value="">
+    </li>
+    <li class="application-question">
+      <div class="application-label">Current location<span class="required">✱</span></div>
+      <input type="text" id="location-input" name="location" required value="">
+    </li>
+  </ul>
+  <button type="submit" class="postings-btn template-btn-submit">Submit application</button>
+</form>

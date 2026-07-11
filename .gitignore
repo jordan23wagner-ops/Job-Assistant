@@ -13,3 +13,6 @@ Thumbs.db
 *.zip
 *.crx
 *.pem
+
+# Node (test infra only — the extension itself has no build step)
+node_modules/

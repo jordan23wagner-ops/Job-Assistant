@@ -1,5 +1,32 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (latest) — first automated test suite, against the REAL autofill.js
+
+Closes a gap flagged in the same audit that led to the LinkedIn default-off change below: every
+ATS-specific fix this project has ever shipped was found by manually clicking through a real
+posting, with zero automated regression coverage on the actual field-filling logic — meaning a
+future edit could silently break a platform that used to work. New: `package.json` + `jsdom`
+devDependency (first Node/npm infra this repo has had; the extension itself still ships as plain
+files, no build step) and `tests/harness.mjs` + `tests/fixtures/*.html` + `tests/autofill.test.mjs`.
+
+The harness `eval()`s the real, unmodified `autofill.js` into a jsdom window (it's a plain
+content-script IIFE with no exports, so this is the only way to run it as-is) against a fixture
+page, mocking `chrome.storage`/`chrome.runtime` and waiting for the same `UNIVERSAL_FILL_RESULT`
+message `background.js` listens for in production. Two fixtures so far (Greenhouse, Lever — real
+field structure captured live from Cloudflare's and Palantir's actual application forms, not
+synthetic markup), deliberately NOT exhaustive across every supported ATS yet — see README's new
+Testing section for how to add more and the three jsdom-specific gotchas that had to be worked
+around (`offsetParent` always null with no real layout engine, a `MutationObserver` that turns into
+a genuine infinite loop without a browser tab to eventually navigate away, Node's test runner
+needing `--test-force-exit` or a clean run still hangs ~30s on exit).
+
+One real, useful finding the tests turned up immediately: "Preferred First Name" fields get filled
+with the plain first name too (the firstName regex matches "first name" as a substring, and there's
+no separate `profile.preferredName` to fill it from instead) — a defensible default, not a bug, but
+now a documented, asserted-on behavior instead of an undiscovered side effect.
+
+4/4 tests passing, ~2s total run time. `npm install && npm test` from the repo root.
+
 ## Update 2026-07-11 (later) — v1.13.38: LinkedIn Easy Apply auto-fill now defaults to OFF
 
 A gap audit flagged a real account risk that was previously just accepted implicitly: LinkedIn's

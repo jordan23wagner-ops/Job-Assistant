@@ -1,0 +1,46 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL Greenhouse application form
+  (captured live from job-boards.greenhouse.io/cloudflare/jobs/7958059, structure only —
+  no real applicant data). Field ids, autocomplete attributes, and label associations match
+  what Greenhouse actually renders: separate first_name/last_name (not a combined name field,
+  unlike Lever — see lever.html), id-based <label for>, aria-label duplicated onto the input.
+-->
+<form>
+  <div class="application--questions">
+    <div class="field-wrapper">
+      <label id="first_name-label" for="first_name">First Name<span aria-hidden="true">*</span></label>
+      <input id="first_name" aria-label="First Name" type="text" autocomplete="given-name" aria-required="true" value="">
+    </div>
+    <div class="field-wrapper">
+      <label id="last_name-label" for="last_name">Last Name<span aria-hidden="true">*</span></label>
+      <input id="last_name" aria-label="Last Name" type="text" autocomplete="family-name" aria-required="true" value="">
+    </div>
+    <div class="field-wrapper">
+      <label id="preferred_name-label" for="preferred_name">Preferred First Name</label>
+      <input id="preferred_name" aria-label="Preferred First Name" type="text" value="">
+    </div>
+    <div class="field-wrapper">
+      <label id="email-label" for="email">Email<span aria-hidden="true">*</span></label>
+      <input id="email" aria-label="Email" type="text" autocomplete="email" aria-required="true" value="">
+    </div>
+    <div class="field-wrapper">
+      <label id="phone-label" for="phone">Phone<span aria-hidden="true">*</span></label>
+      <input id="phone" aria-label="Phone" type="tel" aria-required="true" value="">
+    </div>
+    <div class="field-wrapper">
+      <label id="resume-label" for="resume">Attach<span aria-hidden="true">*</span></label>
+      <input id="resume" type="file" aria-required="true">
+    </div>
+    <div class="field-wrapper">
+      <label id="cover_letter-label" for="cover_letter">Attach</label>
+      <input id="cover_letter" type="file">
+    </div>
+    <div class="field-wrapper">
+      <label id="question_67192150-label" for="question_67192150">LinkedIn Profile</label>
+      <input id="question_67192150" aria-label="LinkedIn Profile" type="text" value="">
+    </div>
+  </div>
+  <div class="application--submit">
+    <button type="submit" id="submit_app">Submit Application</button>
+  </div>
+</form>
