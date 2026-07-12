@@ -285,6 +285,47 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
 // Deliver the web app's per-job TAILORED résumé to the engine before it runs — autofill.js prefers
 // window.__aliciaTailoredResume over the stored generic resumeText — then inject/re-run autofill.js.
+// Clears the side panel Stop button's cooperative halt flag in every frame of a tab. Called on
+// every EXPLICIT fill start (panel button, web-app apply, detect.js offer accept) right before
+// autofill.js is injected — a Stop stays in force until the human deliberately starts a new fill,
+// and nothing automatic (SPA re-inject, mutation rerun) can clear it, because those paths only
+// run while a session is live and Stop deletes all sessions.
+function clearStopFlag(tabId) {
+  return chrome.scripting.executeScript({
+    target: { tabId: tabId, allFrames: true },
+    func: function () { window.__aliciaStopRequested = false; },
+  }).catch(function () {});
+}
+
+// Side panel "Stop Autofill" pressed: interrupt any in-progress run immediately. Sets the halt
+// flag in every frame of every tab with a live autofill session (plus the active tab, in case its
+// session already expired), dispatches the stop event so autofill.js can tear down its timers and
+// show feedback, deletes ALL sessions so no navigation/SPA event re-injects, and halts a running
+// Easy Apply queue between items too.
+chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
+  if (!message || message.type !== 'STOP_AUTOFILL') return;
+  console.log('[Alicia][apply-debug] STOP_AUTOFILL received at', new Date().toISOString());
+  chrome.storage.local.get('autofillSessions', function (data) {
+    var ids = Object.keys(data.autofillSessions || {}).map(function (k) { return parseInt(k, 10); }).filter(function (n) { return !isNaN(n); });
+    chrome.tabs.query({ active: true }, function (tabs) {
+      (tabs || []).forEach(function (t) { if (t && t.id && ids.indexOf(t.id) === -1) ids.push(t.id); });
+      ids.forEach(function (tabId) {
+        chrome.scripting.executeScript({
+          target: { tabId: tabId, allFrames: true },
+          func: function () {
+            window.__aliciaStopRequested = true;
+            try { window.dispatchEvent(new Event('alicia-stop-autofill')); } catch (e) {}
+          },
+        }).catch(function () {}); // chrome:// / extension pages can't be scripted — fine, nothing runs there
+      });
+      chrome.storage.local.set({ autofillSessions: {}, queueActive: false, queuePaused: false }, function () {
+        try { sendResponse({ ok: true, stopped: ids.length }); } catch (e) {}
+      });
+    });
+  });
+  return true; // async sendResponse
+});
+
 function injectAutofillWithTailoredResume(tabId, s) {
   var inject = function () {
     chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['autofill.js'] }).catch(function () {});
@@ -294,15 +335,19 @@ function injectAutofillWithTailoredResume(tabId, s) {
       injectIntoRecognizedChildFrames(tabId, host);
     });
   };
-  if (s && s.tailoredResume) {
-    chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: function (t) { window.__aliciaTailoredResume = t; },
-      args: [s.tailoredResume],
-    }).then(inject, inject);
-  } else {
-    inject();
-  }
+  var afterClear = function () {
+    if (s && s.tailoredResume) {
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: function (t) { window.__aliciaTailoredResume = t; },
+        args: [s.tailoredResume],
+      }).then(inject, inject);
+    } else {
+      inject();
+    }
+  };
+  // Only reached while a session is live (Stop deletes all sessions), so clearing is always safe.
+  clearStopFlag(tabId).then(afterClear, afterClear);
 }
 
 // Client-side ("SPA") route changes — e.g. clicking "Apply Manually" inside Workday, or "I'm
@@ -418,8 +463,11 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
       var sessions = data.autofillSessions || {};
       sessions[String(tab.id)] = { hostname: host, startedAt: Date.now() };
       chrome.storage.local.set({ autofillSessions: sessions }, function () {
-        chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }).catch(function () {});
-        injectIntoRecognizedChildFrames(tab.id, host);
+        var go = function () {
+          chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }).catch(function () {});
+          injectIntoRecognizedChildFrames(tab.id, host);
+        };
+        clearStopFlag(tab.id).then(go, go); // explicit human accept — a prior Stop no longer applies
       });
     });
   }

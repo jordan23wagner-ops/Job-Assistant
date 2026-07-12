@@ -34,8 +34,21 @@
   var CUSTOM_QA_MAX_PER_STEP = 10;
   var busy = false;
 
+  // ---------- user-requested interrupt ("Stop Autofill" in the side panel) ----------
+  // background.js sets window.__aliciaStopRequested = true in EVERY frame of the tab when the
+  // human clicks Stop (and dispatches 'alicia-stop-autofill' for immediate visible feedback).
+  // Cancellation is cooperative: checkpoints throughout the run throw a marked error, and sleep()
+  // itself rejects once the flag is up, so even a long combo/typeahead pass (which awaits sleep
+  // between every widget interaction) bails within one sleep tick rather than finishing the pass.
+  // The flag is cleared ONLY by an explicit new fill/apply (background clears it right before
+  // injecting for one) — a scheduled rerun, SPA re-injection, or mutation rerun never clears it.
+  function stopRequested() { return window.__aliciaStopRequested === true; }
+  function stopError() { var e = new Error('autofill stopped by user'); e.aliciaStopped = true; return e; }
+  function throwIfStopped() { if (stopRequested()) throw stopError(); }
+  var STOP_BANNER_MSG = 'Autofill stopped — nothing more will be filled here. Use the side panel to start a new fill.';
+
   // ---------- tiny utils ----------
-  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function sleep(ms) { return new Promise(function (r, j) { setTimeout(function () { if (stopRequested()) j(stopError()); else r(); }, ms); }); }
   function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim(); }
   function getText(el) { return el ? ((el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim()) : ''; }
   function fire(el) {
@@ -270,7 +283,7 @@
       }
       removeQuestionPanel();
       showBanner('Answers saved — Alicia will remember them for next time.', '#4caf50');
-      setTimeout(function () { window.__aliciaAutofillRun(); }, 800);
+      setTimeout(function () { if (stopRequested()) return; window.__aliciaAutofillRun(); }, 800);
     };
     panel.appendChild(save);
     document.body.appendChild(panel);
@@ -436,7 +449,7 @@
         removeNavPanel();
         showBanner('Opening the application…', '#4caf50');
         try { fireClick(c.el); } catch (e) {}
-        setTimeout(function () { window.__aliciaAutofillRun(); }, 2500);
+        setTimeout(function () { if (stopRequested()) return; window.__aliciaAutofillRun(); }, 2500);
       };
       panel.appendChild(b);
     });
@@ -1784,7 +1797,7 @@
         if (v && String(v).trim()) upsertLearnedAnswer(item.label, String(v).trim(), item.type, item.options);
       });
       // The human just confirmed this step — keep going on the next one.
-      setTimeout(function () { window.__aliciaAutofillRun(); }, 1200);
+      setTimeout(function () { if (stopRequested()) return; window.__aliciaAutofillRun(); }, 1200);
     }, true);
   }
 
@@ -1925,6 +1938,7 @@
     var checks = 0;
     var iv = setInterval(function () {
       checks++;
+      if (stopRequested()) { clearInterval(iv); return; }
       if (checks > 10 || document.getElementById('alicia-question-panel') || document.getElementById('alicia-nav-panel')) { clearInterval(iv); return; }
       if (!hasUnfilledRequiredField()) {
         showBanner('Filled and ready — review everything, then click "' + buttonText + '" yourself. (a field finished filling in after the last check)', '#4caf50');
@@ -1946,6 +1960,7 @@
     var checks = 0;
     var iv = setInterval(function () {
       checks++;
+      if (stopRequested()) { clearInterval(iv); return; }
       if (checks > 6 || document.getElementById('alicia-question-panel') || document.getElementById('alicia-nav-panel')) { clearInterval(iv); return; }
       if (!hasUnfilledRequiredField()) return; // still healthy, keep watching
       clearInterval(iv);
@@ -1964,6 +1979,7 @@
       mo.observe(document.body, { childList: true, subtree: true });
       var start = Date.now();
       (function check() {
+        if (stopRequested()) { mo.disconnect(); resolve(); return; } // caller's next checkpoint throws
         if (Date.now() - last > 500 || Date.now() - start > maxMs) { mo.disconnect(); resolve(); return; }
         setTimeout(check, 200);
       })();
@@ -2370,6 +2386,7 @@
   // ---------- main ----------
   window.__aliciaAutofillRun = async function () {
     if (busy) return;
+    if (stopRequested()) return; // Stop was pressed — stay halted until an explicit new fill clears the flag
     _shadowRootsCache = null; // re-scan once per pass, not once per queryAllDeep call within it
     // `window.__aliciaNavHandled` latches true once the nav panel is shown, and — since `window`
     // persists across SPA route changes (no full reload) — it stays true on every later
@@ -2444,6 +2461,7 @@
       }
 
       async function fillOnePass() {
+        throwIfStopped();
         var n = 0;
         n += clearSuspiciousSchoolInCompanyFields();
         n += fillStdFields(profile);
@@ -2513,6 +2531,7 @@
         if (items.length > CUSTOM_QA_MAX_PER_STEP) items = items.slice(0, CUSTOM_QA_MAX_PER_STEP);
         var unanswered = [];
         for (var qi = 0; qi < items.length; qi++) {
+          throwIfStopped();
           var qItem = items[qi];
           var learned = findLearnedAnswer(bank, qItem.label);
           // The bank-load filter above only catches a poisoned record whose OWN stored question
@@ -2598,7 +2617,7 @@
             if (!navClicked) { saveNavChoice(location.hostname, strong[0].text); try { fireClick(strong[0].el); } catch (e) {} }
             result.status = 'advancing';
             showBanner('Opening the application…', '#4caf50');
-            setTimeout(function () { window.__aliciaNavHandled = false; window.__aliciaAutofillRun(); }, 2800);
+            setTimeout(function () { if (stopRequested()) return; window.__aliciaNavHandled = false; window.__aliciaAutofillRun(); }, 2800);
           } else if (navClicked || strong.length === 1) {
             // Hit the attempt cap without ever finding a recognized form -- stop retrying and
             // surface it, instead of looping silently forever.
@@ -2619,6 +2638,7 @@
       } else {
         window.__aliciaAdvanceAttempts = 0; // a form was actually reached -- real progress, clear the click-retry budget
         for (var step = 0; step < MAX_STEPS; step++) {
+          throwIfStopped();
           var correctedThisStep = false; // one dropdown-correction attempt per step
           // A page nav may have landed us on an adapter hard blocker mid-wizard (e.g. Workday's
           // verify-email wall appears right after Create Account) — stop cleanly if so.
@@ -2639,6 +2659,7 @@
               var byIndex = {};
               answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
               for (var ui = 0; ui < pass.unanswered.length; ui++) {
+                throwIfStopped(); // the AI call above can outlast a Stop click — never apply its answers after one
                 var aiItem = pass.unanswered[ui];
                 var ans = byIndex[ui + 1];
                 if (ans && looksLikeRefusalAnswer(ans)) continue; // "No image provided."/"N/A"-style non-answer -> leave empty, ask the human instead
@@ -2758,6 +2779,15 @@
       report(result);
       return result;
     } catch (err) {
+      if (err && err.aliciaStopped) {
+        // Not an error: the human pressed Stop. Report a distinct status (never the red error
+        // banner) and leave the page exactly as it is — no further field changes of any kind.
+        result.status = 'stopped_by_user';
+        try { showBanner(STOP_BANNER_MSG, '#e0a800'); } catch (e) {}
+        console.log('[Alicia][apply-debug] run() interrupted by Stop at', new Date().toISOString());
+        report(result);
+        return result;
+      }
       result.status = 'error';
       result.error = String(err && err.message || err);
       // Observed: a run can throw and stop with ZERO visible sign anything happened at all — no
@@ -2790,18 +2820,41 @@
   var mutationRerunTimer = null;
   var lastMutationRerunAt = 0;
   var MUTATION_RERUN_MIN_INTERVAL_MS = 4000;
+  // Total cap per injected document, not just a rate floor: the 4s throttle bounds FREQUENCY but
+  // not COUNT, so a page with never-ending background mutations (ads, tickers, animation libs)
+  // would otherwise rerun the fill every 4s forever — the same unbounded-loop class as the
+  // "Opening the application…" incident, just driven by the observer instead of a self-reschedule.
+  // 25 reruns ≈ 100+ seconds of continuous mutation activity; a real multi-step application's
+  // transitions are covered well inside that, and a full page navigation starts a fresh document
+  // (fresh budget) anyway. At the cap the observer is disconnected outright.
+  var MUTATION_RERUN_MAX = 25;
+  var mutationRerunCount = 0;
   function scheduleMutationRerun() {
     clearTimeout(mutationRerunTimer);
     mutationRerunTimer = setTimeout(function () {
+      if (stopRequested()) return;
       if (document.getElementById('alicia-question-panel')) return;
       var now = Date.now();
       if (now - lastMutationRerunAt < MUTATION_RERUN_MIN_INTERVAL_MS) return;
+      if (++mutationRerunCount > MUTATION_RERUN_MAX) {
+        try { aliciaMutationObserver.disconnect(); } catch (e) {}
+        console.log('[Alicia][apply-debug] mutation-rerun cap (' + MUTATION_RERUN_MAX + ') reached — observer disconnected, no more automatic reruns on this document');
+        return;
+      }
       lastMutationRerunAt = now;
       window.__aliciaNavHandled = false;
       try { removeNavPanel(); } catch (e) {}
       try { window.__aliciaAutofillRun(); } catch (e) {}
     }, 700);
   }
+  // Immediate visible feedback + timer teardown when Stop is pressed (background.js dispatches
+  // this event right after setting the flag). The banner here matters because Stop can land
+  // BETWEEN runs (e.g. during a scheduled 2.8s advance-retry gap) when no checkpoint will trip.
+  window.addEventListener('alicia-stop-autofill', function () {
+    try { clearTimeout(mutationRerunTimer); } catch (e) {}
+    console.log('[Alicia][apply-debug] Stop received at', new Date().toISOString(), '— flag set, timers cleared');
+    try { showBanner(STOP_BANNER_MSG, '#e0a800'); } catch (e) {}
+  });
   try {
     var aliciaMutationObserver = new MutationObserver(function (mutations) {
       for (var i = 0; i < mutations.length; i++) {

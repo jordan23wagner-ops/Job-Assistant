@@ -3067,7 +3067,8 @@ var UNIVERSAL_STATUS_MESSAGES = {
   done_no_more_fields: { text: 'Filled the application. Review before submitting.', color: '#4caf50' },
   answered_review: { text: 'Alicia answered custom questions — review them on the page, then click Continue there.', color: '#e0a800' },
   ready_to_submit: { text: 'Filled and advanced — ready for you to submit.', color: '#4caf50' },
-  error: { text: 'Something went wrong while filling — check the page.', color: '#ff9955' }
+  error: { text: 'Something went wrong while filling — check the page.', color: '#ff9955' },
+  stopped_by_user: { text: 'Autofill stopped. Nothing more will be filled until you start a new fill.', color: '#e0a800' }
 };
 
 chrome.runtime.onMessage.addListener(function (message) {
@@ -3092,10 +3093,16 @@ function startAtsSession(tab) {
     var sessions = data.autofillSessions || {};
     sessions[String(tab.id)] = { hostname: hostname, startedAt: Date.now() };
     chrome.storage.local.set({ autofillSessions: sessions });
-    chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }, function () {
-      if (chrome.runtime.lastError) {
-        setFillStatus('Could not fill this page. Open the application form and try again.', '#ff9955');
-      }
+    // Explicit new fill — clear any previous Stop before injecting, in every frame.
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: function () { window.__aliciaStopRequested = false; },
+    }).catch(function () {}).then(function () {
+      chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }, function () {
+        if (chrome.runtime.lastError) {
+          setFillStatus('Could not fill this page. Open the application form and try again.', '#ff9955');
+        }
+      });
     });
   });
 }
@@ -3134,6 +3141,24 @@ if (eeoFillNow) {
 
         startAtsSession(tabs[0]);
       });
+    });
+  });
+}
+
+// Mid-run interrupt: unlike the queue's Pause/Stop (which only take effect BETWEEN jobs), this
+// halts an in-progress autofill run on the spot — background sets a cooperative stop flag in
+// every frame of every session tab, autofill.js's checkpoints/sleep() bail within ~a second, all
+// sessions are ended (so nothing re-injects on the next navigation), and the queue is stopped.
+const autofillStopBtn = document.getElementById('autofill-stop');
+if (autofillStopBtn) {
+  autofillStopBtn.addEventListener('click', function () {
+    setFillStatus('Stopping autofill…', '#e0a800');
+    chrome.runtime.sendMessage({ type: 'STOP_AUTOFILL' }, function (resp) {
+      if (chrome.runtime.lastError || !resp || !resp.ok) {
+        setFillStatus('Could not reach the extension to stop — try again or reload the extension.', '#ff9955');
+        return;
+      }
+      setFillStatus('Autofill stopped. Nothing more will be filled until you start a new fill.', '#4caf50');
     });
   });
 }
