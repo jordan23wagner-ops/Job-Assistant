@@ -1827,16 +1827,30 @@
   // Buttons/links that OPEN an application from a job *details* page (e.g. hirebridge details.aspx,
   // Greenhouse/Lever posting pages). These land you ON the form — the opposite of STOP_PATTERNS,
   // which submit a form. Only used when no fillable form is present, so there's nothing to submit.
-  var APPLY_START_PATTERNS = [/^apply now$/, /^apply for (this )?(job|position|role|opening)/, /^apply online$/, /^apply externally$/, /^apply on company site$/, /^apply$/, /start (your )?application/, /begin application/, /^i'?m interested$/];
+  // NOTE: these test the OUTPUT of norm(), which replaces every non-alphanumeric with a space —
+  // an apostrophe never survives it. /^i'?m interested$/ could literally never match ("I'm
+  // interested" norms to "i m interested"), which silently killed the SmartRecruiters
+  // posting-page click-through; confirmed live on jobs.smartrecruiters.com/Visa (v1.13.43).
+  // Ordered most-specific first — matching is PATTERN-priority, not DOM-order (see below).
+  // "apply manually" is Workday's apply-method flyout: a navigational <a> to /apply/applyManually,
+  // never a submit. It must outrank /^apply$/ or the flyout's own opener button keeps winning and
+  // just re-toggles the flyout forever (confirmed live on nvidia.wd5.myworkdayjobs.com, v1.13.43).
+  var APPLY_START_PATTERNS = [/^apply now$/, /^apply for (this )?(job|position|role|opening)/, /^apply online$/, /^apply externally$/, /^apply on company site$/, /^apply manually$/, /start (your )?application/, /begin application/, /^i ?m interested$/, /^apply$/];
   function findApplyStartButton() {
     var els = document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]');
+    var texts = [];
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
       if (el.disabled || !visible(el)) continue;
       if (looksLikeInlineFormSubmit(el)) continue; // "Apply" that would SUBMIT a small inline form, not open one
       var t = norm((el.getAttribute('aria-label') || '') + ' ' + (el.innerText || el.value || el.textContent || ''));
       if (!t || t.length > 40) continue;
-      for (var p = 0; p < APPLY_START_PATTERNS.length; p++) { if (APPLY_START_PATTERNS[p].test(t)) return el; }
+      texts.push({ el: el, t: t });
+    }
+    // Pattern-priority: a more specific label anywhere on the page beats a generic "Apply" that
+    // happens to come earlier in the DOM — the exact Workday flyout case above.
+    for (var p = 0; p < APPLY_START_PATTERNS.length; p++) {
+      for (var j = 0; j < texts.length; j++) { if (APPLY_START_PATTERNS[p].test(texts[j].t)) return texts[j].el; }
     }
     return null;
   }
