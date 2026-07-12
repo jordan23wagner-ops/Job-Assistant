@@ -169,11 +169,21 @@ honeypot detection (`looksLikeHoneypot`), it just wasn't wired into the standard
 Fixed (see HANDOFF.md) — worth keeping in mind when adding the next fixture: check for this class
 of thing, not just "does the intended field get the intended value."
 
+Beyond the fixture suite, all five covered platforms (Greenhouse, Lever, Workday, Ashby,
+SmartRecruiters) were live-verified end to end on 2026-07-12 against real, current postings via
+the WEBAPP_APPLY/bridge.js path — real fields filled, no stuck retry loops, Submit never clicked
+(Workday verified up to its account sign-in wall; the create-account fill itself is covered by the
+fixture, since going further live would create a real account). See HANDOFF.md for the full
+evidence and the two real click-through bugs that testing found.
+
 **If autofill.js ever gets stuck in a loop** (e.g. a repeating "Opening the application…" banner):
 reloading the tab does NOT stop it — `background.js` tracks a 20-minute-TTL session per tab and
-re-injects on every page load while it's fresh. **Close the tab** instead; that fires
-`chrome.tabs.onRemoved`, which deletes the session. `window.__aliciaAutofillRun`'s click-and-retry
-loop (for pages with no recognized form yet) is capped at 5 attempts (see HANDOFF.md) specifically
+re-injects on every page load while it's fresh. Since v1.13.43 the side panel's **"⏹ Stop Autofill
+Now" button** is the intended kill switch: it halts an in-progress run mid-fill (~1s), ends every
+autofill session so nothing re-injects, and stops the queue — closing the tab still works but is
+no longer the only way out. `window.__aliciaAutofillRun`'s click-and-retry
+loop (for pages with no recognized form yet) is capped at 5 attempts (see HANDOFF.md), and the
+mutation-observer rerun is capped at 25 per document, specifically
 so this can't happen indefinitely, but any other retry loop added in the future should get the same
 kind of bound — an unbounded `setTimeout(..., window.__aliciaAutofillRun)` reschedule is exactly how
 this bug happened.

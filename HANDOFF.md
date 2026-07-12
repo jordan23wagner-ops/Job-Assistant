@@ -1,5 +1,95 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-12 (newest #2) — v1.13.44: two apply-start click-throughs were dead code, found by live end-to-end testing of all 5 covered platforms
+
+Ran the first fully automated live verification of the WEBAPP_APPLY/bridge.js path (a scratch
+Chrome-for-Testing instance with the unpacked extension loaded, driven over CDP; a localhost page
+gets the real bridge.js content script, posts the real `ALICIA_APPLY` message, and the real
+background/session/injection machinery does the rest). One real, current posting per platform:
+GitLab on Greenhouse, Kraken on Lever, Linear on Ashby, Visa on SmartRecruiters, NVIDIA on
+Workday. Two real bugs found and fixed:
+
+1. **SmartRecruiters posting pages never advanced to the form.** `APPLY_START_PATTERNS` contained
+   `/^i'?m interested$/` — but the candidate text it's tested against goes through `norm()`,
+   which replaces every non-alphanumeric (including apostrophes) with a space. "I'm interested"
+   norms to `"i m interested"`, so the pattern could literally never match, on any page, since
+   the day it was added. Fixed to `/^i ?m interested$/`. Confirmed live on the Visa posting:
+   click-through to oneclick-ui at 22:57:02, then 7 fields filled inside shadow roots
+   (first/last/email/confirm-email/phone/LinkedIn/résumé attach), stable with no reruns for the
+   following minute.
+2. **Workday postings stalled at the apply-method flyout.** `findApplyStartButton()` matched in
+   DOM order, so the page's generic "Apply" opener (which matches `/^apply$/`) always won and
+   just re-toggled the flyout; the flyout's own "Apply Manually" link matched no pattern at all.
+   Matching is now pattern-priority (most-specific first) and `/^apply manually$/` was added
+   ahead of `/^apply$/` ("Apply Manually" is a navigational `<a>` to `/apply/applyManually`,
+   never a submit). Confirmed live on NVIDIA: job page → Apply (23:02:14) → Apply Manually →
+   application sign-in wall, one click each, no loop.
+
+Also confirmed live on every platform: the Submit/stop button was never clicked (each tab's URL
+never left the form page, and the final page state still showed the unsubmitted form), and no
+unbounded rerun loop occurred (run() start timestamps in the console logs show only
+navigation-driven or throttled mutation reruns, and the new 25-rerun cap from v1.13.43 bounds the
+worst case). Workday live coverage deliberately stops at the account sign-in wall: the Workday
+adapter's documented product decision is to auto-click Create Account after filling that page, so
+letting a live run reach it would create a REAL account on the employer's tenant — the
+create-account fill itself (email via data-automation-id, generated password, agree checkbox,
+honeypot skip) stays covered by the workday.html fixture captured from a live tenant. Note for a
+future session: on tenants like NVIDIA the applyManually wall renders only "Sign in with
+Google"/"Sign in with email" buttons and Alicia currently stalls there silently — surfacing a
+"sign in or create an account to continue" banner would be a real UX improvement, but anything
+that automates past it runs into the account-creation question.
+
+`npm test` 8/8 both before and after. `autofill.js` changed — bumped to v1.13.44
+(manifest/package/package-lock together); the extension needs a reload.
+
+## Update 2026-07-12 (newest) — v1.13.43: a real mid-run Stop button, plus a total cap on the mutation-observer rerun loop (retry-loop audit)
+
+Two changes, both born from the same live incident class (the unkillable "Opening the
+application…" loop that wiped in-progress form edits):
+
+**1. Mid-run interrupt.** The queue's Pause/Stop only takes effect BETWEEN jobs; nothing could
+halt a run already in progress on a tab. The side panel now has "⏹ Stop Autofill Now":
+`sidepanel.js` sends `STOP_AUTOFILL`, `background.js` sets `window.__aliciaStopRequested = true`
+in EVERY frame of every tab with a live autofill session (plus the active tab), dispatches an
+`alicia-stop-autofill` event for immediate banner/timer teardown, deletes ALL sessions (so no
+navigation or SPA event re-injects — the reload-doesn't-stop-it lesson from v1.13.41), and stops
+the Easy Apply queue. Cancellation is cooperative in `autofill.js`: `throwIfStopped()` checkpoints
+(run start, each wizard step, each question item, after the batched AI call) plus `sleep()` itself
+rejecting once the flag is up, so even long combo/typeahead passes bail within one tick. A stopped
+run reports a distinct `stopped_by_user` status (yellow banner, never the red error path). The
+flag is cleared only when an explicit NEW fill starts (panel button, web-app apply, detect.js
+offer accept) — automatic re-injection paths can't clear it.
+
+Live-verified end to end (real side-panel button click, real Greenhouse posting, mid-fill): Stop
+clicked at 23:06:02.334 → flag set in the page 8ms later (23:06:02.342) → the in-flight run
+aborted at 23:06:03.430 (~1.1s after the click, mid-AI-call) → field snapshots at click+0s/+2s/+7s
+byte-identical (6 fields, frozen), `autofillSessions` = `{}`, `queueActive` = false. The seventh
+field (an AI answer that lands ~11s in on an uninterrupted run) never appeared — the interrupt
+beat it, as intended.
+
+**2. Retry-loop audit + the missing cap.** Audited every `setTimeout` that reschedules
+`window.__aliciaAutofillRun` or otherwise self-retries, in both `autofill.js` and `background.js`.
+Bounded already: the nav-click-and-retry branch (`__aliciaAdvanceAttempts`, cap 5, v1.13.41/42),
+the same-button advance thrash guard (cap 2 per URL+label), the step loop (`MAX_STEPS` 20), both
+late-fix watchers (10 and 6 checks), `waitForDomSettle` (hard `maxMs`), background's aggregator
+interstitial poll (12 tries), and background's various one-shot injection delays (not loops).
+The three human-gated reschedules (question-panel save, nav-panel choice, confirm-capture) each
+require a fresh human click per rerun, so they can't self-loop — but they now honor the stop flag
+too. **The one genuinely unbounded loop was `scheduleMutationRerun`:** its 4s throttle bounds
+frequency, not count, so any page with never-ending background DOM churn (ads, tickers,
+animations) would rerun the fill every 4s forever — same bug class as the live incident, just
+driven by the MutationObserver instead of a self-reschedule. Now capped at 25 reruns per injected
+document (~100+s of continuous churn; a real page navigation starts a fresh document and budget),
+after which the observer disconnects and logs. Confirmed live on the NVIDIA Workday
+sign-in-wall page, which mutates continuously and reruns the fill every ~15.7s indefinitely under
+the old code: with the cap, the 25th rerun logged
+`mutation-rerun cap (25) reached — observer disconnected` at 23:17:07 and every automatic rerun
+ceased from that moment (console watched for minutes afterward — total silence).
+
+`npm test` 8/8 after the change (and the stop machinery is exercised implicitly — a fixture run
+with no stop flag behaves identically). `autofill.js`/`background.js`/`sidepanel.js`/
+`sidepanel.html` changed — bumped to v1.13.43; the extension needs a reload.
+
 ## Update 2026-07-11 (newest #3) — The v1.13.41 loop-cap fix had its own hole: the counter reset on every URL change, including URL changes CAUSED by the click itself
 
 Found live within minutes of shipping v1.13.41: on the Stripe/Greenhouse page, the "Opening the
