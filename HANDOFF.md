@@ -1,5 +1,39 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (newest #2) — Fixed a real, live infinite-loop bug: unbounded "click nav button and retry" cycle
+
+Found live, not hypothetically: on a Stripe/Greenhouse apply page whose fields were already fully
+filled, `autofill.js` got stuck perpetually showing "Opening the application…" every ~2.8s, unkillable
+short of closing the browser tab (reloading did NOT stop it — see below). Root cause, in the
+"no recognized form yet" branch of `window.__aliciaAutofillRun`: when exactly one high-confidence
+("strong", score >= 6) forward-nav button is found, it gets clicked and a `setTimeout` reschedules
+the whole run 2.8s later with the nav-handled guard reset — with **no cap**. If that click never
+actually makes `hasRecognizedForm()` true afterward (button doesn't do what was expected, or the
+check false-negatives on a form that's actually already there), this resets and repeats forever, by
+design, indefinitely. This is a pre-existing structural gap, unrelated to today's SmartRecruiters
+shadow-DOM work — just surfaced by re-testing that fix live on an old already-filled tab.
+
+Also learned live: **reloading the tab does not stop this.** `background.js` tracks a
+20-minute-TTL "session" per tabId in `chrome.storage.local` and explicitly re-injects `autofill.js`
+on every page load / SPA nav while a session is fresh — reload just gives the loop a fresh page to
+re-attach to. The only real stop is **closing the tab**, which fires `chrome.tabs.onRemoved` and
+deletes the session (confirmed in `background.js`).
+
+Fix: added a bounded attempt counter (`window.__aliciaAdvanceAttempts`, cap 5) around the click-and-
+retry branch — after 5 attempts without ever reaching a recognized form, it stops retrying and shows
+"Couldn't open the application automatically after several tries — please continue manually."
+instead of looping. The counter resets on a genuine URL change (same block that already resets
+`window.__aliciaNavHandled` for a real page/step transition), so a normal multi-step application
+still gets a fresh budget at each step.
+
+No automated fixture test added for this one — reproducing it faithfully needs ~14s of real
+`setTimeout` delays across 5 retries, and `tests/harness.mjs` only resolves on the *first*
+`UNIVERSAL_FILL_RESULT` message (by design, so normal fixtures stay fast), not a terminal one several
+retries later. Verified instead via `node --check` (syntax) + the full 8/8 fixture suite (no
+regressions) — this is a defensive/structural fix, not something a fixture would have caught either
+way, since it only manifests when nav-candidate detection persistently misfires over multiple real
+timer cycles. `autofill.js` changed — bumped to v1.13.41, extension needs a reload.
+
 ## Update 2026-07-11 (newest) — SmartRecruiters fixture (5th platform) found and fixed a major real bug: zero shadow-DOM support
 
 Added `tests/fixtures/smartrecruiters.html` — real field structure captured live from

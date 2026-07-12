@@ -2381,6 +2381,7 @@
     if (window.__aliciaLastUrl !== location.href) {
       window.__aliciaLastUrl = location.href;
       window.__aliciaNavHandled = false;
+      window.__aliciaAdvanceAttempts = 0; // fresh page/step — give the click-and-retry loop below a clean budget
       try { removeNavPanel(); } catch (e) {}
     }
     console.log('[Alicia][apply-debug] autofill.js run() start — url', location.href, 'hasRecognizedForm?', hasRecognizedForm());
@@ -2574,13 +2575,27 @@
           try { navClicked = await tryLearnedNavClick(); } catch (e) {}
           var cands = navClicked ? [] : navCandidates();
           var strong = cands.filter(function (c) { return c.score >= 6; }); // clear Apply/Apply Now
-          if (navClicked || strong.length === 1) {
+          // Guards against an unbounded loop: if the click above never actually reveals a
+          // recognized form (e.g. the "strong" candidate isn't really a forward-nav button, or
+          // hasRecognizedForm() keeps false-negativing on an already-filled form), this branch
+          // used to reset the guard and re-run itself every 2.8s forever -- observed live as a
+          // perpetual "Opening the application…" banner with no way to stop it short of closing
+          // the tab. Capping at a handful of attempts turns an infinite loop into a bounded one;
+          // window.__aliciaLastUrl's own reset above gives a genuine page change a fresh budget.
+          var ADVANCE_ATTEMPT_CAP = 5;
+          window.__aliciaAdvanceAttempts = (window.__aliciaAdvanceAttempts || 0) + 1;
+          if ((navClicked || strong.length === 1) && window.__aliciaAdvanceAttempts <= ADVANCE_ATTEMPT_CAP) {
             // A learned choice, OR exactly ONE clear Apply button — proceed autonomously (Apply just
             // opens the form, it never submits, so a click here is safe and recoverable).
             if (!navClicked) { saveNavChoice(location.hostname, strong[0].text); try { fireClick(strong[0].el); } catch (e) {} }
             result.status = 'advancing';
             showBanner('Opening the application…', '#4caf50');
             setTimeout(function () { window.__aliciaNavHandled = false; window.__aliciaAutofillRun(); }, 2800);
+          } else if (navClicked || strong.length === 1) {
+            // Hit the attempt cap without ever finding a recognized form -- stop retrying and
+            // surface it, instead of looping silently forever.
+            result.status = 'stopped_needs_input';
+            showBanner('Couldn\'t open the application automatically after several tries — please continue manually.', '#e0a800');
           } else if (cands.length >= 1) {
             // Ambiguous — several forward-looking buttons, or none clearly dominant. Ask the human
             // which one moves forward and remember it for this host.

@@ -169,6 +169,15 @@ honeypot detection (`looksLikeHoneypot`), it just wasn't wired into the standard
 Fixed (see HANDOFF.md) — worth keeping in mind when adding the next fixture: check for this class
 of thing, not just "does the intended field get the intended value."
 
+**If autofill.js ever gets stuck in a loop** (e.g. a repeating "Opening the application…" banner):
+reloading the tab does NOT stop it — `background.js` tracks a 20-minute-TTL session per tab and
+re-injects on every page load while it's fresh. **Close the tab** instead; that fires
+`chrome.tabs.onRemoved`, which deletes the session. `window.__aliciaAutofillRun`'s click-and-retry
+loop (for pages with no recognized form yet) is capped at 5 attempts (see HANDOFF.md) specifically
+so this can't happen indefinitely, but any other retry loop added in the future should get the same
+kind of bound — an unbounded `setTimeout(..., window.__aliciaAutofillRun)` reschedule is exactly how
+this bug happened.
+
 **Three jsdom-specific gotchas the harness works around** (all documented inline in
 `harness.mjs`), worth knowing before extending this:
 - jsdom does no real layout, so `offsetParent` is always `null` — `autofill.js`'s `visible()`
