@@ -2381,7 +2381,12 @@
     if (window.__aliciaLastUrl !== location.href) {
       window.__aliciaLastUrl = location.href;
       window.__aliciaNavHandled = false;
-      window.__aliciaAdvanceAttempts = 0; // fresh page/step — give the click-and-retry loop below a clean budget
+      // NOT resetting window.__aliciaAdvanceAttempts here: the click-and-retry loop below can
+      // itself cause a URL change (a hash/query param toggling, or an SPA route nav that doesn't
+      // actually reveal a real form) without ever making progress -- resetting the attempt budget
+      // on every URL change let that exact case defeat the cap entirely, since each click reset
+      // the counter back to 0 right before the next attempt. The budget only resets once a form is
+      // genuinely recognized (see below), which is the only signal that actually means "progress."
       try { removeNavPanel(); } catch (e) {}
     }
     console.log('[Alicia][apply-debug] autofill.js run() start — url', location.href, 'hasRecognizedForm?', hasRecognizedForm());
@@ -2580,8 +2585,11 @@
           // hasRecognizedForm() keeps false-negativing on an already-filled form), this branch
           // used to reset the guard and re-run itself every 2.8s forever -- observed live as a
           // perpetual "Opening the application…" banner with no way to stop it short of closing
-          // the tab. Capping at a handful of attempts turns an infinite loop into a bounded one;
-          // window.__aliciaLastUrl's own reset above gives a genuine page change a fresh budget.
+          // the tab, wiping in-progress manual edits each cycle. Capping at a handful of attempts
+          // turns an infinite loop into a bounded one. The counter is deliberately NOT reset by a
+          // URL change (see the comment near window.__aliciaLastUrl above) -- only by actually
+          // reaching a recognized form, below -- since the click itself can change the URL without
+          // making real progress.
           var ADVANCE_ATTEMPT_CAP = 5;
           window.__aliciaAdvanceAttempts = (window.__aliciaAdvanceAttempts || 0) + 1;
           if ((navClicked || strong.length === 1) && window.__aliciaAdvanceAttempts <= ADVANCE_ATTEMPT_CAP) {
@@ -2609,6 +2617,7 @@
           result.status = 'no_fields_found';
         }
       } else {
+        window.__aliciaAdvanceAttempts = 0; // a form was actually reached -- real progress, clear the click-retry budget
         for (var step = 0; step < MAX_STEPS; step++) {
           var correctedThisStep = false; // one dropdown-correction attempt per step
           // A page nav may have landed us on an adapter hard blocker mid-wizard (e.g. Workday's

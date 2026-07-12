@@ -1,5 +1,27 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (newest #3) — The v1.13.41 loop-cap fix had its own hole: the counter reset on every URL change, including URL changes CAUSED by the click itself
+
+Found live within minutes of shipping v1.13.41: on the Stripe/Greenhouse page, the "Opening the
+application…" loop from the previous entry kept happening, wiping manually-entered progress on
+every cycle, even with the 5-attempt cap in place. Root cause: `window.__aliciaAdvanceAttempts` was
+reset to 0 inside the SAME block that detects a URL change (`window.__aliciaLastUrl !== location.href`)
+— but the nav button being clicked in the retry loop can itself change `location.href` (a hash or
+query param toggling, an SPA route nav that doesn't reveal a real form) without making any real
+progress. Every click → URL changes → counter resets to 0 right before the NEXT attempt even starts
+counting → the cap never actually triggers. The 5-attempt limit was real code, it just never got a
+chance to fire in this exact case.
+
+Fixed by no longer resetting the counter on a bare URL change. It's now reset in exactly one place:
+right after `hasRecognizedForm()` is confirmed true and the real multi-step fill loop is entered —
+the only signal that actually means progress happened, regardless of how the URL moved to get there.
+
+Same verification approach as the previous entry (this is the same code path, no new fixture):
+`node --check` + full 8/8 fixture suite, no regressions. `autofill.js` changed — bumped to v1.13.42,
+extension needs a reload. Lesson for next time a retry-cap gets added anywhere in this file: don't
+reset the budget on any side effect the retry itself can cause (URL, DOM mutation, etc.) — only on
+a signal that's independent of what the retry does.
+
 ## Update 2026-07-11 (newest #2) — Fixed a real, live infinite-loop bug: unbounded "click nav button and retry" cycle
 
 Found live, not hypothetically: on a Stripe/Greenhouse apply page whose fields were already fully
