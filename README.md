@@ -137,17 +137,28 @@ production — rather than reaching into internal functions.
 
 **Fixtures** (`tests/fixtures/*.html`) are hand-composed but modeled on REAL field structure
 captured live from real postings (Cloudflare on Greenhouse, Palantir on Lever, Axiom Space on
-Workday) — real `id`/`name`/`autocomplete`/`aria-label`/`data-automation-id` attributes and label
-associations, not synthetic markup that might not match real-world quirks. Coverage today is three
-platforms with genuinely different field-matching shapes (Greenhouse: separate first/last name
-fields, id-based `<label for>`; Lever: one combined name field matched by its `name` attribute, no
-real `<label>` tag at all; Workday: everything keyed off `data-automation-id`, since its own
-`id`/`label[for]` are randomly generated per session and carry no semantic meaning) — proof the
-harness works against unmodified production code, not exhaustive coverage of every supported ATS.
-Ashby, SmartRecruiters, Workable, Recruitee, iCIMS, and Taleo have no fixture yet. To add one: open
-a real posting, capture field structure via the browser's console (`document.querySelectorAll(
-'input, select, textarea')` → id/name/label/autocomplete — never capture real filled-in values),
-hand-write a trimmed fixture from that, then assertions.
+Workday, Linear on Ashby) — real `id`/`name`/`autocomplete`/`aria-label`/`data-automation-id`/class
+attributes and label associations, not synthetic markup that might not match real-world quirks.
+Coverage today is four platforms with genuinely different field-matching shapes (Greenhouse:
+separate first/last name fields, id-based `<label for>`; Lever: one combined name field matched by
+its `name` attribute, no real `<label>` tag at all; Workday: everything keyed off
+`data-automation-id`, since its own `id`/`label[for]` are randomly generated per session and carry
+no semantic meaning; Ashby: system fields use a semantic id, but custom questions get a random UUID
+id/name with only a real `<label>` carrying any signal) — proof the harness works against
+unmodified production code, not exhaustive coverage of every supported ATS. SmartRecruiters,
+Workable, Recruitee, iCIMS, and Taleo have no fixture yet. To add one: open a real posting, capture
+field structure via the browser's console (`document.querySelectorAll('input, select, textarea')`
+→ id/name/label/autocomplete — never capture real filled-in values), hand-write a trimmed fixture
+from that, then assertions.
+
+**Watch for this exact mistake** (made once, caught by the test itself): `detectATS()` matches ATS
+platforms by checking DOM markers in a fixed order (Workday → Greenhouse → Lever → iCIMS → Ashby →
+...), first match wins. The Ashby fixture's form wrapper was first written with
+`class="application-form"` for CSS-plausibility — not realizing that's Lever's own detection marker
+(`document.querySelector('.application-form', ...)`), checked earlier in the chain, so the fixture
+silently misdetected as Lever instead of Ashby. When composing a new fixture, only use class/id
+names you actually captured from the real page, never an invented "looks about right" one — a
+plausible-sounding class from a different platform's convention can accidentally collide.
 
 The Workday fixture (the "Create Account" page) caught a real, live bug on the first try: a
 `name="website"` anti-bot honeypot field, styled to pass `autofill.js`'s own `visible()` check

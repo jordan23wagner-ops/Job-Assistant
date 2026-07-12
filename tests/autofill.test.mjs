@@ -123,3 +123,18 @@ test('workday: does NOT fill the honeypot field, even though profile.website is 
   const honeypot = document.querySelector('[data-automation-id="beecatcher"]')
   assert.strictEqual(honeypot.value, '', 'the honeypot field must never be filled, or Workday can flag the whole application as bot-submitted')
 })
+
+test('ashby: fills a single combined Name field (semantic id, unlike Lever\'s name-attribute match) plus email and LinkedIn (label-text-only, random id)', async () => {
+  const { result, document } = await runAutofill(fixture('ashby.html'), {
+    url: 'https://jobs.ashbyhq.com/linear/d3bc1ced-3ce4-4086-a050-555055dbb1ff/application',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.ats, 'ashby')
+  const fullName = `${TEST_PROFILE.firstName} ${TEST_PROFILE.lastName}`
+  assert.strictEqual(document.getElementById('_systemfield_name').value, fullName)
+  assert.strictEqual(document.getElementById('_systemfield_email').value, TEST_PROFILE.email)
+  // Random UUID id/name carry no signal at all here -- only labelText() resolving the real
+  // <label for="..."> text ("LinkedIn") makes this field matchable.
+  assert.strictEqual(document.getElementById('ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e').value, TEST_PROFILE.linkedin)
+})

@@ -1,0 +1,38 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL Ashby application form (captured live from
+  jobs.ashbyhq.com/linear/.../application, structure only — no real applicant data). Includes the
+  real "ashby-job-posting-header" class detectATS()'s DOM-marker fallback looks for
+  ([class*="ashby"]) -- an earlier version of this fixture used class="application-form" for the
+  form wrapper, not realizing that's Lever's OWN detection marker (checked before Ashby's in
+  detectATS()'s if-chain), so it silently misdetected as Lever instead. A fourth
+  distinct field-matching shape: like Lever, Name is ONE combined field (not separate first/last)
+  -- but unlike Lever (matched by its `name` attribute) or Greenhouse (matched by `id`/aria-label),
+  Ashby's system fields use a semantic id (`_systemfield_name`, `_systemfield_email`) while its
+  CUSTOM questions (LinkedIn here) get a random UUID for both id and name, with a real <label>
+  carrying the only usable signal -- purely a labelText() match, nothing in the id/name attributes
+  helps at all. Deliberately excludes Ashby's real "Cover letter" (required textarea) and "Github"
+  (required text) fields: neither has a standard-field matcher (buildStdMatchers has no github/
+  cover-letter entry), so both would fall through to the AI-answered custom-question path, which
+  needs a real network call this harness intentionally blocks.
+-->
+<div class="_navRoot_5bhg5_28 ashby-job-posting-header"></div>
+<form>
+  <div class="ashby-application-form-body">
+    <div class="field-group">
+      <input type="file" aria-label="Resume">
+    </div>
+    <div class="field-group">
+      <label for="_systemfield_name">Name<span aria-hidden="true">*</span></label>
+      <input id="_systemfield_name" name="_systemfield_name" type="text" aria-required="true" value="">
+    </div>
+    <div class="field-group">
+      <label for="_systemfield_email">Email<span aria-hidden="true">*</span></label>
+      <input id="_systemfield_email" name="_systemfield_email" type="email" aria-required="true" value="">
+    </div>
+    <div class="field-group">
+      <label for="ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e">LinkedIn</label>
+      <input id="ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e" name="ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e" type="text" value="">
+    </div>
+  </div>
+  <button type="submit">Submit Application</button>
+</form>

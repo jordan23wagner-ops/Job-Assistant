@@ -1,5 +1,25 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (even later) — Ashby fixture (4th platform), plus a self-inflicted detection bug caught by the test itself
+
+Added `tests/fixtures/ashby.html` — real field structure captured live from
+jobs.ashbyhq.com/linear (a fourth distinct field-matching shape: system fields like Name/Email use
+a semantic id `_systemfield_name`/`_systemfield_email`, but custom questions like LinkedIn get a
+random UUID for both id and name, so only the real `<label>` text carries any matchable signal at
+all). Deliberately excludes Ashby's real "Github" and "Cover letter" required fields — neither has
+a standard-field matcher, so both would route to the AI-answered custom-question path, which needs
+a real network call this harness intentionally blocks.
+
+Caught a mistake in the fixture itself before it ever reached a commit: the form wrapper was first
+written `class="application-form"` for plausibility, not realizing that's literally Lever's own
+`detectATS()` marker, checked earlier in the if-chain than Ashby's — the fixture silently
+misdetected as Lever (`result.ats !== 'ashby'` failed the very first run). Fixed by using the real
+`ashby-job-posting-header` class captured from the live page instead of an invented one. Not a
+production bug this time, but the exact kind of thing this test suite is designed to catch, working
+as intended on the test infrastructure itself.
+
+7/7 tests passing.
+
 ## Update 2026-07-11 (later still) — Workday fixture found and fixed a real live bug: honeypot field was getting filled
 
 Added `tests/fixtures/workday.html` (the "Create Account" page — real field structure captured
