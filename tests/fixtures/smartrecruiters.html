@@ -1,0 +1,56 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL SmartRecruiters application form (captured
+  live from jobs.smartrecruiters.com/oneclick-ui/company/Visa/publication/..., structure only —
+  no real applicant data). A fifth distinct shape, and a genuinely different KIND of difference
+  from the previous four: SmartRecruiters' current "oneclick-ui" flow renders every field inside
+  its own Web Component SHADOW ROOT (<spl-form-field>) with real, semantic ids
+  (first-name-input/last-name-input/email-input/linkedin-input) but NO light-DOM-slotted <input>
+  at all -- confirmed live: document.querySelectorAll('input') from the top document found
+  exactly one field (the file upload, which genuinely is light DOM), not the six-plus real text
+  fields visible on screen. autofill.js had ZERO shadow-DOM handling anywhere before this fixture
+  (confirmed via search) even though the exact same problem was already solved for LinkedIn's Easy
+  Apply modal in content.js (collectShadowRoots/easyApplySearchRoots) -- just never applied here.
+  Fixed by adding the same technique to autofill.js (queryAllDeep, see the file's own comment).
+
+  jsdom has no declarative shadow DOM support (confirmed directly, not assumed -- a
+  <template shadowrootmode="open"> parses inert, no shadowRoot attaches), so each field below is a
+  `data-shadow-host` marker plus a sibling `<template data-shadow-content>` holding what actually
+  goes inside the shadow root -- tests/harness.mjs attaches these as real shadow roots before the
+  code runs. Excludes the real "Facebook" field: no standard-field matcher exists for it, so it
+  would route to the AI-answered custom-question path this harness intentionally blocks.
+-->
+<form>
+  <input id="file-input" type="file" aria-label="Upload profile image">
+
+  <div data-shadow-host="first-name"></div>
+  <template data-shadow-content="first-name">
+    <label for="first-name-input">First name*</label>
+    <input id="first-name-input" type="text" required value="">
+  </template>
+
+  <div data-shadow-host="last-name"></div>
+  <template data-shadow-content="last-name">
+    <label for="last-name-input">Last name*</label>
+    <input id="last-name-input" type="text" required value="">
+  </template>
+
+  <div data-shadow-host="email"></div>
+  <template data-shadow-content="email">
+    <label for="email-input">Email*</label>
+    <input id="email-input" type="email" required value="">
+  </template>
+
+  <div data-shadow-host="confirm-email"></div>
+  <template data-shadow-content="confirm-email">
+    <label for="confirm-email-input">Confirm your email*</label>
+    <input id="confirm-email-input" type="email" required value="">
+  </template>
+
+  <div data-shadow-host="linkedin"></div>
+  <template data-shadow-content="linkedin">
+    <label for="linkedin-input">LinkedIn</label>
+    <input id="linkedin-input" type="text" value="">
+  </template>
+
+  <button type="submit">Submit Application</button>
+</form>

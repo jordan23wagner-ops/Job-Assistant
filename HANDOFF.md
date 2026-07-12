@@ -1,5 +1,38 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-11 (newest) — SmartRecruiters fixture (5th platform) found and fixed a major real bug: zero shadow-DOM support
+
+Added `tests/fixtures/smartrecruiters.html` — real field structure captured live from
+jobs.smartrecruiters.com/oneclick-ui/company/Visa (a fifth, genuinely different KIND of
+field-matching shape from the previous four). SmartRecruiters' current "oneclick-ui" flow renders
+every field inside its own Web Component shadow root (`<spl-form-field>`), with no light-DOM-slotted
+`<input>` at all — confirmed live: `document.querySelectorAll('input')` from the top document found
+exactly one field (the file upload, which genuinely is light DOM), not the six-plus real text
+fields visible on screen.
+
+`autofill.js` had ZERO shadow-DOM handling anywhere (confirmed via search) even though the exact
+same problem was already solved for LinkedIn's Easy Apply modal in `content.js`
+(`collectShadowRoots`/`easyApplySearchRoots`) — just never applied here. This meant `autofill.js`
+silently did nothing on SmartRecruiters postings (no error, no fields filled), affecting real
+companies already tracked in `INDUSTRY_BOARDS` (Visa, Square).
+
+Fixed by adding `collectShadowRoots()` (recursively walks the DOM and nested shadow roots once,
+cached per fill pass) and `queryAllDeep(selector)` (same as `querySelectorAll` but also searches
+every shadow root) to `autofill.js`, and rewiring the 6 call sites that previously used
+`document.querySelectorAll` for field/select/radio discovery (`countFilledEeoFields`,
+`fillStdFields`, `fillPasswordFields`, `fillEeoSelects`, `fillStdSelects`, `radioGroups`) to use
+`queryAllDeep` instead. The shadow-root cache is reset (`_shadowRootsCache = null`) at the top of
+`window.__aliciaAutofillRun` so each fresh fill pass — including after an SPA route change —
+rescans rather than reusing a stale list from a previous page.
+
+jsdom has no declarative shadow DOM support (confirmed directly: `<template shadowrootmode="open">`
+parses inert, no `shadowRoot` attaches) — `tests/harness.mjs` was extended with an imperative
+`data-shadow-host="key"` + `<template data-shadow-content="key">` convention, attaching real shadow
+roots via `attachShadow({mode:'open'})` before the code runs.
+
+8/8 tests passing. `npm test` from the repo root. `autofill.js` changed — bumped to v1.13.40; the
+extension needs a reload for this fix to take effect live.
+
 ## Update 2026-07-11 (even later) — Ashby fixture (4th platform), plus a self-inflicted detection bug caught by the test itself
 
 Added `tests/fixtures/ashby.html` — real field structure captured live from

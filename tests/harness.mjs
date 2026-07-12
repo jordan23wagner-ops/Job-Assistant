@@ -45,6 +45,21 @@ export async function runAutofill(html, { url, storage = {}, timeoutMs = 4000 } 
     },
   })
 
+  // jsdom doesn't support declarative shadow DOM (<template shadowrootmode> parses as an inert
+  // template, confirmed directly -- no auto-attached shadowRoot) -- some ATS platforms (confirmed
+  // live: SmartRecruiters' current "oneclick-ui" flow) render fields inside real shadow roots, so
+  // fixtures that need one mark the host with `data-shadow-host="key"` and put the real shadow
+  // content in a sibling `<template data-shadow-content="key">`; this attaches it as a genuine
+  // shadow root before the code ever runs, same as a real page would have it at load time.
+  Array.prototype.slice.call(window.document.querySelectorAll('[data-shadow-host]')).forEach((host) => {
+    const key = host.getAttribute('data-shadow-host')
+    const tpl = window.document.querySelector(`template[data-shadow-content="${key}"]`)
+    if (!tpl) return
+    const shadow = host.attachShadow({ mode: 'open' })
+    shadow.innerHTML = tpl.innerHTML
+    tpl.remove()
+  })
+
   // autofill.js watches document.body with a MutationObserver and re-runs itself on every
   // childList mutation (by design -- a real page's own SPA re-render should trigger a re-fill).
   // In this harness that becomes a genuine infinite loop: confirmed live, hundreds of re-entrant

@@ -138,3 +138,28 @@ test('ashby: fills a single combined Name field (semantic id, unlike Lever\'s na
   // <label for="..."> text ("LinkedIn") makes this field matchable.
   assert.strictEqual(document.getElementById('ca5c9d78-ec13-4bf2-86b8-bce6ff32e45e').value, TEST_PROFILE.linkedin)
 })
+
+// Helper: SmartRecruiters' current UI puts every field inside its OWN shadow root (see
+// tests/fixtures/smartrecruiters.html's comment) -- document.getElementById can't reach inside
+// one, so field lookups here have to go through the host's shadowRoot explicitly.
+function shadowField(document, hostKey, fieldId) {
+  const host = document.querySelector(`[data-shadow-host="${hostKey}"]`)
+  return host && host.shadowRoot && host.shadowRoot.getElementById(fieldId)
+}
+
+test('smartrecruiters: fills fields that live inside real shadow roots (queryAllDeep) -- previously invisible to a plain document.querySelectorAll', async () => {
+  const { result, document } = await runAutofill(fixture('smartrecruiters.html'), {
+    url: 'https://jobs.smartrecruiters.com/oneclick-ui/company/Visa/publication/267d47c7-29af-4c8f-a19d-c112895329df',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.ats, 'smartrecruiters')
+  assert.strictEqual(shadowField(document, 'first-name', 'first-name-input').value, TEST_PROFILE.firstName)
+  assert.strictEqual(shadowField(document, 'last-name', 'last-name-input').value, TEST_PROFILE.lastName)
+  assert.strictEqual(shadowField(document, 'email', 'email-input').value, TEST_PROFILE.email)
+  assert.strictEqual(shadowField(document, 'linkedin', 'linkedin-input').value, TEST_PROFILE.linkedin)
+
+  // The light-DOM file input is unrelated to the shadow-DOM fix -- included as a control to prove
+  // the fixture/harness aren't somehow forcing every field to match regardless of location.
+  assert.strictEqual(document.getElementById('file-input').value, '')
+})

@@ -55,6 +55,56 @@
   }
   function visible(el) { return !!el && el.offsetParent !== null; }
 
+  // Some ATS platforms (confirmed live: SmartRecruiters' current "oneclick-ui" flow, e.g.
+  // careers.smartrecruiters.com/Visa) render their contact-info fields inside Web Component
+  // shadow roots (<spl-form-field> etc.) with no light-DOM-slotted <input> at all -- a plain
+  // document.querySelectorAll('input') finds NOTHING in there, not because the field-matching
+  // regexes are wrong, but because the DOM query never reaches them. content.js already solved
+  // this exact problem for LinkedIn's Easy Apply modal (collectShadowRoots/easyApplySearchRoots);
+  // same technique here, applied to autofill.js's own top-level field scans.
+  // Cached per fill pass (invalidated at the top of window.__aliciaAutofillRun, not per-call) --
+  // the underlying document.querySelectorAll('*') + per-element shadowRoot check is a full-page
+  // scan, and a single pass calls queryAllDeep up to half a dozen times (fillStdFields,
+  // fillStdSelects, fillEeoSelects, fillEeoRadios, fillPasswordFields, countFilledEeoFields).
+  // Re-scanning the whole page every single time is pure waste on the vast majority of ATS pages,
+  // which have zero shadow roots at all -- only SmartRecruiters' current UI needs this.
+  var _shadowRootsCache = null;
+  function collectShadowRoots() {
+    if (_shadowRootsCache) return _shadowRootsCache;
+    var roots = [];
+    try {
+      var all = document.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var sr = all[i].shadowRoot;
+        if (sr && roots.indexOf(sr) === -1) {
+          roots.push(sr);
+          // one level of nesting is plenty for the platforms seen so far; guard cost on huge pages
+          var inner = sr.querySelectorAll('*');
+          for (var j = 0; j < inner.length; j++) {
+            if (inner[j].shadowRoot && roots.indexOf(inner[j].shadowRoot) === -1) roots.push(inner[j].shadowRoot);
+          }
+        }
+      }
+    } catch (e) {}
+    _shadowRootsCache = roots;
+    return roots;
+  }
+  // document.querySelectorAll(selector), plus the same selector run against every shadow root on
+  // the page, flattened into one array. Drop-in replacement for the handful of top-level "scan
+  // every matching control on the page" calls (fillStdFields, fillStdSelects, fillEeoSelects,
+  // fillEeoRadios's radioGroups, fillPasswordFields) -- NOT applied everywhere in this file:
+  // secondary lookups scoped relative to an already-found element (closest()/parentElement) don't
+  // need it, since they never cross a shadow boundary that document-level queries can't reach in
+  // the first place.
+  function queryAllDeep(selector) {
+    var out = Array.prototype.slice.call(document.querySelectorAll(selector));
+    var roots = collectShadowRoots();
+    for (var r = 0; r < roots.length; r++) {
+      out = out.concat(Array.prototype.slice.call(roots[r].querySelectorAll(selector)));
+    }
+    return out;
+  }
+
   function extAlive() {
     try { return !!(chrome.runtime && chrome.runtime.id); } catch (e) { return false; }
   }
@@ -94,7 +144,7 @@
     // preferences; counting it here would make the "auto-filled from your saved preferences"
     // disclosure inaccurate about where the answer actually came from.
     var count = 0;
-    var selects = document.querySelectorAll('select');
+    var selects = queryAllDeep('select');
     for (var i = 0; i < selects.length; i++) {
       var sel = selects[i];
       if (isVoluntaryEeoKey(eeoKey(signals(sel))) && selectHasRealValue(sel)) count++;
@@ -777,7 +827,7 @@
   function fillStdFields(profile) {
     var STD = buildStdMatchers(profile);
     var filled = 0;
-    var inputs = document.querySelectorAll('input, textarea');
+    var inputs = queryAllDeep('input, textarea');
     for (var i = 0; i < inputs.length; i++) {
       var el = inputs[i];
       var ty = (el.type || '').toLowerCase();
@@ -817,7 +867,7 @@
   }
 
   function fillPasswordFields(profile, siteCredentials, state) {
-    var pwFields = Array.prototype.filter.call(document.querySelectorAll('input[type="password"]'), function (p) {
+    var pwFields = Array.prototype.filter.call(queryAllDeep('input[type="password"]'), function (p) {
       return visible(p) && !p.value;
     });
     if (!pwFields.length) return 0;
@@ -835,7 +885,7 @@
 
   function fillEeoSelects(eeo) {
     var filled = 0;
-    var selects = document.querySelectorAll('select');
+    var selects = queryAllDeep('select');
     for (var si = 0; si < selects.length; si++) {
       var sel = selects[si];
       var cur = (sel.value || '').toLowerCase();
@@ -910,7 +960,7 @@
   }
   // Proactively fill standard <select> dropdowns (State/Country/City) by selecting the option.
   function fillStdSelects(profile) {
-    var filled = 0, selects = document.querySelectorAll('select');
+    var filled = 0, selects = queryAllDeep('select');
     for (var si = 0; si < selects.length; si++) {
       var sel = selects[si];
       if (sel.disabled || !visible(sel) || selectHasRealValue(sel)) continue;
@@ -948,7 +998,7 @@
     return r.value || '';
   }
   function radioGroups() {
-    var radios = document.querySelectorAll('input[type="radio"]');
+    var radios = queryAllDeep('input[type="radio"]');
     var groups = {};
     for (var ri = 0; ri < radios.length; ri++) {
       var r = radios[ri];
@@ -2320,6 +2370,7 @@
   // ---------- main ----------
   window.__aliciaAutofillRun = async function () {
     if (busy) return;
+    _shadowRootsCache = null; // re-scan once per pass, not once per queryAllDeep call within it
     // `window.__aliciaNavHandled` latches true once the nav panel is shown, and — since `window`
     // persists across SPA route changes (no full reload) — it stays true on every later
     // re-injection, even on a COMPLETELY DIFFERENT page reached by clicking that panel's own
