@@ -1,5 +1,77 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-13 — v1.13.47: five parallel agents on the open issues from the last regrade, each in an isolated git worktree
+
+After the v1.13.46 fixes shipped and were live-verified, a regrade of the tool's overall state
+surfaced four concrete open issues plus a meta-observation (real bugs kept surfacing from actual
+use, after the tool had already passed every existing test). Five agents were dispatched in
+parallel, each in its own `git worktree` + branch (`agent/ai-location-hardening`,
+`agent/workday-signin-wall`, `agent/background-test-harness`, `agent/workable-recruitee-fixtures`,
+`agent/loop-race-audit`) so they couldn't clobber each other's edits, each scoped to one issue, each
+forbidden from touching `manifest.json`/`package.json`/`package-lock.json`/`HANDOFF.md`/`README.md`
+(reserved for this centralized integration pass) or pushing to any remote. All five were reviewed
+(diff read, `node --check`, `npm test` independently re-run in each worktree) before merging.
+17/17 tests passing after all five merges (11 autofill fixtures across 7 ATS platforms + 6
+background.js routing/race tests) — no regressions, no conflicts requiring manual resolution.
+
+**1. AI location/eligibility hardening** (`agent/ai-location-hardening`) — root-caused the Melbourne
+bug from the v1.13.44 live testing: `callCustomAnswerBackend`'s prompt included the job posting's
+own city/heading as page context but never the candidate's actual saved location or work-
+authorization/sponsorship answers, so with no real location fact to ground on, the model echoed
+the job's own city back as if it were the candidate's. Fixed by adding a `candidateProfileFacts()`
+block (real location + `eeo-authorization`/`eeo-sponsorship` from the saved profile) to the prompt,
+with a new system-prompt rule: location/residency/authorization/visa questions must be answered
+*only* from that block, or answered exactly `"N/A"` if it doesn't directly answer the specific
+question — reusing the existing `looksLikeRefusalAnswer`/human-review safeguard rather than
+inventing a new one. `autofill.js` only; Wagner-GPT's backend was inspected and confirmed to forward
+prompts verbatim, so no change was needed there.
+
+**2. Workday sign-in-only wall** (`agent/workday-signin-wall`) — added `isWorkdaySignInWall()`
+detection (no recognized form + a "sign in with ..." button present) wired into the existing
+`wdBlockingWall()` extension point (the same one that already handles Workday's verify-email wall),
+showing a guidance banner instead of silently doing nothing on tenants like NVIDIA's. Detection +
+banner only — never signs in or creates an account automatically. New fixture
+`tests/fixtures/workday-signin-wall.html`.
+
+**3. background.js test harness** (`agent/background-test-harness`) — new
+`tests/background-harness.mjs` (a Node `vm`-based harness, not jsdom — background.js never touches
+the DOM) + `tests/background.test.mjs`, closing the gap flagged in the v1.13.45/46 entries: until
+now nothing but a live click-through could catch a regression in the aggregator-routing/race logic.
+Includes a synchronous fake clock to deterministically reproduce the exact race the v1.13.46 fix
+addresses (both the lost-race and won-race outcomes), and a direct regression test for the original
+v1.13.45 data-leak bug. No new dependency.
+
+**4. Workable + Recruitee fixtures** (`agent/workable-recruitee-fixtures`) — 6th/7th platforms,
+real field structure captured live (Seeq's Workable posting, Freeday's Recruitee posting). Found and
+fixed a real bug while building the fixtures: `detectATS()` had no entry for either platform despite
+both being README-documented as supported and already recognized by `background.js`'s `ATS_HOST_RE`
+— every real posting silently misdetected as `'generic'` (standard fields still filled correctly,
+but `result.ats` was wrong, which would have silently blocked any future platform-specific adapter
+logic). Fixed with two hostname + real-DOM-marker lines. iCIMS/Taleo/BrassRing investigated live on a
+real iCIMS posting — reaching the actual form requires an account-creation-adjacent flow, confirmed
+out of scope without creating a real account; remains uncovered by design, not oversight.
+
+**5. Loop/race audit** (`agent/loop-race-audit`) — systematic review of every `setTimeout`/
+`setInterval` retry and every hostname-decision entry point in both files (full table in the
+worktree's own commit message). Found and fixed a genuine new bug beyond what was asked: `WEBAPP_APPLY`
+binds each job's session with an independent read-modify-write on the shared `autofillSessions` map,
+which races every OTHER job in the same batch — concurrent `chrome.tabs.create` callbacks routinely
+interleave their storage reads/writes, silently dropping the session (and therefore all autofill/
+aggregator-routing) for a subset of any multi-job "apply to these" batch. Fixed by serializing every
+job's full bind (including its own race-recovery sub-check) through one promise chain — tab creation
+stays fully concurrent, only the shared-map mutation is queued. Two items flagged but deliberately
+NOT fixed (not confident enough to justify a speculative change): `adoptOpenTabsForPending` is
+confirmed dead code (still hand-rolls its own inline aggregator check instead of using
+`routeAggregatorOrInject`, but is never called and its whole `pendingApplyUrls` mechanism is
+vestigial — worth a cleanup pass, not a live bug); `autofill.js`'s own MutationObserver-driven rerun
+has no aggregator-host awareness of its own if a page ever revealed lead-gen content via a pure
+in-place DOM mutation with no navigation event at all (unconfirmed for aggregator sites — the two
+real incidents were both `pushState`-driven, already covered).
+
+**Needs a reload** to pick up v1.13.47. The multi-job session-bind race fix (item 5) specifically
+needs a live re-test on a real multi-job "apply to these jobs" batch to fully confirm — the fixture
+suite doesn't reach `background.js`'s tab-lifecycle code the way it reaches `autofill.js`.
+
 ## Update 2026-07-12 (newest #4) — v1.13.46: closed a race that let the aggregator click-through silently never run
 
 Follow-up to the v1.13.45 fix (same session, found immediately while live-verifying it). The data

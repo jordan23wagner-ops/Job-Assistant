@@ -136,22 +136,35 @@ sends via `chrome.runtime.sendMessage` — the same message `background.js` list
 production — rather than reaching into internal functions.
 
 **Fixtures** (`tests/fixtures/*.html`) are hand-composed but modeled on REAL field structure
-captured live from real postings (Cloudflare on Greenhouse, Palantir on Lever, Axiom Space on
-Workday, Linear on Ashby, Visa on SmartRecruiters) — real
-`id`/`name`/`autocomplete`/`aria-label`/`data-automation-id`/class attributes and label
-associations, not synthetic markup that might not match real-world quirks. Coverage today is five
+captured live from real postings (Cloudflare on Greenhouse, Palantir on Lever, Axiom Space + NVIDIA
+on Workday, Linear on Ashby, Visa on SmartRecruiters, Seeq on Workable, Freeday on Recruitee) — real
+`id`/`name`/`autocomplete`/`aria-label`/`data-automation-id`/`data-ui`/class attributes and label
+associations, not synthetic markup that might not match real-world quirks. Coverage today is seven
 platforms with genuinely different field-matching shapes (Greenhouse: separate first/last name
 fields, id-based `<label for>`; Lever: one combined name field matched by its `name` attribute, no
 real `<label>` tag at all; Workday: everything keyed off `data-automation-id`, since its own
 `id`/`label[for]` are randomly generated per session and carry no semantic meaning; Ashby: system
 fields use a semantic id, but custom questions get a random UUID id/name with only a real `<label>`
 carrying any signal; SmartRecruiters: every field lives inside its own Web Component shadow root,
-none of it reachable via a plain `document.querySelectorAll`) — proof the harness works against
-unmodified production code, not exhaustive coverage of every supported ATS. Workable, Recruitee,
-iCIMS, and Taleo have no fixture yet. To add one: open a real posting, capture field structure via
-the browser's console (`document.querySelectorAll('input, select, textarea')` →
-id/name/label/autocomplete — never capture real filled-in values), hand-write a trimmed fixture
-from that, then assertions.
+none of it reachable via a plain `document.querySelectorAll`; Workable: id/name present, but the
+visible label is a plain `<span>` resolved via `aria-labelledby`, never a real `<label for>`;
+Recruitee: one combined "Full name" field like Lever/Ashby, but via an ordinary real `<label for>`,
+with dot-namespaced field names like `candidate.email`) — proof the harness works against
+unmodified production code, not exhaustive coverage of every supported ATS. iCIMS, Taleo, and
+BrassRing have no fixture and are not expected to get one soon: confirmed live (see HANDOFF.md,
+2026-07-13) that reaching their real application form requires an account-creation-adjacent flow,
+which this project deliberately never automates past without explicit human sign-off. To add a new
+fixture for an uncovered platform: open a real posting, capture field structure via the browser's
+console (`document.querySelectorAll('input, select, textarea')` → id/name/label/autocomplete — never
+capture real filled-in values), hand-write a trimmed fixture from that, then assertions.
+
+**`background.js` also has its own test harness** (`tests/background-harness.mjs` +
+`tests/background.test.mjs`, added 2026-07-13) — a Node `vm`-based harness, not jsdom, since
+background.js (the extension's service worker) never touches the DOM. It loads the real,
+unmodified `background.js` with a mocked `chrome.*` API surface and a synchronous fake clock, and
+regression-tests the aggregator-routing/race logic (`routeAggregatorOrInject`, the `WEBAPP_APPLY`
+race-recovery path, the `onHistoryStateUpdated` SPA-nav aggregator check) that a live browser
+click-through used to be the only way to verify.
 
 **Watch for this exact mistake** (made once, caught by the test itself): `detectATS()` matches ATS
 platforms by checking DOM markers in a fixed order (Workday → Greenhouse → Lever → iCIMS → Ashby →
