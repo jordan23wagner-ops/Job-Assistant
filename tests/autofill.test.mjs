@@ -228,3 +228,24 @@ test('recruitee: detects the ats and fills a single combined Full name field via
   assert.strictEqual(document.getElementById('input-candidate.email-4').value, TEST_PROFILE.email)
   assert.strictEqual(document.getElementById('input-candidate.phone-5').value, TEST_PROFILE.phone)
 })
+
+// Regression test for the v1.13.48 aggregator self-check (AGGREGATOR_SELF_RE, top of autofill.js):
+// autofill.js must refuse to run AT ALL on a job-board/aggregator host, because the only fillable
+// fields there are the site's own email-capture/lead-gen forms -- the exact thing the v1.13.45
+// incident leaked real contact info into on jooble.org and lensa.com. background.js's injection
+// paths are all aggregator-gated, but the side panel's manual "Auto-Fill Open Application" button
+// injects unconditionally, so the script itself is the last line of defense. Refusing at the top
+// of the IIFE (before the MutationObserver is ever attached) also closes the "popup appears via
+// pure DOM mutation, no navigation event" variant of the leak.
+test('aggregator host (jooble.org): refuses to run -- reports aggregator_page, fills nothing, even with a full profile saved', async () => {
+  const { result, document } = await runAutofill(fixture('aggregator-leadgen.html'), {
+    url: 'https://jooble.org/jdp/6438308374622660503',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.status, 'aggregator_page')
+  assert.strictEqual(result.filled, 0)
+  assert.strictEqual(document.getElementById('subscribe-email').value, '', 'the lead-gen email field must never be filled on an aggregator host')
+  assert.strictEqual(document.getElementById('lead-first-name').value, '')
+  assert.strictEqual(document.getElementById('lead-phone').value, '')
+})

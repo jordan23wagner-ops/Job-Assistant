@@ -1,5 +1,69 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-13 (later) — v1.13.48: closed the remaining known gaps from v1.13.47 (goal-directed session)
+
+Follow-up pass over everything v1.13.47's entry left open, run as a single goal-directed session.
+
+**1. Workday sign-in-only wall — now live-verified** (was fixture-only). Real run via the
+WEBAPP_APPLY bridge against a real, current NVIDIA posting (High Performance AI Engineer,
+JR2006961): the engine advanced job page → Apply → Apply Manually on its own, detected the wall,
+and stopped with the exact guidance banner ("This employer requires signing in or creating an
+account to continue…"), `status: stopped_needs_input`, `ats: workday`, zero inputs filled, both
+"Sign in with Google"/"Sign in with email" buttons still present and unclicked. Also settles the
+prior entry's open question: the real button text is exactly "Sign in with …", so the
+`/sign in with/` phrasing matches real-world wording.
+
+**2. AI location/eligibility hardening — now live-verified two ways** (was code-review-only).
+(a) Live on a real Lever posting (Kpler "Quantitative Data Scientist", New York) with the exact
+question shape from the original Melbourne incident ("Are you based in New York?✱", job's own city
+in the page title): 5 standard fields filled, both location/visa questions left EMPTY with
+`aiAnswered: 0`, run stopped at `stopped_needs_input` for human review — no fabricated answer
+anywhere. (b) Exact-prompt backend probe (system prompt extracted from autofill.js source at
+runtime, real chatwillow backend, HTTP 200): "Are you based in New York?" → "No. I am based in
+Cypress, Texas." (grounded in Profile Facts, not the job's city); visa-sponsorship with facts
+"(not provided)" → "N/A" (declines → human review). Both required behaviors confirmed.
+
+**3. `adoptOpenTabsForPending` deleted** (dead code). Re-verified fresh before deleting: the
+function is called from nowhere, and nothing writes new entries into `pendingApplyUrls` at all —
+readers with no producer. Deleted rather than rewired through `routeAggregatorOrInject`: polishing
+code that can never execute would just preserve its hand-rolled inline aggregator check as
+copy-paste bait, the exact duplication that caused the v1.13.45 leak. A tombstone comment marks the
+spot; the remaining producer-less `pendingApplyUrls` READS in onBeforeNavigate/onUpdated are inert
+and left for a future wider cleanup.
+
+**4. Aggregator self-check added to autofill.js — the flagged mutation-rerun gap was REAL and
+reachable.** The missing piece the v1.13.47 audit couldn't confirm: the side panel's manual
+"Auto-Fill Open Application" button (`sidepanel.js` `startAtsSession`) injects autofill.js
+UNCONDITIONALLY — no aggregator check — so a user clicking it while reading a Jooble/Lensa listing
+puts the fill engine on the aggregator page itself, where the MutationObserver rerun would then
+re-fill every lead-gen popup the page conjures via pure DOM mutation, with no navigation event for
+background.js to re-classify on. Fixed structurally: a new `AGGREGATOR_SELF_RE` guard at the very
+top of autofill.js's IIFE (mirroring the existing LinkedIn exclusion) refuses to run at all on an
+aggregator host — no fill pass, no observer armed, no reruns — shows a "this is a job-board page,
+not the employer's application" banner, and reports a new `aggregator_page` status (message added
+to the side panel's status map). The regex is deliberately a duplicate of background.js's
+`AGGREGATOR_HOST_RE` with KEEP-IN-SYNC comments both ways (content scripts can't import from the
+worker). New fixture `tests/fixtures/aggregator-leadgen.html` + regression test: a jooble.org URL
+with a full profile saved fills nothing and reports `aggregator_page`.
+
+**5. Audit of code added in v1.13.47** (same bug family: unbounded retries, missing
+host-awareness, async-write races). Checked: the WEBAPP_APPLY `sessionBindChain` (every code path
+resolves its bind exactly once; no retry loops; BUT found it was scoped per-message, so two
+near-simultaneous WEBAPP_APPLY batches could still lost-update-race EACH OTHER — fixed by hoisting
+the chain to module scope, one shared serializer across batches; worker-restart reset is inherently
+safe since a fresh worker has no in-flight binds), `isWorkdaySignInWall` (pure predicate, no
+retries, only reachable post-Workday-detection, "sign in with" phrasing avoids the bare header
+"Sign In" link on listing pages — no issue), `candidateProfileFacts` (verified
+`eeo-authorization`/`eeo-sponsorship` are the real EEO_FIELDS keys used by the side panel; missing
+data yields "(not provided)" which forces N/A — safe; no issue), the new `AGGREGATOR_SELF_RE`
+guard itself (runs once per injection, arms nothing, re-injection safely no-ops — no issue), and
+the new `aggregator_page` status (the bulk-apply queue advances only on explicit human
+QUEUE_ITEM_SUBMITTED/SKIP messages, so an unknown status can't stall it — no issue).
+
+18/18 tests passing (12 autofill fixtures incl. the new aggregator-refusal test + 6 background.js
+routing/race tests). `node --check` clean on autofill.js, background.js, sidepanel.js. Bumped to
+v1.13.48 — extension needs a reload.
+
 ## Update 2026-07-13 — v1.13.47: five parallel agents on the open issues from the last regrade, each in an isolated git worktree
 
 After the v1.13.46 fixes shipped and were live-verified, a regrade of the tool's overall state

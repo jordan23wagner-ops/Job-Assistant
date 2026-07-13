@@ -3068,7 +3068,10 @@ var UNIVERSAL_STATUS_MESSAGES = {
   answered_review: { text: 'Alicia answered custom questions — review them on the page, then click Continue there.', color: '#e0a800' },
   ready_to_submit: { text: 'Filled and advanced — ready for you to submit.', color: '#4caf50' },
   error: { text: 'Something went wrong while filling — check the page.', color: '#ff9955' },
-  stopped_by_user: { text: 'Autofill stopped. Nothing more will be filled until you start a new fill.', color: '#e0a800' }
+  stopped_by_user: { text: 'Autofill stopped. Nothing more will be filled until you start a new fill.', color: '#e0a800' },
+  // autofill.js's aggregator self-check (see its top-of-file guard): a job-board/lead-gen page was
+  // deliberately NOT filled — its only fields belong to the site's own email-capture forms.
+  aggregator_page: { text: 'That\'s a job-board page, not the employer\'s application — open the job\'s actual Apply page and try again.', color: '#e0a800' }
 };
 
 chrome.runtime.onMessage.addListener(function (message) {

@@ -158,6 +158,14 @@ fixture for an uncovered platform: open a real posting, capture field structure 
 console (`document.querySelectorAll('input, select, textarea')` → id/name/label/autocomplete — never
 capture real filled-in values), hand-write a trimmed fixture from that, then assertions.
 
+**Aggregator/lead-gen pages are refuse-to-fill by design**, at two independent layers:
+background.js's injection routing (AGGREGATOR_HOST_RE → click through via
+skipAggregatorInterstitial, never fill) and, since v1.13.48, autofill.js's own top-of-file
+AGGREGATOR_SELF_RE guard (refuses to run at all on an aggregator host — covers the side panel's
+manual fill button and DOM-mutation-only popups that never fire a navigation event). The two
+regexes are deliberate duplicates with KEEP-IN-SYNC comments — change one, change both.
+`tests/fixtures/aggregator-leadgen.html` regression-tests the refusal.
+
 **`background.js` also has its own test harness** (`tests/background-harness.mjs` +
 `tests/background.test.mjs`, added 2026-07-13) — a Node `vm`-based harness, not jsdom, since
 background.js (the extension's service worker) never touches the DOM. It loads the real,

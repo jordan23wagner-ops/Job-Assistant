@@ -28,6 +28,34 @@
   if (window.__aliciaAutofillRun) { window.__aliciaAutofillRun(); return; }
   if (/(^|\.)linkedin\.com$/i.test(location.hostname)) return; // content.js owns LinkedIn
 
+  // Aggregator/lead-gen self-check: refuse to run AT ALL on a job-board/aggregator host. All of
+  // background.js's own injection paths are already gated on its AGGREGATOR_HOST_RE (click through
+  // these pages, never fill them) — but the side panel's manual "Auto-Fill Open Application" button
+  // (sidepanel.js startAtsSession) injects unconditionally, so a user who clicks it while READING a
+  // Jooble/Lensa listing would get this script running on the aggregator page itself, where the
+  // only fillable fields are the site's own email-capture/lead-gen forms (the exact thing the
+  // v1.13.45 incident leaked real contact info into) — and the MutationObserver rerun would then
+  // re-fill every popup the page conjures via pure DOM mutation, with no navigation event for
+  // background.js to re-classify on. Exiting HERE, before anything is set up, means no fill pass,
+  // no observer, no reruns — structurally closed rather than filtered per-pass.
+  // KEEP IN SYNC with AGGREGATOR_HOST_RE in background.js (content scripts can't import from the
+  // worker, so this list is deliberately duplicated — if you change one, change both).
+  var AGGREGATOR_SELF_RE = /(^|\.)(adzuna|indeed|glassdoor|ziprecruiter|simplyhired|monster|dice|talent|jooble|neuvoo|jobgether|lensa|whatjobs|appcast|jobrapido|jobcase|careerjet|careerbuilder|snagajob|jobisjob|joblist|getwork|resume-library)\.(com|net|co\.uk|ca|com\.au|de|fr|io|org)$/i;
+  if (AGGREGATOR_SELF_RE.test(location.hostname)) {
+    try {
+      var aggEl = document.createElement('div');
+      aggEl.id = 'alicia-apply-banner';
+      aggEl.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;padding:10px 16px;border-radius:8px;color:#fff;font:600 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:340px;cursor:pointer;background:#e0a800;';
+      aggEl.title = 'Click to dismiss';
+      aggEl.onclick = function () { aggEl.remove(); };
+      aggEl.textContent = 'This is a job-board page, not the employer\'s application — Alicia only fills real applications. Open the job\'s actual Apply page and run the fill there.';
+      (document.body || document.documentElement).appendChild(aggEl);
+      setTimeout(function () { if (aggEl.parentNode) aggEl.remove(); }, 15000);
+    } catch (e) {}
+    try { chrome.runtime.sendMessage({ type: 'UNIVERSAL_FILL_RESULT', result: { filled: 0, status: 'aggregator_page', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, eeoFilled: 0, ats: 'generic' } }); } catch (e) {}
+    return;
+  }
+
   var BACKEND_URL = 'https://chatwillow.com/api/chat';
   var MAX_STEPS = 20;
   var CUSTOM_QA_MATCH_THRESHOLD = 65;

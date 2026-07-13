@@ -1,0 +1,18 @@
+<!--
+  Trimmed fixture modeling a job aggregator's own email-capture/lead-gen popup — the "Don't miss
+  new jobs / Leave your email" modal captured live from jooble.org (see HANDOFF.md, v1.13.45: real
+  name/email/phone got filled into exactly this kind of form on jooble.org and lensa.com). The
+  field structure here is what any such form looks like: an email input a profile-email matcher
+  would happily fill, plus a name pair on the follow-up step. autofill.js must refuse to run AT ALL
+  on an aggregator host (top-of-file AGGREGATOR_SELF_RE guard) — the pass/fail signal is the
+  'aggregator_page' result status plus every field left empty, run against a jooble.org URL.
+-->
+<div class="popup">
+  <h2>Don't miss new jobs</h2>
+  <p>Leave your email to get similar opportunities</p>
+  <input type="email" id="subscribe-email" name="email" placeholder="Your email">
+  <input type="text" id="lead-first-name" name="firstName" placeholder="First name">
+  <input type="tel" id="lead-phone" name="phone" placeholder="Your Mobile Number">
+  <button type="button">Continue</button>
+  <button type="button">Skip for now</button>
+</div>

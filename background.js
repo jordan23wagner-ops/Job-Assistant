@@ -515,6 +515,23 @@ chrome.runtime.onMessage.addListener(function (message, sender) {
 // the tab itself for this path — see aliciaBridge.js's corresponding change. `pendingApplyUrls` /
 // `findPendingMatch` are kept as a fallback for any tab that navigates to a matching URL through
 // some other path (e.g. a redirect chain), but are no longer load-bearing for the common case.
+// Binding a job's session is a read-modify-write on the SHARED autofillSessions map: read the
+// whole map, add this tab's entry, write the whole map back. Doing that independently per job (as
+// this used to) races every OTHER job in the SAME batch -- WEBAPP_APPLY's whole purpose is to open
+// several postings at once, and chrome.tabs.create's callbacks for a multi-job batch fire in quick
+// succession, so job B's read routinely lands before job A's write completes; job B's write then
+// overwrites storage with a map that never included job A's session at all (lost update), exactly
+// as if job A's session had never been bound. Same race family as the tabs.create-vs-onUpdated race
+// fixed above, just between siblings instead of against a browser event. Fixed by running every
+// job's read-modify-write (including its own race-recovery sub-check) through ONE serialized
+// promise chain, so only one job's storage critical section is ever in flight at a time -- tab
+// creation itself stays fully concurrent (unaffected), only the shared-map mutation is queued.
+// MODULE-scoped (not per-message) on purpose: a per-message chain still let two near-simultaneous
+// WEBAPP_APPLY batches race EACH OTHER with the identical lost-update -- one shared chain
+// serializes binds across batches too. (A worker restart between batches resets the chain, but a
+// restarted worker has no in-flight binds to race against, so that's inherently safe.)
+var sessionBindChain = Promise.resolve();
+
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message || message.type !== 'WEBAPP_APPLY') return;
   var requested = Array.isArray(message.jobs) ? message.jobs.length : 0;
@@ -524,18 +541,6 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   var opened = [];
   var remaining = jobs.length;
   if (!remaining) { try { sendResponse({ ok: true, count: 0, requested: requested, tabIds: [] }); } catch (e) {} return; }
-  // Binding a job's session is a read-modify-write on the SHARED autofillSessions map: read the
-  // whole map, add this tab's entry, write the whole map back. Doing that independently per job (as
-  // this used to) races every OTHER job in the SAME batch -- WEBAPP_APPLY's whole purpose is to open
-  // several postings at once, and chrome.tabs.create's callbacks for a multi-job batch fire in quick
-  // succession, so job B's read routinely lands before job A's write completes; job B's write then
-  // overwrites storage with a map that never included job A's session at all (lost update), exactly
-  // as if job A's session had never been bound. Same race family as the tabs.create-vs-onUpdated race
-  // fixed above, just between siblings instead of against a browser event. Fixed by running every
-  // job's read-modify-write (including its own race-recovery sub-check) through ONE serialized
-  // promise chain, so only one job's storage critical section is ever in flight at a time -- tab
-  // creation itself stays fully concurrent (unaffected), only the shared-map mutation is queued.
-  var sessionBindChain = Promise.resolve();
   function bindWebappApplySession(tabId, host, j) {
     sessionBindChain = sessionBindChain.then(function () {
       return new Promise(function (resolveBind) {
@@ -590,62 +595,16 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   return true; // async sendResponse
 });
 
-// The web app opens each posting tab BEFORE this registration can possibly land here (postMessage
-// -> bridge.js -> runtime.sendMessage -> service-worker wake -> storage round-trips), so the
-// navigation-event binders above routinely fire first, find no pending entry, and miss. On a
-// custom-domain posting that never redirects (Stripe's greenhouse-backed careers site — the
-// v1.13.34 live repro) there is no second navigation to retry on, so no session was ever bound and
-// autofill.js was never injected on ANY page of that tab. Registration-time adoption closes the
-// race deterministically: scan the tabs that already exist and bind/inject any that match a
-// pending entry, exactly as the navigation binders would have.
-function adoptOpenTabsForPending() {
-  chrome.tabs.query({}, function (tabs) {
-    if (!tabs || !tabs.length) return;
-    chrome.storage.local.get(['autofillSessions', 'pendingApplyUrls'], function (data) {
-      var sessions = data.autofillSessions || {};
-      var pending = data.pendingApplyUrls || {};
-      if (!Object.keys(pending).length) return;
-      var changed = false;
-      tabs.forEach(function (tab) {
-        if (!tab || !tab.id || !tab.url || !/^https?:/i.test(tab.url)) return;
-        if (/(^|\.)linkedin\.com/i.test(tab.url)) return;
-        if (sessions[String(tab.id)]) return;
-        var m = findPendingMatch(pending, tab.url);
-        if (!m) return;
-        var host = '';
-        try { host = new URL(tab.url).hostname; } catch (e) {}
-        var s = { hostname: host, startedAt: Date.now(), explicit: true, tailoredResume: m.entry.resumeText || '', origUrl: m.key, navs: 0 };
-        sessions[String(tab.id)] = s;
-        delete pending[m.key];
-        changed = true;
-        console.log('[Alicia][apply-debug] WEBAPP_APPLY: adopted already-open tab', tab.id, tab.url, 'for pending', m.key);
-        // Mirror onUpdated's post-bind behavior for tabs that have already finished loading; a tab
-        // still loading is handled by onUpdated 'complete' via the session that now exists.
-        if (tab.status === 'complete') {
-          (function (tabId, sess, h) {
-            if (/(^|\.)adzuna\./i.test(h) && !sess.adzunaTried) {
-              sess.adzunaTried = true;
-              resolveAdzunaViaFetch(tab.url).then(function (employer) {
-                if (employer) { chrome.tabs.update(tabId, { url: employer }).catch(function () {}); }
-                else { chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {}); }
-              });
-              return;
-            }
-            setTimeout(function () {
-              if (AGGREGATOR_HOST_RE.test(h)) {
-                chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
-              } else {
-                console.log('[Alicia][apply-debug] WEBAPP_APPLY: injecting autofill.js into adopted tab', tabId, '(host', h, ')');
-                injectAutofillWithTailoredResume(tabId, sess);
-              }
-            }, 800);
-          })(tab.id, s, host);
-        }
-      });
-      if (changed) chrome.storage.local.set({ autofillSessions: sessions, pendingApplyUrls: pending });
-    });
-  });
-}
+// NOTE: `adoptOpenTabsForPending` used to live here — registration-time adoption of already-open
+// tabs matching a pendingApplyUrls entry, from the era when the WEB APP opened posting tabs itself
+// and the extension had to catch up. Deleted (2026-07-13, dead code): it was never called from
+// anywhere, and nothing writes new entries into `pendingApplyUrls` anymore — WEBAPP_APPLY opens
+// tabs via chrome.tabs.create and binds each session directly in the create callback, so there is
+// never a pending entry for it to adopt. It also hand-rolled its own inline aggregator-host check
+// instead of using routeAggregatorOrInject — exactly the duplicated-host-logic drift that caused
+// the v1.13.45 data-leak bug — so keeping it around as dead code was a standing hazard for anyone
+// reviving it by copy-paste. The remaining pendingApplyUrls READS in onBeforeNavigate/onUpdated are
+// likewise producer-less and inert, left in place as harmless fallbacks pending a wider cleanup.
 
 // ===== Web-app sync (Wagner-GPT is the source of truth for the résumé/profile) =====
 // The Jobs tab pushes its active (or tailored) résumé + contact profile through bridge.js; store
