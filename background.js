@@ -524,21 +524,28 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   var opened = [];
   var remaining = jobs.length;
   if (!remaining) { try { sendResponse({ ok: true, count: 0, requested: requested, tabIds: [] }); } catch (e) {} return; }
-  jobs.forEach(function (j) {
-    chrome.tabs.create({ url: j.url, active: opened.length === 0 }, function (tab) {
-      remaining--;
-      if (chrome.runtime.lastError || !tab || !tab.id) {
-        console.log('[Alicia][apply-debug] WEBAPP_APPLY: tabs.create failed for', j.url, chrome.runtime.lastError && chrome.runtime.lastError.message);
-      } else {
-        opened.push(tab.id);
-        var host = ''; try { host = new URL(j.url).hostname; } catch (e) {}
+  // Binding a job's session is a read-modify-write on the SHARED autofillSessions map: read the
+  // whole map, add this tab's entry, write the whole map back. Doing that independently per job (as
+  // this used to) races every OTHER job in the SAME batch -- WEBAPP_APPLY's whole purpose is to open
+  // several postings at once, and chrome.tabs.create's callbacks for a multi-job batch fire in quick
+  // succession, so job B's read routinely lands before job A's write completes; job B's write then
+  // overwrites storage with a map that never included job A's session at all (lost update), exactly
+  // as if job A's session had never been bound. Same race family as the tabs.create-vs-onUpdated race
+  // fixed above, just between siblings instead of against a browser event. Fixed by running every
+  // job's read-modify-write (including its own race-recovery sub-check) through ONE serialized
+  // promise chain, so only one job's storage critical section is ever in flight at a time -- tab
+  // creation itself stays fully concurrent (unaffected), only the shared-map mutation is queued.
+  var sessionBindChain = Promise.resolve();
+  function bindWebappApplySession(tabId, host, j) {
+    sessionBindChain = sessionBindChain.then(function () {
+      return new Promise(function (resolveBind) {
         chrome.storage.local.get('autofillSessions', function (data) {
           var sessions = data.autofillSessions || {};
-          sessions[String(tab.id)] = {
+          sessions[String(tabId)] = {
             hostname: host, startedAt: Date.now(), explicit: true,
             tailoredResume: j.resumeText || '', origUrl: normUrl(j.url), navs: 0,
           };
-          console.log('[Alicia][apply-debug] WEBAPP_APPLY: bound explicit session directly to new tab', tab.id, 'for', j.url);
+          console.log('[Alicia][apply-debug] WEBAPP_APPLY: bound explicit session directly to new tab', tabId, 'for', j.url);
           chrome.storage.local.set({ autofillSessions: sessions }, function () {
             // chrome.tabs.onUpdated's 'complete' event for this SAME tab can fire before this async
             // session write lands (tab creation + storage round-trip race) -- confirmed live: an
@@ -547,21 +554,35 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
             // ALREADY reached 'complete' by the time this write finishes, onUpdated already ran and
             // did nothing for it -- recover by routing it here, once, guarded by s.routed so a WON
             // race (onUpdated already handled it normally) never double-injects.
-            chrome.tabs.get(tab.id, function (t) {
-              if (chrome.runtime.lastError || !t || t.status !== 'complete') return;
+            chrome.tabs.get(tabId, function (t) {
+              if (chrome.runtime.lastError || !t || t.status !== 'complete') { resolveBind(); return; }
               chrome.storage.local.get('autofillSessions', function (data2) {
                 var sessions2 = data2.autofillSessions || {};
-                var s2 = sessions2[String(tab.id)];
-                if (!s2 || s2.routed) return; // already handled normally -- avoid double-injecting
+                var s2 = sessions2[String(tabId)];
+                if (!s2 || s2.routed) { resolveBind(); return; } // already handled normally -- avoid double-injecting
                 s2.routed = true;
-                sessions2[String(tab.id)] = s2;
-                chrome.storage.local.set({ autofillSessions: sessions2 });
-                console.log('[Alicia][apply-debug] WEBAPP_APPLY: tab', tab.id, 'was already complete when its session landed — race-recovery routing now');
-                routeAggregatorOrInject(tab.id, s2, host, 'WEBAPP_APPLY race-recovery');
+                sessions2[String(tabId)] = s2;
+                chrome.storage.local.set({ autofillSessions: sessions2 }, function () {
+                  console.log('[Alicia][apply-debug] WEBAPP_APPLY: tab', tabId, 'was already complete when its session landed — race-recovery routing now');
+                  routeAggregatorOrInject(tabId, s2, host, 'WEBAPP_APPLY race-recovery');
+                  resolveBind();
+                });
               });
             });
           });
         });
+      });
+    });
+  }
+  jobs.forEach(function (j) {
+    chrome.tabs.create({ url: j.url, active: opened.length === 0 }, function (tab) {
+      remaining--;
+      if (chrome.runtime.lastError || !tab || !tab.id) {
+        console.log('[Alicia][apply-debug] WEBAPP_APPLY: tabs.create failed for', j.url, chrome.runtime.lastError && chrome.runtime.lastError.message);
+      } else {
+        opened.push(tab.id);
+        var host = ''; try { host = new URL(j.url).hostname; } catch (e) {}
+        bindWebappApplySession(tab.id, host, j);
       }
       if (remaining === 0) { try { sendResponse({ ok: true, count: opened.length, requested: requested, tabIds: opened }); } catch (e) {} }
     });
