@@ -158,6 +158,13 @@ fixture for an uncovered platform: open a real posting, capture field structure 
 console (`document.querySelectorAll('input, select, textarea')` → id/name/label/autocomplete — never
 capture real filled-in values), hand-write a trimmed fixture from that, then assertions.
 
+**Every fill pass reports a field-by-field summary** (v1.13.49): the side panel shows what was
+filled with what value and from which source (profile / learned / AI — AI answers badged
+distinctly for review), plus what was skipped and why. The same data powers the **"Preview Fill"**
+button: identical matching, zero writes — safe to try on any page. `npm test` covers both (fill-log
+and preview tests run the real engine). A daily scheduled canary task also reruns the suite and
+flags failures — see HANDOFF.md for its honest scope limits.
+
 **Aggregator/lead-gen pages are refuse-to-fill by design**, at two independent layers:
 background.js's injection routing (AGGREGATOR_HOST_RE → click through via
 skipAggregatorInterstitial, never fill) and, since v1.13.48, autofill.js's own top-of-file

@@ -3071,8 +3071,46 @@ var UNIVERSAL_STATUS_MESSAGES = {
   stopped_by_user: { text: 'Autofill stopped. Nothing more will be filled until you start a new fill.', color: '#e0a800' },
   // autofill.js's aggregator self-check (see its top-of-file guard): a job-board/lead-gen page was
   // deliberately NOT filled — its only fields belong to the site's own email-capture forms.
-  aggregator_page: { text: 'That\'s a job-board page, not the employer\'s application — open the job\'s actual Apply page and try again.', color: '#e0a800' }
+  aggregator_page: { text: 'That\'s a job-board page, not the employer\'s application — open the job\'s actual Apply page and try again.', color: '#e0a800' },
+  preview: { text: 'Preview only — nothing was written. Below is what a real fill would do on this page.', color: '#e0a800' },
+  // background.js's closed-loop check: the aggregator click-through verifiably failed (the tab is
+  // still on the job-board host after the whole poll window) — the human has to click through.
+  aggregator_stuck: { text: 'Couldn\'t get past the job-board page automatically — click through to the employer\'s application yourself and Alicia will take it from there.', color: '#e0a800' }
 };
+
+// Field-by-field summary of what a pass actually did (or, in preview, would do) — built from
+// result.fillLog (see autofill.js's logFill/logSkip). AI-sourced answers get a distinct badge:
+// those are the ones a human most needs to double-check before submitting.
+var FS_BADGES = { ai: 'AI', profile: 'profile', learned: 'learned', 'eeo-pref': 'EEO', password: 'pw', resume: 'resume' };
+function renderFillSummary(r) {
+  var box = document.getElementById('fill-summary');
+  if (!box) return;
+  var log = Array.isArray(r.fillLog) ? r.fillLog : [];
+  if (!log.length) { box.classList.add('hidden'); box.textContent = ''; return; }
+  box.textContent = '';
+  var h = document.createElement('h3');
+  h.textContent = (r.status === 'preview' ? 'Would fill on this page' : 'What Alicia did on this pass') + ' (' + log.length + ')';
+  box.appendChild(h);
+  log.forEach(function (e) {
+    var row = document.createElement('div');
+    row.className = 'fill-summary-row';
+    var badge = document.createElement('span');
+    if (e.skipped) { badge.className = 'fs-badge skip'; badge.textContent = 'skipped'; }
+    else if (e.applied === false) { badge.className = 'fs-badge preview'; badge.textContent = 'would fill'; }
+    else { badge.className = 'fs-badge ' + (e.source || 'profile'); badge.textContent = FS_BADGES[e.source] || e.source || ''; }
+    var lbl = document.createElement('span');
+    lbl.className = 'fs-label';
+    lbl.textContent = e.label || '(unlabeled field)';
+    lbl.title = e.label || '';
+    var val = document.createElement('span');
+    val.className = 'fs-value';
+    val.textContent = e.skipped ? (e.reason || '') : (e.value || '');
+    val.title = e.skipped ? (e.reason || '') : (e.value || '');
+    row.appendChild(badge); row.appendChild(lbl); row.appendChild(val);
+    box.appendChild(row);
+  });
+  box.classList.remove('hidden');
+}
 
 chrome.runtime.onMessage.addListener(function (message) {
   if (!message || message.type !== 'UNIVERSAL_FILL_RESULT' || !message.result) return;
@@ -3083,10 +3121,18 @@ chrome.runtime.onMessage.addListener(function (message) {
     text = 'Filled and advanced — ready for you to click "' + (r.readyButtonText || 'Submit') + '" yourself.';
   }
   if (r.filled) text = 'Filled ' + r.filled + ' field' + (r.filled === 1 ? '' : 's') + '. ' + text;
+  // Specific diagnostics over canned strings: name the platform, and when the run stopped for
+  // human input, say WHICH questions are waiting instead of a generic "needs your input".
+  if (r.ats && r.ats !== 'generic') text += ' (' + r.ats + ')';
+  if (r.status === 'stopped_needs_input' && Array.isArray(r.unansweredLabels) && r.unansweredLabels.length) {
+    text += ' Waiting on you: ' + r.unansweredLabels.slice(0, 4).join(' • ') +
+      (r.unansweredLabels.length > 4 ? ' (+' + (r.unansweredLabels.length - 4) + ' more)' : '');
+  }
   if (r.generatedPassword) {
     text += ' Created a password for ' + r.generatedPassword.hostname + ' — saved to Site Passwords.';
   }
   setFillStatus(text, m.color);
+  renderFillSummary(r);
 });
 
 function startAtsSession(tab) {
@@ -3096,16 +3142,35 @@ function startAtsSession(tab) {
     var sessions = data.autofillSessions || {};
     sessions[String(tab.id)] = { hostname: hostname, startedAt: Date.now() };
     chrome.storage.local.set({ autofillSessions: sessions });
-    // Explicit new fill — clear any previous Stop before injecting, in every frame.
+    // Explicit new fill — clear any previous Stop AND any leftover preview flag before injecting,
+    // in every frame (window persists on the page across injections; a stale preview flag would
+    // silently turn this real fill into a no-write preview).
     chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
-      func: function () { window.__aliciaStopRequested = false; },
+      func: function () { window.__aliciaStopRequested = false; window.__aliciaPreviewMode = false; },
     }).catch(function () {}).then(function () {
       chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }, function () {
         if (chrome.runtime.lastError) {
           setFillStatus('Could not fill this page. Open the application form and try again.', '#ff9955');
         }
       });
+    });
+  });
+}
+
+// "Preview Fill": inject the SAME engine with window.__aliciaPreviewMode set — autofill.js runs
+// its real matching but skips every mutation (see its previewMode() gates) and reports a
+// field-by-field "what WOULD be filled" summary. Deliberately does NOT create an autofill session:
+// a preview must not arm the 20-minute re-inject-on-navigation machinery.
+function startPreviewRun(tab) {
+  chrome.scripting.executeScript({
+    target: { tabId: tab.id, allFrames: true },
+    func: function () { window.__aliciaStopRequested = false; window.__aliciaPreviewMode = true; },
+  }).catch(function () {}).then(function () {
+    chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['autofill.js'] }, function () {
+      if (chrome.runtime.lastError) {
+        setFillStatus('Could not preview this page. Open the application form and try again.', '#ff9955');
+      }
     });
   });
 }
@@ -3143,6 +3208,44 @@ if (eeoFillNow) {
         }
 
         startAtsSession(tabs[0]);
+      });
+    });
+  });
+}
+
+// "Filling as: ..." — the extension holds exactly ONE active profile (whoever the web app last
+// synced, or whoever last saved the form here). With two people sharing this browser (the web
+// app's person switcher is scoped per person, but its sync to the extension is skipped when the
+// newly-selected person has no active resume — see HANDOFF.md), the single most effective guard
+// against filling a real application as the WRONG person is making the active identity visible
+// right where the fill buttons are.
+function renderFillingAs() {
+  var el = document.getElementById('filling-as');
+  if (!el) return;
+  chrome.storage.local.get('profile', function (data) {
+    var p = data.profile || {};
+    var who = [p.firstName, p.lastName].filter(Boolean).join(' ');
+    el.textContent = who ? ('Filling as: ' + who + (p.email ? ' (' + p.email + ')' : '')) : '';
+  });
+}
+renderFillingAs();
+chrome.storage.onChanged.addListener(function (changes, area) {
+  if (area === 'local' && changes.profile) renderFillingAs();
+});
+
+const eeoPreviewNow = document.getElementById('eeo-preview-now');
+if (eeoPreviewNow) {
+  eeoPreviewNow.addEventListener('click', function () {
+    chrome.storage.local.get(['eeoPrefs', 'profile'], function (data) {
+      if (Object.keys(data.eeoPrefs || {}).length === 0 && Object.keys(data.profile || {}).length === 0) {
+        setFillStatus('Add your info first (tap Edit), then Save.', '#ff9955');
+        return;
+      }
+      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        if (!tabs[0]) { setFillStatus('No active tab to preview.', '#ff9955'); return; }
+        if (/linkedin\.com/i.test(tabs[0].url || '')) { setFillStatus('Preview isn\'t available on LinkedIn — use it on an application page.', '#ff9955'); return; }
+        setFillStatus('Previewing (nothing will be written)…', '#e0a800');
+        startPreviewRun(tabs[0]);
       });
     });
   });

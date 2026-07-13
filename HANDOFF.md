@@ -1,5 +1,68 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-13 (latest) — v1.13.49: UX pass — fill transparency, preview mode, stuck-state guidance, identity visibility, canary tests, aggregator closed-loop
+
+A goal-directed pass over the seven UX gaps called out in the post-v1.13.48 harsh regrade. All in
+one continuous session, no sub-agents needed. 22/22 tests passing (14 autofill incl. 2 new + 6+2
+background). Committed to the branch, NOT pushed (per this pass's instructions).
+
+**1. Field-by-field fill summary (the headline item).** autofill.js now keeps a per-pass `fillLog`
+— every fill decision (label, value, source: profile/learned/ai/eeo-pref/password/resume) and every
+skip decision (honeypots, AI refusals routed to review) — attached to every UNIVERSAL_FILL_RESULT
+via `report()`. The side panel renders it as a badge-labeled list (`#fill-summary`,
+`renderFillSummary()` in sidepanel.js, styles in styles.css): AI answers get a distinct purple
+badge since those are what a human most needs to eyeball before submitting; skips show WHY.
+Logging lives inside the real fill functions themselves (fillStdFields/fillStdSelects/
+fillEeoSelects/fillEeoRadios/fillPasswordFields/attachResume/applyAnswerToItem), so it can't drift
+from what actually happened.
+
+**2. Preview mode.** New side-panel "Preview Fill (writes nothing)" button injects the SAME engine
+with `window.__aliciaPreviewMode` set (same window-flag pattern as Stop). Every mutation site in
+the fill functions gates on `previewMode()` — matching runs for real, but nothing is written,
+clicked, generated (passwords are not even created/stored), attached, or session-armed (no
+autofill session, no MutationObserver, no AI/backend calls, no wizard advancing). Results arrive as
+`status:'preview'` with the fillLog marked `applied:false`, rendered through the same summary UI.
+Both background.js's `clearStopFlag` and sidepanel's `startAtsSession` now explicitly clear the
+preview flag before a REAL fill — window state persists across injections on the same page, and a
+stale preview flag would otherwise silently turn a real fill into a no-op preview.
+
+**3. Specific diagnostics instead of canned strings.** The side panel's result handler now names
+the detected ATS platform and — when a run stops for human input — lists WHICH questions are
+waiting (`result.unansweredLabels`, capped) instead of a generic "needs your input".
+
+**4. The reload-doesn't-stop-it trap is now documented where users will see it:** a permanent hint
+under the Stop button in the side panel, appended to the advance-cap "continue manually" banner,
+and a new banner when the mutation-rerun safety cap trips.
+
+**5. "Filling as:" identity line.** Investigation confirmed the two-person risk is real: the web
+app (wife-gpt) is fully person-scoped and re-syncs the extension on person switch, BUT its sync
+effect bails when the newly-selected person has no active resume (`Jobs.jsx`, the
+`activeForSync.text` guard) — in that case the extension silently keeps the PREVIOUS person's
+profile and would fill real applications as the wrong person. Small safe fix on this side: the
+side panel now always shows "Filling as: <name> (<email>)" (live via storage.onChanged) right at
+the fill buttons. RECOMMENDED FOLLOW-UP (deliberately not done here — it's in the auto-deploying
+wife-gpt repo): make Jobs.jsx sync the profile on person switch even when no active resume exists.
+
+**6. Daily canary test run.** A scheduled task (`job-assistant-canary-tests`, 8:05 AM daily, via
+the desktop app's scheduled-tasks system — runs while the app is open, or on next launch) reruns
+`npm test` and reports pass/fail, flagging any failure explicitly. Honest limitation, stated in
+the task itself: the fixtures are static captures, so this catches LOCAL regressions (the next
+edit breaking a platform), not a remote ATS changing its live markup — true remote-drift detection
+would mean fetching real ATS pages on a schedule, which crosses into the "monitoring platform"
+scope this deliberately stays out of.
+
+**7. Aggregator click-through is now closed-loop.** After `routeAggregatorOrInject` fires
+`skipAggregatorInterstitial`, ONE check (15s later, past the click-through's own 12s poll window,
+no retry loop) verifies the tab actually left the aggregator host. Still there → an on-page
+"couldn't get past this job-board page" banner plus an `aggregator_stuck` side-panel status; moved
+on or tab closed → silent no-op. Both outcomes vm-tested against the real background.js.
+
+New tests: fill-log correctness on a real greenhouse fill + honeypot-skip visibility (workday),
+preview-mode zero-mutation + would-fill reporting (greenhouse), aggregator stuck/success closed-
+loop (background vm harness, fake clock). `tests/harness.mjs` gained a `preview` option mirroring
+the side panel's flag injection. autofill.js/background.js/sidepanel.js/sidepanel.html/styles.css
+all changed — bumped to v1.13.49, extension needs a reload.
+
 ## Update 2026-07-13 (later) — v1.13.48: closed the remaining known gaps from v1.13.47 (goal-directed session)
 
 Follow-up pass over everything v1.13.47's entry left open, run as a single goal-directed session.

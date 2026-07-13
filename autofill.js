@@ -96,6 +96,24 @@
   }
   function visible(el) { return !!el && el.offsetParent !== null; }
 
+  // ---------- fill log + preview mode ----------
+  // Every fill/skip decision is recorded here and shipped back on the UNIVERSAL_FILL_RESULT so the
+  // side panel can show a field-by-field summary ("what did Alicia actually do?") instead of the
+  // user having to eyeball the raw form to catch a mistake -- AI-sourced answers are flagged
+  // distinctly since those are the ones a human most needs to double-check before submitting.
+  // Preview mode (window.__aliciaPreviewMode, set by the side panel's "Preview Fill" button before
+  // injection, same pattern as the stop flag) runs the IDENTICAL matching code below but the fill
+  // functions skip their mutation lines -- what WOULD be filled is logged with applied:false and
+  // nothing on the real page is touched, clicked, generated, or stored.
+  var fillLog = [];
+  function previewMode() { return window.__aliciaPreviewMode === true; }
+  function logFill(label, value, source) {
+    fillLog.push({ label: String(label || '').slice(0, 90), value: String(value == null ? '' : value).slice(0, 90), source: source, applied: !previewMode() });
+  }
+  function logSkip(label, reason) {
+    fillLog.push({ label: String(label || '').slice(0, 90), skipped: true, reason: String(reason || '').slice(0, 120) });
+  }
+
   // Some ATS platforms (confirmed live: SmartRecruiters' current "oneclick-ui" flow, e.g.
   // careers.smartrecruiters.com/Visa) render their contact-info fields inside Web Component
   // shadow roots (<spl-form-field> etc.) with no light-DOM-slotted <input> at all -- a plain
@@ -161,6 +179,9 @@
   }
   function report(result) {
     if (!extAlive()) return;
+    // Every result carries the field-by-field record of this pass (capped -- it's a UI summary,
+    // not an archive), so the side panel can show what was actually done instead of a bare status.
+    if (!result.fillLog) result.fillLog = fillLog.slice(0, 80);
     try { chrome.runtime.sendMessage({ type: 'UNIVERSAL_FILL_RESULT', result: result }).catch(function () {}); } catch (e) {}
   }
 
@@ -677,15 +698,15 @@
   function buildStdMatchers(profile) {
     var fullName = [profile.firstName, profile.lastName].filter(Boolean).join(' ');
     return [
-      { v: profile.email,     t: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
-      { v: profile.phone,     t: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
-      { v: profile.firstName, t: function (s) { return /\b(given name|first name|firstname|fname|legal first)\b/.test(s); } },
-      { v: profile.lastName,  t: function (s) { return /\b(family name|last name|lastname|surname|lname|legal last)\b/.test(s); } },
-      { v: profile.linkedin,  t: function (s) { return /linkedin/.test(s); } },
-      { v: profile.website,   t: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
-      { v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
-      { v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
-      { v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
+      { k: 'Email',      v: profile.email,     t: function (s, el) { return el.type === 'email' || /\bemail\b/.test(s); } },
+      { k: 'Phone',      v: profile.phone,     t: function (s, el) { return el.type === 'tel' || /\b(phone|mobile|cell|telephone)\b/.test(s); } },
+      { k: 'First name', v: profile.firstName, t: function (s) { return /\b(given name|first name|firstname|fname|legal first)\b/.test(s); } },
+      { k: 'Last name',  v: profile.lastName,  t: function (s) { return /\b(family name|last name|lastname|surname|lname|legal last)\b/.test(s); } },
+      { k: 'LinkedIn',   v: profile.linkedin,  t: function (s) { return /linkedin/.test(s); } },
+      { k: 'Website',    v: profile.website,   t: function (s) { return /\b(website|portfolio|personal site)\b/.test(s); } },
+      { k: 'City',       v: profile.city,      t: function (s) { return /\b(address level2|city|town)\b/.test(s); } },
+      { k: 'State',      v: profile.state,     t: function (s) { return /\b(address level1|state|province|region)\b/.test(s); } },
+      { k: 'ZIP',        v: profile.zip,       t: function (s) { return /\b(postal code|postcode|zip)\b/.test(s); } },
       // "Full Legal Name" AND bare "Legal Name*" (Ashby: "Please enter your legal name exactly as
       // shown on your government-issued ID") are both real, common phrasings that fell through both
       // branches: "legal" breaks the contiguous \bfull name\b match, and the generic \bname\b branch
@@ -693,7 +714,7 @@
       // excluded below) already cover the ONLY case that exclusion was meant for ("Legal First Name"/
       // "Legal Last Name", owned by the firstName/lastName matchers above). Bare "Legal Name" with no
       // first/last qualifier is a whole-name field just like "Full Name" and should match here.
-      { v: fullName,          t: function (s) { return /\bfull (legal )?name\b/.test(s) || /\blegal name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle/.test(s)); } }
+      { k: 'Full name', v: fullName,          t: function (s) { return /\bfull (legal )?name\b/.test(s) || /\blegal name\b/.test(s) || (/\bname\b/.test(s) && !/first|last|given|family|user|company|file|nick|middle/.test(s)); } }
     ];
   }
   function isKnownContactField(s, el) {
@@ -883,22 +904,28 @@
       // name/label matches a real contact-field pattern (Workday's beecatcher is name="website",
       // which satisfies the website matcher below) got typed into like any other field. Live-
       // confirmed: this is a real one, not a hypothetical -- see tests/fixtures/workday.html.
-      if (looksLikeHoneypot(labelText(el) || el.getAttribute('aria-label') || '')) continue;
+      if (looksLikeHoneypot(labelText(el) || el.getAttribute('aria-label') || '')) {
+        logSkip(labelText(el) || el.name || el.id, 'looks like an anti-bot honeypot — never filled');
+        continue;
+      }
       var s = signals(el);
       if (!s) continue;
       for (var f = 0; f < STD.length; f++) {
         if (STD[f].v && STD[f].t(s, el)) {
-          // setNativeValue()+fire() (input/change) alone was confirmed live to get silently reverted
-          // on ADP Workforce Now's own framework -- tested in complete isolation, outside any of
-          // Alicia's own code, with the identical technique used successfully everywhere else in this
-          // file. The revert happens on a delay (not the same tick), consistent with the framework
-          // re-syncing its own state specifically on blur rather than on input/change alone. A real
-          // user always blurs a field before moving to the next one, so simulating that too is a
-          // faithful rather than an exotic interaction -- focus() first so the blur is meaningful.
-          try { el.focus(); } catch (e) {}
-          setNativeValue(el, STD[f].v);
-          fire(el);
-          try { el.blur(); } catch (e) {}
+          if (!previewMode()) {
+            // setNativeValue()+fire() (input/change) alone was confirmed live to get silently reverted
+            // on ADP Workforce Now's own framework -- tested in complete isolation, outside any of
+            // Alicia's own code, with the identical technique used successfully everywhere else in this
+            // file. The revert happens on a delay (not the same tick), consistent with the framework
+            // re-syncing its own state specifically on blur rather than on input/change alone. A real
+            // user always blurs a field before moving to the next one, so simulating that too is a
+            // faithful rather than an exotic interaction -- focus() first so the blur is meaningful.
+            try { el.focus(); } catch (e) {}
+            setNativeValue(el, STD[f].v);
+            fire(el);
+            try { el.blur(); } catch (e) {}
+          }
+          logFill(labelText(el) || STD[f].k, STD[f].v, 'profile');
           filled++;
           break;
         }
@@ -912,6 +939,11 @@
       return visible(p) && !p.value;
     });
     if (!pwFields.length) return 0;
+    // Preview must have zero side effects -- generating (and STORING) a site credential is one.
+    if (previewMode()) {
+      pwFields.forEach(function (pf) { logFill(labelText(pf) || pf.name || 'Password', '(would generate & save a site password)', 'password'); });
+      return pwFields.length;
+    }
     var host = location.hostname;
     var cred = siteCredentials[host];
     if (!cred) {
@@ -920,7 +952,7 @@
       storageSet({ siteCredentials: siteCredentials });
       state.generatedCredential = { hostname: host, email: cred.email, password: cred.password };
     }
-    pwFields.forEach(function (pf) { setNativeValue(pf, cred.password); fire(pf); });
+    pwFields.forEach(function (pf) { setNativeValue(pf, cred.password); fire(pf); logFill(labelText(pf) || pf.name || 'Password', '••••••••', 'password'); });
     return pwFields.length;
   }
 
@@ -938,7 +970,11 @@
         var sc = Math.max(score(op.textContent, eeo[key]), score(op.value, eeo[key]));
         if (sc > bs) { bs = sc; best = op; }
       }
-      if (best && bs >= 45) { sel.value = best.value; fire(sel); filled++; }
+      if (best && bs >= 45) {
+        if (!previewMode()) { sel.value = best.value; fire(sel); }
+        logFill(labelText(sel) || key, best.textContent, 'eeo-pref');
+        filled++;
+      }
     }
     return filled;
   }
@@ -990,7 +1026,11 @@
         if (sc > bs) { bs = sc; best = op; }
       }
     }
-    if (best && bs >= (threshold || 60)) { sel.value = best.value; fire(sel); return true; }
+    if (best && bs >= (threshold || 60)) {
+      if (!previewMode()) { sel.value = best.value; fire(sel); }
+      pickSelectOption.lastPickedText = getText(best) || best.value; // for callers' fill-log entries
+      return true;
+    }
     return false;
   }
   function stdSelectDesired(sig, profile) {
@@ -1006,7 +1046,10 @@
       var sel = selects[si];
       if (sel.disabled || !visible(sel) || selectHasRealValue(sel)) continue;
       var desired = stdSelectDesired(signals(sel), profile);
-      if (desired && desired.length && pickSelectOption(sel, desired, 65)) filled++;
+      if (desired && desired.length && pickSelectOption(sel, desired, 65)) {
+        logFill(labelText(sel) || sel.name, pickSelectOption.lastPickedText, 'profile');
+        filled++;
+      }
     }
     return filled;
   }
@@ -1063,11 +1106,12 @@
     var best = null, bs = 0;
     rs.forEach(function (x) { var sc = score(radioLabel(x), desired); if (sc > bs) { bs = sc; best = x; } });
     if (best && bs >= 45) {
-      if (!best.checked) {
+      if (!best.checked && !previewMode()) {
         best.checked = true;
         best.dispatchEvent(new Event('click', { bubbles: true }));
         best.dispatchEvent(new Event('change', { bubbles: true }));
       }
+      pickRadio.lastPickedText = radioLabel(best); // for callers' fill-log entries
       return true;
     }
     return false;
@@ -1080,7 +1124,10 @@
       if (rs.some(function (x) { return x.checked; })) return;
       var key = eeoKey(norm(groupQuestionLabel(rs)));
       if (!key || !eeo[key]) return;
-      if (pickRadio(rs, eeo[key])) filled++;
+      if (pickRadio(rs, eeo[key])) {
+        logFill(groupQuestionLabel(rs) || key, pickRadio.lastPickedText, 'eeo-pref');
+        filled++;
+      }
     });
     return filled;
   }
@@ -1422,9 +1469,12 @@
         // acceptsTxt() says the input "shouldn't" take it.
         else if (tailoredText) dt.items.add(new File([tailoredText], 'Resume.txt', { type: 'text/plain' }));
         else continue; // no tailored text and no stored original at all — leave it for the human
-        el.files = dt.files;
-        el.__aliciaResumeAttached = true;
-        el.dispatchEvent(new Event('change', { bubbles: true }));
+        if (!previewMode()) {
+          el.files = dt.files;
+          el.__aliciaResumeAttached = true;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        logFill(labelText(el) || 'Resume upload', dt.files[0] ? dt.files[0].name : 'resume', 'resume');
         attached++;
       } catch (e) {}
     }
@@ -1578,14 +1628,14 @@
     } catch (e) {}
   }
   function countAiAnsweredFields() { return document.querySelectorAll('[data-alicia-answered="1"]').length; }
-  async function applyAnswerToItem(item, answerText) {
+  // `source` ('ai' | 'learned' | undefined) is only for the fill log -- AI-sourced answers are the
+  // ones a human most needs to eyeball before submitting, so they're flagged distinctly there.
+  async function applyAnswerToItem(item, answerText, source) {
     if (!answerText) return false;
+    var ok = false;
     if (item.apply) { // adapter-provided (e.g. Workday prompt-option dropdown, combobox selectFromCombobox)
-      var applied = await item.apply(answerText);
-      if (applied) markAnswered(item);
-      return applied;
-    }
-    if (item.type === 'select') {
+      ok = await item.apply(answerText);
+    } else if (item.type === 'select') {
       var sel = item.control;
       var best = null, bs = 0;
       for (var o = 0; o < sel.options.length; o++) {
@@ -1593,19 +1643,19 @@
         var sc = Math.max(score(op.textContent, answerText), score(op.value, answerText));
         if (sc > bs) { bs = sc; best = op; }
       }
-      if (best && bs >= 45) { sel.value = best.value; fire(sel); markAnswered(item); return true; }
-      return false;
+      if (best && bs >= 45) { sel.value = best.value; fire(sel); ok = true; }
+    } else if (item.type === 'radio') {
+      ok = pickRadio(item.radios, answerText);
+    } else if (!(item.control.value && item.control.value.trim())) {
+      setNativeValue(item.control, answerText);
+      fire(item.control);
+      ok = true;
     }
-    if (item.type === 'radio') {
-      var picked = pickRadio(item.radios, answerText);
-      if (picked) markAnswered(item);
-      return picked;
+    if (ok) {
+      markAnswered(item);
+      if (source) logFill(item.label, answerText, source);
     }
-    if (item.control.value && item.control.value.trim()) return false;
-    setNativeValue(item.control, answerText);
-    fire(item.control);
-    markAnswered(item);
-    return true;
+    return ok;
   }
 
   function itemFinalValue(item) {
@@ -2508,8 +2558,9 @@
       // genuinely recognized (see below), which is the only signal that actually means "progress."
       try { removeNavPanel(); } catch (e) {}
     }
-    console.log('[Alicia][apply-debug] autofill.js run() start — url', location.href, 'hasRecognizedForm?', hasRecognizedForm());
+    console.log('[Alicia][apply-debug] autofill.js run() start — url', location.href, 'hasRecognizedForm?', hasRecognizedForm(), previewMode() ? '(PREVIEW)' : '');
     busy = true;
+    fillLog = []; // fresh field-by-field record for this pass
     var state = { generatedCredential: null };
     var result = { filled: 0, status: 'done_no_more_fields', readyButtonText: null, generatedPassword: null, aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, eeoFilled: 0, ats: 'generic' };
     var atsName = detectATS();
@@ -2523,6 +2574,26 @@
       var profile = data.profile || {};
       var eeo = data.eeoPrefs || {};
       var siteCredentials = data.siteCredentials || {};
+
+      // Preview: same matching code as a real fill (the fill functions themselves skip their
+      // mutation lines when previewMode() is on), but strictly bounded — one pass over standard
+      // fields/selects, EEO selects/radios, passwords and résumé (logged, never written/generated/
+      // attached), then report. No wizard advancing, no nav clicks, no AI/backend calls, no learned-
+      // answer writes: nothing on the real page or in storage changes.
+      if (previewMode()) {
+        var pFilled = 0;
+        pFilled += fillStdFields(profile);
+        pFilled += fillStdSelects(profile);
+        pFilled += fillEeoSelects(eeo);
+        pFilled += fillEeoRadios(eeo);
+        pFilled += fillPasswordFields(profile, siteCredentials, state);
+        pFilled += attachResume(data.resumeFile || null, '');
+        result.filled = pFilled;
+        result.status = 'preview';
+        result.fillLog = fillLog.slice(0, 80);
+        report(result);
+        return result;
+      }
       // Drop poisoned records (older builds could bank a "Select an option" placeholder as a
       // learned answer, permanently mis-answering that dropdown everywhere).
       var bank = (Array.isArray(data.customQA) ? data.customQA : []).filter(function (rec) {
@@ -2645,7 +2716,7 @@
           // not the banked record's original wording, so it's caught regardless of how the poisoned
           // record was originally phrased.
           if (learned && isSchoolAnsweringCompanyQuestion(qItem.label, learned.answer, qItem.control)) learned = null;
-          if (learned && await applyAnswerToItem(qItem, learned.answer)) {
+          if (learned && await applyAnswerToItem(qItem, learned.answer, 'learned')) {
             learned.lastUsedAt = Date.now();
             result.learnedUsed++;
             n++;
@@ -2724,7 +2795,7 @@
             // Hit the attempt cap without ever finding a recognized form -- stop retrying and
             // surface it, instead of looping silently forever.
             result.status = 'stopped_needs_input';
-            showBanner('Couldn\'t open the application automatically after several tries — please continue manually.', '#e0a800');
+            showBanner('Couldn\'t open the application automatically after several tries — please continue manually. If Alicia keeps re-trying here: the side panel\'s Stop button or closing this tab stops her — reloading the tab does not.', '#e0a800');
           } else if (cands.length >= 1) {
             // Ambiguous — several forward-looking buttons, or none clearly dominant. Ask the human
             // which one moves forward and remember it for this host.
@@ -2764,12 +2835,15 @@
                 throwIfStopped(); // the AI call above can outlast a Stop click — never apply its answers after one
                 var aiItem = pass.unanswered[ui];
                 var ans = byIndex[ui + 1];
-                if (ans && looksLikeRefusalAnswer(ans)) continue; // "No image provided."/"N/A"-style non-answer -> leave empty, ask the human instead
-                if (ans && isSchoolAnsweringCompanyQuestion(aiItem.label, ans, aiItem.control)) continue; // a fresh AI answer can still be wrong even with the prompt fix -- never type a school into a company/employer question
-                if (ans && await applyAnswerToItem(aiItem, ans)) answeredItems.push(aiItem);
+                if (ans && looksLikeRefusalAnswer(ans)) { logSkip(aiItem.label, 'AI declined to answer (no grounding in your profile/resume) — needs you'); continue; } // "No image provided."/"N/A"-style non-answer -> leave empty, ask the human instead
+                if (ans && isSchoolAnsweringCompanyQuestion(aiItem.label, ans, aiItem.control)) { logSkip(aiItem.label, 'AI answer looked wrong (school for an employer question) — needs you'); continue; } // a fresh AI answer can still be wrong even with the prompt fix -- never type a school into a company/employer question
+                if (ans && await applyAnswerToItem(aiItem, ans, 'ai')) answeredItems.push(aiItem);
               }
             }
             var needHuman = pass.unanswered.filter(function (it) { return !String(itemFinalValue(it) || '').trim(); });
+            // Surface WHICH questions still need the human, by label, on the result itself — the
+            // side panel turns these into a specific diagnostic instead of a canned status string.
+            result.unansweredLabels = needHuman.map(function (it) { return String(it.label || '').slice(0, 90); }).slice(0, 12);
 
             if (answeredItems.length || needHuman.length) {
               result.aiAnswered += answeredItems.length;
@@ -2941,6 +3015,7 @@
       if (++mutationRerunCount > MUTATION_RERUN_MAX) {
         try { aliciaMutationObserver.disconnect(); } catch (e) {}
         console.log('[Alicia][apply-debug] mutation-rerun cap (' + MUTATION_RERUN_MAX + ') reached — observer disconnected, no more automatic reruns on this document');
+        try { showBanner('Alicia stopped auto-refilling this busy page (safety cap). Tip: the side panel\'s Stop button or closing this tab always stops her — reloading the tab does not.', '#e0a800'); } catch (e) {}
         return;
       }
       lastMutationRerunAt = now;
@@ -2967,7 +3042,11 @@
         return;
       }
     });
-    aliciaMutationObserver.observe(document.body, { childList: true, subtree: true });
+    // Preview is strictly one bounded pass — never arm the rerun observer for it. (A later REAL
+    // fill on this tab re-injects the file, but the run-once guard at the top only re-invokes
+    // __aliciaAutofillRun without re-reaching this arm site, so a preview-first tab simply runs
+    // without automatic reruns until its next real navigation — acceptable for a preview tab.)
+    if (!previewMode()) aliciaMutationObserver.observe(document.body, { childList: true, subtree: true });
   } catch (e) {}
 
   window.__aliciaAutofillRun();

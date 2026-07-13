@@ -124,10 +124,43 @@ function skipAggregatorInterstitial() {
 // WEBAPP_APPLY race-recovery check below) is exactly how the AGGREGATOR_HOST_RE check went missing
 // from onHistoryStateUpdated for as long as it did -- one shared function means a future new call
 // site can't repeat that mistake.
+// Injected into an aggregator page ONLY when the click-through below verifiably failed: tells the
+// human where things stand instead of leaving a silently stalled tab.
+function showAggregatorStuckBanner() {
+  try {
+    var el = document.getElementById('alicia-apply-banner') || document.createElement('div');
+    el.id = 'alicia-apply-banner';
+    el.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;padding:10px 16px;border-radius:8px;color:#fff;font:600 13px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.3);max-width:340px;cursor:pointer;background:#e0a800;';
+    el.title = 'Click to dismiss';
+    el.onclick = function () { el.remove(); };
+    el.textContent = 'Alicia couldn’t get past this job-board page automatically — please click through to the employer’s application yourself and she’ll take it from there.';
+    (document.body || document.documentElement).appendChild(el);
+  } catch (e) {}
+}
+
+// How long the click-through gets before we check whether it actually worked: its own poll runs
+// ~12s (see skipAggregatorInterstitial), so checking at 15s is after it has fully given up.
+var AGGREGATOR_CLICKTHROUGH_CHECK_MS = 15000;
+
 function routeAggregatorOrInject(tabId, s, host, label) {
   if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
     console.log('[Alicia][apply-debug] ' + label + ': tab', tabId, 'host', host, 'matched AGGREGATOR_HOST_RE — clicking through instead of injecting autofill.js');
     chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
+    // Closed-loop confirmation, exactly ONCE per routing decision (no retry loop): if the tab is
+    // still parked on an aggregator host after the click-through's entire poll window, it verifiably
+    // failed -- surface that on the page and in the side panel instead of leaving a stalled tab the
+    // user has to notice on their own. A successful click-through navigates the tab off-host, which
+    // makes this check a silent no-op (as does the user closing the tab: tabs.get errors, no-op).
+    setTimeout(function () {
+      chrome.tabs.get(tabId, function (t) {
+        if (chrome.runtime.lastError || !t || !t.url) return;
+        var h2 = ''; try { h2 = new URL(t.url).hostname; } catch (e) { return; }
+        if (!AGGREGATOR_HOST_RE.test(h2)) return; // it worked — tab moved on to the employer
+        console.log('[Alicia][apply-debug] ' + label + ': tab', tabId, 'STILL on aggregator host', h2, 'after click-through window — reporting stuck');
+        chrome.scripting.executeScript({ target: { tabId: tabId }, func: showAggregatorStuckBanner }).catch(function () {});
+        try { chrome.runtime.sendMessage({ type: 'UNIVERSAL_FILL_RESULT', result: { filled: 0, status: 'aggregator_stuck', ats: 'generic', aiAnswered: 0, learnedUsed: 0, resumeAttached: 0, eeoFilled: 0, readyButtonText: null, generatedPassword: null } }).catch(function () {}); } catch (e) {}
+      });
+    }, AGGREGATOR_CLICKTHROUGH_CHECK_MS);
   } else {
     console.log('[Alicia][apply-debug] ' + label + ': tab', tabId, 'injecting autofill.js now (host', host, ')');
     injectAutofillWithTailoredResume(tabId, s);
@@ -305,7 +338,10 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 function clearStopFlag(tabId) {
   return chrome.scripting.executeScript({
     target: { tabId: tabId, allFrames: true },
-    func: function () { window.__aliciaStopRequested = false; },
+    // Also clear any leftover preview flag: window persists across injections on the same page, so
+    // a "Preview Fill" followed by a REAL fill on the same tab would otherwise silently run the
+    // real fill in preview mode (nothing written) — the inverse of preview's own safety promise.
+    func: function () { window.__aliciaStopRequested = false; window.__aliciaPreviewMode = false; },
   }).catch(function () {});
 }
 

@@ -160,3 +160,37 @@ test('onHistoryStateUpdated (SPA nav): aggregator host during an active explicit
   const session = api.storage.autofillSessions[String(tabId)]
   assert.strictEqual(session.routed, true)
 })
+
+// ---- v1.13.49: closed-loop confirmation for the aggregator click-through ----
+// Before this, skipAggregatorInterstitial was fire-and-forget: if its 12s click-through poll never
+// found a button that worked, the tab just sat on the aggregator page with no signal to the user.
+// routeAggregatorOrInject now checks ONCE, after the poll window, whether the tab actually left the
+// aggregator host -- still there means a stuck banner + an 'aggregator_stuck' side-panel status.
+test('aggregator click-through: tab still on the aggregator host after the poll window -> stuck banner + aggregator_stuck reported (exactly once, no retry loop)', async () => {
+  const { context, api, clock } = loadBackground()
+  api.setTab(5, { url: 'https://www.jooble.org/jdp/999', status: 'complete' })
+
+  context.routeAggregatorOrInject(5, { explicit: true }, 'www.jooble.org', 'unit-test')
+  await flushPromises()
+  clock.tick(16000) // past AGGREGATOR_CLICKTHROUGH_CHECK_MS; tab URL unchanged = click-through failed
+  await flushPromises()
+
+  const bannerCalls = api.executeScriptCalls.filter((c) => c.func === context.showAggregatorStuckBanner)
+  assert.strictEqual(bannerCalls.length, 1, `expected exactly one stuck-banner injection, got ${bannerCalls.length}`)
+  clock.tick(60000) // no second check ever fires -- one-shot by design
+  await flushPromises()
+  assert.strictEqual(api.executeScriptCalls.filter((c) => c.func === context.showAggregatorStuckBanner).length, 1)
+})
+
+test('aggregator click-through: tab left the aggregator host (click-through worked) -> no stuck banner', async () => {
+  const { context, api, clock } = loadBackground()
+  api.setTab(6, { url: 'https://www.jooble.org/jdp/1000', status: 'complete' })
+
+  context.routeAggregatorOrInject(6, { explicit: true }, 'www.jooble.org', 'unit-test')
+  await flushPromises()
+  api.setTab(6, { url: 'https://boards.greenhouse.io/acme/jobs/1', status: 'complete' }) // the click-through navigated
+  clock.tick(16000)
+  await flushPromises()
+
+  assert.strictEqual(api.executeScriptCalls.filter((c) => c.func === context.showAggregatorStuckBanner).length, 0, 'a successful click-through must not show the stuck banner')
+})

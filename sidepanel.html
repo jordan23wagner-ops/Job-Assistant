@@ -48,9 +48,13 @@
           <button id="eeo-toggle" class="btn-icon" title="Set up auto-fill for EEO questions">&#9998; Edit</button>
         </div>
         <p class="eeo-hint">Save your answers to common application questions. Alicia auto-fills them when an application opens — or tap the button below to fill the form on screen now.</p>
+        <p id="filling-as" class="eeo-hint" style="font-weight:600;"></p>
         <button id="eeo-fill-now" class="tool-btn" style="width:100%;">&#9889; Auto-Fill Open Application</button>
+        <button id="eeo-preview-now" class="tool-btn" style="width:100%;margin-top:6px;" title="Runs the same matching as a real fill but writes NOTHING into the page — shows what would be filled below">&#128065; Preview Fill (writes nothing)</button>
         <button id="autofill-stop" class="tool-btn" style="width:100%;margin-top:6px;" title="Immediately halts an in-progress autofill run (not just between queue items) and ends all autofill sessions">&#9209; Stop Autofill Now</button>
+        <p class="eeo-hint" style="margin-top:4px;">If a page keeps re-filling itself: Stop (above) or closing that tab always halts Alicia &mdash; reloading the tab does not, because she re-attaches on every page load while a fill session is active.</p>
         <span id="eeo-fill-status" class="resume-status"></span>
+        <div id="fill-summary" class="fill-summary hidden"></div>
         <label class="search-check" style="margin-top:8px;"><input type="checkbox" id="autofill-toggle"> Auto-fill LinkedIn Easy Apply as it opens (fills fields &amp; advances &mdash; never submits). Off by default &mdash; LinkedIn's terms prohibit automated application tools; turning this on is at your own risk to your LinkedIn account.</label>
         <div id="eeo-form" class="eeo-form hidden">
           <div class="eeo-group">

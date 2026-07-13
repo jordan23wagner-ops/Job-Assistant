@@ -1444,3 +1444,26 @@ header h1 {
 }
 .saved-resume-btn:hover { border-color: var(--accent); color: var(--text-strong); }
 .saved-resume-del:hover { border-color: #c0564b; color: #e08a80; }
+
+/* ---------- field-by-field fill summary (real fills AND preview mode) ---------- */
+.fill-summary {
+  margin-top: 8px;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.fill-summary.hidden { display: none; }
+.fill-summary h3 { margin: 0 0 6px; font-size: 12px; color: var(--text-dim, #999); font-weight: 600; }
+.fill-summary-row { display: flex; gap: 6px; align-items: baseline; padding: 2px 0; }
+.fill-summary-row .fs-label { flex: 1 1 auto; color: var(--text-dim, #aaa); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fill-summary-row .fs-value { flex: 0 1 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-badge { flex: 0 0 auto; font-size: 10px; font-weight: 700; border-radius: 4px; padding: 0 5px; line-height: 16px; }
+.fs-badge.ai { background: #7c4dbd; color: #fff; }           /* AI answers: double-check these */
+.fs-badge.profile, .fs-badge.resume, .fs-badge.password { background: #2e6b46; color: #fff; }
+.fs-badge.learned { background: #2d5f8a; color: #fff; }
+.fs-badge.eeo-pref { background: #8a6d2d; color: #fff; }
+.fs-badge.skip { background: #6b3a35; color: #fff; }
+.fs-badge.preview { background: #555; color: #fff; }

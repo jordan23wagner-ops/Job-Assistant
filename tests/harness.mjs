@@ -23,11 +23,14 @@ const AUTOFILL_SRC = readFileSync(path.join(__dirname, '..', 'autofill.js'), 'ut
 // result, with { result, document, window, sentMessages } for assertions. Rejects if no result
 // arrives within `timeoutMs` (e.g. a fixture that needs an AI-answered custom question and
 // would otherwise hang on the network call this harness deliberately doesn't allow through).
-export async function runAutofill(html, { url, storage = {}, timeoutMs = 4000 } = {}) {
+export async function runAutofill(html, { url, storage = {}, timeoutMs = 4000, preview = false } = {}) {
   const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
     url, pretendToBeVisual: true, runScripts: 'dangerously',
   })
   const window = dom.window
+  // Mirrors the side panel's "Preview Fill" button, which sets this window flag via executeScript
+  // BEFORE injecting autofill.js — the engine then runs its real matching but skips every mutation.
+  if (preview) window.__aliciaPreviewMode = true
 
   const sentMessages = []
   let resolveResult, rejectResult

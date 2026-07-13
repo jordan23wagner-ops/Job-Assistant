@@ -249,3 +249,44 @@ test('aggregator host (jooble.org): refuses to run -- reports aggregator_page, f
   assert.strictEqual(document.getElementById('lead-first-name').value, '')
   assert.strictEqual(document.getElementById('lead-phone').value, '')
 })
+
+// ---- v1.13.49: fill log + preview mode ----
+// The fill log is what the side panel's field-by-field summary renders from; preview mode is the
+// side panel's "Preview Fill" button — identical matching code, zero mutations (each fill function
+// gates its own mutation lines on previewMode()). Both are tested against the REAL engine here.
+test('fill log: a real greenhouse fill reports every filled field with label/value/source, and the workday honeypot skip is logged', async () => {
+  const gh = await runAutofill(fixture('greenhouse.html'), {
+    url: 'https://job-boards.greenhouse.io/cloudflare/jobs/7958059',
+    storage: { profile: TEST_PROFILE },
+  })
+  assert.ok(Array.isArray(gh.result.fillLog) && gh.result.fillLog.length >= 5, `expected a fill log with >=5 entries, got ${JSON.stringify(gh.result.fillLog && gh.result.fillLog.length)}`)
+  const emailEntry = gh.result.fillLog.find((e) => e.value === TEST_PROFILE.email)
+  assert.ok(emailEntry, 'the email fill must appear in the log with its value')
+  assert.strictEqual(emailEntry.source, 'profile')
+  assert.strictEqual(emailEntry.applied, true)
+
+  const wd = await runAutofill(fixture('workday.html'), {
+    url: 'https://axiomspace.wd5.myworkdayjobs.com/en-US/external_career_site/job/Houston/apply/applyManually',
+    storage: { profile: TEST_PROFILE },
+  })
+  const honeypotSkip = (wd.result.fillLog || []).find((e) => e.skipped && /honeypot/i.test(e.reason || ''))
+  assert.ok(honeypotSkip, 'the honeypot skip decision must be visible in the fill log, not silent')
+})
+
+test('preview mode: same matching as a real fill, but every field is left untouched and the log says applied:false', async () => {
+  const { result, document } = await runAutofill(fixture('greenhouse.html'), {
+    url: 'https://job-boards.greenhouse.io/cloudflare/jobs/7958059',
+    storage: { profile: TEST_PROFILE },
+    preview: true,
+  })
+  assert.strictEqual(result.status, 'preview')
+  assert.ok(result.filled >= 4, `preview should still MATCH the same fields a real fill would, got ${result.filled}`)
+  // The whole point: nothing actually written.
+  assert.strictEqual(document.getElementById('first_name').value, '')
+  assert.strictEqual(document.getElementById('email').value, '')
+  assert.strictEqual(document.getElementById('phone').value, '')
+  const applied = (result.fillLog || []).filter((e) => !e.skipped && e.applied !== false)
+  assert.strictEqual(applied.length, 0, 'no log entry may claim applied:true in preview mode')
+  const wouldFill = (result.fillLog || []).filter((e) => e.applied === false)
+  assert.ok(wouldFill.length >= 4, 'the would-fill entries must still be reported so the user sees what a real run would do')
+})
