@@ -1,0 +1,15 @@
+<!--
+  Trimmed fixture modeling a Workday tenant configured to require SSO before the applyManually
+  page shows any fillable fields at all -- confirmed live on NVIDIA's careers site (see
+  isWorkdaySignInWall / wdBlockingWall in autofill.js). Unlike the normal workday.html
+  create-account fixture (which has real email/password/verifyPassword inputs), this page has NO
+  form fields whatsoever -- only "Sign in with <provider>" buttons. Alicia must never click one of
+  these or attempt to sign in/register on the employer's behalf; the fix here is detection +
+  a banner only.
+-->
+<div class="css-authWall">
+  <h1>Sign In</h1>
+  <p>This organization requires you to sign in to apply.</p>
+  <button type="button" data-automation-id="signInWithGoogle">Sign in with Google</button>
+  <button type="button" data-automation-id="signInWithEmail">Sign in with email</button>
+</div>
