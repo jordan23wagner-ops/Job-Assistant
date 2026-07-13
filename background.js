@@ -118,6 +118,22 @@ function skipAggregatorInterstitial() {
   } catch (e) {}
 }
 
+// Single shared decision used by every place that's about to act on a tab's explicit-session host:
+// aggregator/lead-gen domain -> click through, never fill; anything else -> inject autofill.js.
+// Duplicated inline in three places before this existed (onUpdated, onHistoryStateUpdated, and the
+// WEBAPP_APPLY race-recovery check below) is exactly how the AGGREGATOR_HOST_RE check went missing
+// from onHistoryStateUpdated for as long as it did -- one shared function means a future new call
+// site can't repeat that mistake.
+function routeAggregatorOrInject(tabId, s, host, label) {
+  if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
+    console.log('[Alicia][apply-debug] ' + label + ': tab', tabId, 'host', host, 'matched AGGREGATOR_HOST_RE — clicking through instead of injecting autofill.js');
+    chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
+  } else {
+    console.log('[Alicia][apply-debug] ' + label + ': tab', tabId, 'injecting autofill.js now (host', host, ')');
+    injectAutofillWithTailoredResume(tabId, s);
+  }
+}
+
 // Cap how many page navigations an explicit (web-app) apply session may follow. Explicit sessions
 // deliberately bypass the same-site/known-ATS scoping (redirect chains land anywhere), but without
 // a bound the engine would follow that TAB to unrelated sites for the full 20-minute TTL.
@@ -212,14 +228,10 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
       return;
     }
     setTimeout(function () {
-      if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
-        // On an aggregator landing page: click through to the employer application instead of filling.
-        console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'host', host, 'matched AGGREGATOR_HOST_RE — clicking through instead of injecting autofill.js');
-        chrome.scripting.executeScript({ target: { tabId: tabId }, func: skipAggregatorInterstitial }).catch(function () {});
-      } else {
-        console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'injecting autofill.js now (host', host, ', navs', s.navs, ')');
-        injectAutofillWithTailoredResume(tabId, s);
-      }
+      s.routed = true;
+      sessions[String(tabId)] = s;
+      chrome.storage.local.set({ autofillSessions: sessions });
+      routeAggregatorOrInject(tabId, s, host, 'onUpdated');
     }, 800);
   });
 });
@@ -375,13 +387,13 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
     // Without this check, autofill.js got re-injected on those funnel steps regardless of host,
     // filling real name/email/phone into a job-board's own lead-gen form instead of recognizing it
     // as an aggregator page to click through -- confirmed live on jooble.org and lensa.com.
-    if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
-      console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 'host', host, 'matched AGGREGATOR_HOST_RE on SPA nav — clicking through instead of re-injecting autofill.js');
-      chrome.scripting.executeScript({ target: { tabId: details.tabId }, func: skipAggregatorInterstitial }).catch(function () {});
-      return;
-    }
-    console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 're-injecting autofill.js for SPA nav');
-    setTimeout(function () { injectAutofillWithTailoredResume(details.tabId, s); }, 500); // let the SPA render the new view first
+    setTimeout(function () {
+      s.routed = true;
+      var sessions = data.autofillSessions || {};
+      sessions[String(details.tabId)] = s;
+      chrome.storage.local.set({ autofillSessions: sessions });
+      routeAggregatorOrInject(details.tabId, s, host, 'onHistoryStateUpdated (SPA nav)');
+    }, 500); // let the SPA render the new view first
   });
 });
 
@@ -527,7 +539,28 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
             tailoredResume: j.resumeText || '', origUrl: normUrl(j.url), navs: 0,
           };
           console.log('[Alicia][apply-debug] WEBAPP_APPLY: bound explicit session directly to new tab', tab.id, 'for', j.url);
-          chrome.storage.local.set({ autofillSessions: sessions });
+          chrome.storage.local.set({ autofillSessions: sessions }, function () {
+            // chrome.tabs.onUpdated's 'complete' event for this SAME tab can fire before this async
+            // session write lands (tab creation + storage round-trip race) -- confirmed live: an
+            // aggregator page's popup just sat there un-clicked because onUpdated ran, found no
+            // session yet, and gave up, with no later page-load event to retry on. If the tab has
+            // ALREADY reached 'complete' by the time this write finishes, onUpdated already ran and
+            // did nothing for it -- recover by routing it here, once, guarded by s.routed so a WON
+            // race (onUpdated already handled it normally) never double-injects.
+            chrome.tabs.get(tab.id, function (t) {
+              if (chrome.runtime.lastError || !t || t.status !== 'complete') return;
+              chrome.storage.local.get('autofillSessions', function (data2) {
+                var sessions2 = data2.autofillSessions || {};
+                var s2 = sessions2[String(tab.id)];
+                if (!s2 || s2.routed) return; // already handled normally -- avoid double-injecting
+                s2.routed = true;
+                sessions2[String(tab.id)] = s2;
+                chrome.storage.local.set({ autofillSessions: sessions2 });
+                console.log('[Alicia][apply-debug] WEBAPP_APPLY: tab', tab.id, 'was already complete when its session landed — race-recovery routing now');
+                routeAggregatorOrInject(tab.id, s2, host, 'WEBAPP_APPLY race-recovery');
+              });
+            });
+          });
         });
       }
       if (remaining === 0) { try { sendResponse({ ok: true, count: opened.length, requested: requested, tabIds: opened }); } catch (e) {} }

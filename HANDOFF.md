@@ -1,5 +1,32 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-12 (newest #4) — v1.13.46: closed a race that let the aggregator click-through silently never run
+
+Follow-up to the v1.13.45 fix (same session, found immediately while live-verifying it). The data
+leak was closed, but reproducing the same Jooble flow showed the aggregator auto-skip ALSO wasn't
+reliably engaging — the "Skip for now" popup just sat there un-clicked for 12+ seconds, confirmed via
+a manual `.click()` in the console working instantly (so the button and the dismiss-pattern match
+from v1.13.45 were both fine).
+
+Root cause: `WEBAPP_APPLY` creates the tab via `chrome.tabs.create` and writes its session record in
+a separate, later async step (a storage round-trip). `chrome.tabs.onUpdated`'s 'complete' event for
+that SAME tab can fire before that write lands -- it finds no session yet, falls through the
+`pendingApplyUrls` fallback (never populated for this path), logs "nothing will be injected", and
+gives up. By the time the session actually exists, there's no second page-load event left to retry
+on unless the site happens to do a client-side (SPA) route change afterward.
+
+Fixed: after the session write completes, check the tab's current status; if it already reached
+'complete' (race lost), run the same aggregator-or-inject routing decision right there. Guarded by a
+new `s.routed` flag so a WON race (onUpdated already handled it normally) never double-routes/
+double-injects. Extracted the aggregator-host decision (previously duplicated across onUpdated,
+onHistoryStateUpdated, and now this race-recovery path) into one shared `routeAggregatorOrInject()`
+function -- the exact kind of duplication that let the v1.13.45 bug happen in the first place, now
+harder to repeat by accident at a future fourth call site.
+
+`node --check` + full 8/8 fixture suite pass (unaffected, this is still background.js tab-lifecycle
+logic outside the harness's scope). Bumped to v1.13.46 -- needs a reload, and a live re-test to
+confirm the aggregator click-through now reliably engages on the first page load.
+
 ## Update 2026-07-12 (newest #3) — v1.13.45: real lead-gen data leak — autofill.js filled name/email/phone into Jooble's and Lensa's own signup funnels, not the employer application
 
 Found live during actual real-world use (not testing): after landing on a Jooble posting via the

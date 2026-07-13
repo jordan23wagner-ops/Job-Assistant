@@ -1,7 +1,7 @@
 {
   "name": "alicia-ai-job-assistant",
   "private": true,
-  "version": "1.13.45",
+  "version": "1.13.46",
   "description": "Test infrastructure for the Alicia AI Chrome extension. The extension itself has no build step and ships as plain files.",
   "type": "module",
   "scripts": {
