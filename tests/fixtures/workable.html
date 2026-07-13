@@ -1,0 +1,63 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL Workable application form (captured live from
+  apply.workable.com/seeq/j/1378093793/apply/, structure only — no real applicant data). A sixth
+  distinct field-matching shape: id AND name are both present and identical to Greenhouse's style
+  (id="firstname" name="firstname"), but the visible label is NEITHER an id-based `label[for]`
+  (Greenhouse's pattern) NOR a semantic id-only field (Ashby's) — it's `aria-labelledby="firstname_
+  label"` pointing at a plain `<span id="firstname_label"><strong>First name</strong></span>`, not
+  a `<label>` element at all. labelText()'s `label[for=id]` lookup would find nothing here; only its
+  aria-labelledby fallback (or, for these particular fields, signals()'s own id/name match) resolves
+  it. The phone field carries no `id` at all — matched purely by name="phone" + type="tel" — and is
+  wrapped in a real third-party "intl-tel-input" country-code-picker widget (trimmed here to its
+  essential input; the country-flag/dropdown chrome around it is presentational and irrelevant to
+  field-matching). data-ui="firstname"/"lastname"/etc. are real, Workable-specific attributes
+  (confirmed captured, not invented) used as detectATS()'s DOM-marker fallback alongside the
+  workable.com hostname.
+
+  Deliberately excludes this posting's real custom questions: a required "3 References (1 Direct
+  Manager)" textarea and two required radio-button question groups — none has a standard-field
+  matcher, and their labels are "wordy" enough (>=4 tokens) to pass discoverCustomQuestions()'s gate,
+  so including them would route to the AI-answered custom-question path this harness intentionally
+  blocks (see tests/fixtures/ashby.html for the same exclusion reasoning). "Headline"/"Summary"/
+  "Cover letter" are included since their one-two-word labels are NOT wordy enough to be discovered
+  as questions (confirmed against the real gate: `lbl.split(' ').length >= 4 || /\?/ | keywords`) —
+  they're realistic, harmless filler, left unfilled, same role as Greenhouse's cover_letter field.
+-->
+<div class="styles--1tBNa" data-ui="apply-form-wrapper">
+  <form>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="firstname_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">First name</strong></span>
+      <div class="styles--3qHIU"><input aria-required="true" id="firstname" maxlength="127" data-ui="firstname" name="firstname" aria-labelledby="firstname_label" required="" type="text" class="styles--2e9Cp" dir="auto" value=""></div>
+    </div>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="lastname_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">Last name</strong></span>
+      <div class="styles--3qHIU"><input aria-required="true" id="lastname" maxlength="127" data-ui="lastname" name="lastname" aria-labelledby="lastname_label" required="" type="text" class="styles--2e9Cp" dir="auto" value=""></div>
+    </div>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="email_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">Email</strong></span>
+      <div class="styles--3qHIU"><input aria-required="true" id="email" maxlength="255" data-ui="email" name="email" aria-labelledby="email_label" required="" type="email" class="styles--2e9Cp" dir="auto" value=""></div>
+    </div>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="headline_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">Headline</strong></span>
+      <div class="styles--3qHIU"><input aria-required="false" id="headline" maxlength="255" data-ui="headline" name="headline" aria-labelledby="headline_label" type="text" class="styles--2e9Cp" dir="auto" value=""></div>
+    </div>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="phone_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">Phone</strong></span>
+      <div class="iti iti--allow-dropdown iti--separate-dial-code iti--show-flags">
+        <input aria-required="true" name="phone" required="" type="tel" autocomplete="off" class="styles--2e9Cp" value="">
+      </div>
+    </div>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="summary_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">Summary</strong></span>
+      <div class="styles--3qHIU"><textarea aria-required="false" id="summary" data-ui="summary" name="summary" aria-labelledby="summary_label" class="styles--2e9Cp styles--3fKJu styles--3sKVw" rows="5" dir="auto"></textarea></div>
+    </div>
+    <div class="styles--1L916 styles--ZvWLm" data-role="dropzone">
+      <input aria-required="true" id="input_files_input_BQeAi0gMroLtWFHE" data-ui="resume" required="" type="file">
+    </div>
+    <div data-role="illustrated-input" class="styles--1tBNa">
+      <span id="cover_letter_label" class="styles--QTMDv styles--2TdGW"><strong class="styles--2kqW6">Cover letter</strong></span>
+      <div class="styles--3qHIU"><textarea aria-required="false" id="cover_letter" maxlength="200000" data-ui="cover_letter" name="cover_letter" aria-labelledby="cover_letter_label" class="styles--2e9Cp styles--3fKJu styles--3sKVw" rows="5" dir="auto"></textarea></div>
+    </div>
+    <button type="submit" data-ui="submit-application">Submit application</button>
+  </form>
+</div>

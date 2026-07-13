@@ -6,14 +6,18 @@
 // meaning a future edit to the shared field-matching code could silently break a platform that
 // used to work, with nothing catching it until the next live test happens to hit it.
 //
-// Coverage today is intentionally NOT exhaustive across every supported ATS (Ashby,
-// SmartRecruiters, Workable, Recruitee, iCIMS, Taleo have no fixture yet) -- three platforms with
-// genuinely different field-matching shapes (Greenhouse: separate first/last name, id-based;
-// Lever: one combined name field, name-attribute-based; Workday: data-automation-id-based, no
-// semantic id/name at all) are enough to prove the harness works against the unmodified
-// production code. Add a fixture the same way for the next platform: capture real (sanitized, no
-// personal data) field structure from a live posting, hand-compose a trimmed HTML fixture, write
-// assertions.
+// Coverage today is seven platforms with genuinely different field-matching shapes (Greenhouse:
+// separate first/last name, id-based; Lever: one combined name field, name-attribute-based;
+// Workday: data-automation-id-based, no semantic id/name at all; Ashby: semantic system-field ids
+// but random-UUID custom questions; SmartRecruiters: every field inside its own shadow root;
+// Workable: id+name present but the visible label is a plain <span> via aria-labelledby, not a
+// <label for>; Recruitee: one combined name field again, but via a perfectly ordinary
+// <label for> this time) -- proof the harness works against the unmodified production code, not
+// exhaustive coverage of every supported ATS. iCIMS, Taleo, and BrassRing (all account-gated
+// before reaching a real application form) have no fixture yet -- see HANDOFF.md for the
+// feasibility investigation. Add a fixture the same way for the next platform: capture real
+// (sanitized, no personal data) field structure from a live posting, hand-compose a trimmed HTML
+// fixture, write assertions.
 import { test } from 'node:test'
 import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
@@ -162,4 +166,38 @@ test('smartrecruiters: fills fields that live inside real shadow roots (queryAll
   // The light-DOM file input is unrelated to the shadow-DOM fix -- included as a control to prove
   // the fixture/harness aren't somehow forcing every field to match regardless of location.
   assert.strictEqual(document.getElementById('file-input').value, '')
+})
+
+test('workable: detects the ats and fills firstname/lastname/email/phone -- the visible label is a plain <span> via aria-labelledby, not a <label for> element', async () => {
+  const { result, document } = await runAutofill(fixture('workable.html'), {
+    url: 'https://apply.workable.com/seeq/j/1378093793/apply/',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.ats, 'workable')
+  assert.strictEqual(document.getElementById('firstname').value, TEST_PROFILE.firstName)
+  assert.strictEqual(document.getElementById('lastname').value, TEST_PROFILE.lastName)
+  assert.strictEqual(document.getElementById('email').value, TEST_PROFILE.email)
+  // No id on the real phone field at all -- matched purely by name="phone" + type="tel".
+  assert.strictEqual(document.querySelector('input[name="phone"]').value, TEST_PROFILE.phone)
+
+  // "Headline"/"Summary"/"Cover letter" labels are too short to pass discoverCustomQuestions()'s
+  // wordy gate, so they're never routed to the AI-answered path -- confirm they're just left blank
+  // rather than silently mismatched onto some other profile field.
+  assert.strictEqual(document.getElementById('headline').value, '')
+  assert.strictEqual(document.getElementById('summary').value, '')
+  assert.strictEqual(document.getElementById('cover_letter').value, '')
+})
+
+test('recruitee: detects the ats and fills a single combined Full name field via a real label[for] (candidate.name), plus email/phone (dot-namespaced field names)', async () => {
+  const { result, document } = await runAutofill(fixture('recruitee.html'), {
+    url: 'https://freeday.recruitee.com/o/software-engineer-3',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.ats, 'recruitee')
+  const fullName = `${TEST_PROFILE.firstName} ${TEST_PROFILE.lastName}`
+  assert.strictEqual(document.getElementById('input-candidate.name-3').value, fullName)
+  assert.strictEqual(document.getElementById('input-candidate.email-4').value, TEST_PROFILE.email)
+  assert.strictEqual(document.getElementById('input-candidate.phone-5').value, TEST_PROFILE.phone)
 })
