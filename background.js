@@ -92,7 +92,7 @@ function skipAggregatorInterstitial() {
     if (/adzuna\./i.test(location.hostname) && /\/authenticate|after_login=|interstitial=/i.test(location.href) &&
         /log ?in|sign ?in|password/i.test((document.body && document.body.innerText) || '')) return;
     var PROCEED = [/take me to the job/i, /apply (for|on) /i, /apply for (this )?job/i, /^apply now$/i, /^apply$/i, /continue to (apply|application|job)/i, /view (the )?job/i, /go to (the )?job/i];
-    var DISMISS = [/^no,?\s*thanks/i, /^skip$/i, /not now/i, /maybe later/i, /^close$/i, /^dismiss$/i, /×/];
+    var DISMISS = [/^no,?\s*thanks/i, /^skip( for now)?$/i, /not now/i, /maybe later/i, /^close$/i, /^dismiss$/i, /×/];
     var clickByText = function (patterns) {
       var els = document.querySelectorAll('a,button,[role="button"],input[type="submit"]');
       for (var i = 0; i < els.length; i++) {
@@ -366,6 +366,20 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(function (details) {
   chrome.storage.local.get('autofillSessions', function (data) {
     var s = (data.autofillSessions || {})[String(details.tabId)];
     if (!s || Date.now() - (s.startedAt || 0) > ATS_SESSION_TTL_MS) { console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 'has no live session — skipping re-inject'); return; }
+    var host = '';
+    try { host = new URL(details.url).hostname; } catch (e) {}
+    // Mirror the SAME aggregator-host check the full-page-load listener (onUpdated, above) makes
+    // before injecting -- this listener fires on client-side (SPA) route changes within the SAME
+    // page, which is exactly how aggregator/lead-gen funnels advance between steps (a "leave your
+    // email" popup appearing, a "how can we contact you" step rendering) without a real navigation.
+    // Without this check, autofill.js got re-injected on those funnel steps regardless of host,
+    // filling real name/email/phone into a job-board's own lead-gen form instead of recognizing it
+    // as an aggregator page to click through -- confirmed live on jooble.org and lensa.com.
+    if (s.explicit && AGGREGATOR_HOST_RE.test(host)) {
+      console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 'host', host, 'matched AGGREGATOR_HOST_RE on SPA nav — clicking through instead of re-injecting autofill.js');
+      chrome.scripting.executeScript({ target: { tabId: details.tabId }, func: skipAggregatorInterstitial }).catch(function () {});
+      return;
+    }
     console.log('[Alicia][apply-debug] onHistoryStateUpdated: tab', details.tabId, 're-injecting autofill.js for SPA nav');
     setTimeout(function () { injectAutofillWithTailoredResume(details.tabId, s); }, 500); // let the SPA render the new view first
   });

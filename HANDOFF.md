@@ -1,5 +1,38 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-12 (newest #3) — v1.13.45: real lead-gen data leak — autofill.js filled name/email/phone into Jooble's and Lensa's own signup funnels, not the employer application
+
+Found live during actual real-world use (not testing): after landing on a Jooble posting via the
+web app's "Apply to selected" flow, a "Don't miss new jobs — leave your email" popup appeared and
+autofill.js filled it. Clicking through led to Lensa (a job-lead reseller), where autofill.js also
+filled a "Great! Now let us know how to contact you" step with real first/last name and attempted a
+phone number — none of this is the actual employer's application.
+
+Root cause: `chrome.tabs.onUpdated` (the full-page-load listener) already checks `AGGREGATOR_HOST_RE`
+before deciding whether to inject `autofill.js` or click through via `skipAggregatorInterstitial` —
+but `chrome.webNavigation.onHistoryStateUpdated` (the listener that re-injects on client-side SPA
+route changes within the SAME page) had NO such check at all. Both Jooble's popup appearing and
+Lensa's multi-step funnel advancing are client-side route changes, not full page loads, so every
+step re-triggered `onHistoryStateUpdated`, which blindly re-injected `autofill.js` regardless of
+host — filling real personal data into aggregator/lead-gen forms instead of recognizing them as
+pages to click through past.
+
+Fixed: `onHistoryStateUpdated` now runs the identical `AGGREGATOR_HOST_RE` check the full-page-load
+listener already had, routing to `skipAggregatorInterstitial` instead of injecting on a match.
+Also broadened `skipAggregatorInterstitial`'s dismiss-button matcher from exact `"Skip"` to
+`"Skip"`/`"Skip for now"` — the exact button text on the Jooble popup that triggered this, which its
+old pattern couldn't match, so even where the aggregator check applies the auto-dismiss can still
+silently fail to click through on some funnels; the "click PROCEED to the real posting" side of that
+same function may need further pattern tuning as more real-world funnels are hit.
+
+No fixture test added — this is background.js session/injection routing across a real client-side
+navigation event sequence (page load → popup appears via pushState → funnel advances via pushState
+again), not something the current jsdom fixture harness (which only loads and evals autofill.js in
+isolation, not background.js's tab-lifecycle listeners) can exercise. Verified via `node --check` +
+the full 8/8 fixture suite (unaffected, background.js is out of that suite's scope) — needs a live
+re-test on the same Jooble/Lensa flow to fully confirm. Bumped to v1.13.45 — extension needs a
+reload.
+
 ## Update 2026-07-12 (newest #2) — v1.13.44: two apply-start click-throughs were dead code, found by live end-to-end testing of all 5 covered platforms
 
 Ran the first fully automated live verification of the WEBAPP_APPLY/bridge.js path (a scratch
