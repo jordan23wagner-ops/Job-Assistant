@@ -2056,6 +2056,18 @@
     if (/(^|\.)icims\.com$/.test(h) || document.querySelector('.iCIMS_MainWrapper, #icims_content, form#quickForm, [id^="icims_"]')) return 'icims';
     if (/(^|\.)ashbyhq\.com$/.test(h) || document.querySelector('[class*="ashby"], [id*="ashby"]')) return 'ashby';
     if (/(^|\.)smartrecruiters\.com$/.test(h) || document.querySelector('#smartr, .sr-application, [class*="smartrecruiters"]')) return 'smartrecruiters';
+    // Real bug found while building tests/fixtures/workable.html and recruitee.html (see HANDOFF.md):
+    // both platforms were already listed as supported in README.md and already recognized by
+    // background.js's ATS_HOST_RE (so autofill.js DOES get injected on them), but detectATS() itself
+    // had no entry for either -- every real posting on either platform silently fell through to
+    // 'generic'. Standard contact fields still filled correctly either way (fillStdFields doesn't
+    // branch on the detected ats), but result.ats was wrong, and the mislabel would have silently
+    // blocked any future Workable/Recruitee-specific adapter (typeahead handling, stop/advance
+    // overrides, etc.) from ever engaging. data-ui="firstname"/"lastname" (Workable) and
+    // id="offer-application-form" (Recruitee) are real attributes captured live from each fixture's
+    // source posting, not invented -- see each fixture's own header comment.
+    if (/(^|\.)workable\.com$/.test(h) || document.querySelector('[data-ui="firstname"], [data-ui="lastname"]')) return 'workable';
+    if (/(^|\.)recruitee\.com$/.test(h) || document.getElementById('offer-application-form')) return 'recruitee';
     // Taleo/BrassRing are hostname-only: their account-gate auto-create is riskier than a location
     // typeahead, so we don't want a weak DOM signature misfiring on an unrelated page.
     if (/(^|\.)taleo\.net$/.test(h)) return 'taleo';

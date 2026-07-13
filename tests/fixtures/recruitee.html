@@ -1,0 +1,49 @@
+<!--
+  Trimmed, hand-composed fixture modeled on a REAL Recruitee application form (captured live from
+  freeday.recruitee.com/o/software-engineer-3, structure only — no real applicant data). Recruitee
+  embeds the application form directly at the bottom of the job-description page (no separate
+  /apply URL) with a real, semantic `id="offer-application-form"` on the <form> itself — the
+  detectATS() DOM-marker fallback used here alongside the recruitee.com hostname.
+
+  A seventh distinct field-matching shape, and closer to Lever/Ashby than Greenhouse: ONE combined
+  "Full name" field (name="candidate.name", not separate first/last), but unlike either of those,
+  it has a real, standard `<label for="input-candidate.name-3">Full name<span>*</span></label>` —
+  so this exercises the plain, ordinary `label[for]` path (labelText()'s very first lookup),
+  nothing exotic needed to resolve it. Field ids/names are all dot-namespaced
+  (`candidate.email`, `candidate.phone`, `candidate.cv`) rather than Greenhouse/Workable's flat
+  identifiers — norm() strips the dot to a space same as any other punctuation, so
+  "candidate.email" still contains the bare word "email" and matches normally, but it's a real,
+  previously-uncaptured naming convention worth having on file. Phone is wrapped in a real
+  react-phone-number-input widget (country-code picker button ahead of the actual <input
+  type="tel">) — trimmed here to the essential input plus its immediate wrapper, same trimming
+  rationale as Workable's intl-tel-input wrapper in workable.html.
+
+  Deliberately excludes this posting's real "How did you hear about us?" checkbox set (real
+  options captured: "Indeed", "YouTube") — each checkbox has its own individual `label[for]`
+  rather than one shared group label of >=8 characters, so it doesn't reach
+  checkboxGroups()'s discovery path either; including it would just be inert noise for this
+  fixture's purpose (proving the real field-matching shape), not a case this suite is testing.
+-->
+<form id="offer-application-form" class="sc-1mqz0cx-5 bRCACm">
+  <div>
+    <label for="input-candidate.name-3" class="sc-1glzqyg-0 gtxHE">Full name<span aria-hidden="true">&nbsp;<span title="This field is required and can not be left empty." class="sc-1glzqyg-1 gIAVEJ">*</span></span></label>
+    <input type="text" id="input-candidate.name-3" name="candidate.name" required aria-invalid="false" maxlength="255" placeholder="Full name" autocomplete="name" class="sc-15kbb6z-0 hrDYLq" value="">
+  </div>
+  <div>
+    <label for="input-candidate.email-4" class="sc-1glzqyg-0 gtxHE">Email address<span aria-hidden="true">&nbsp;<span class="sc-1glzqyg-1 gIAVEJ">*</span></span></label>
+    <input type="email" id="input-candidate.email-4" name="candidate.email" required aria-invalid="false" placeholder="Your email address" autocomplete="email" class="sc-15kbb6z-0 hrDYLq" value="">
+  </div>
+  <div class="sc-1hkfaog-8 dofeHQ PhoneInput">
+    <label for="input-candidate.phone-5" class="sc-1glzqyg-0 gtxHE">Phone number<span aria-hidden="true">&nbsp;<span class="sc-1glzqyg-1 gIAVEJ">*</span></span></label>
+    <input type="tel" id="input-candidate.phone-5" name="candidate.phone" required aria-invalid="false" placeholder="Your phone number" autocomplete="tel" class="sc-15kbb6z-0 sc-1hkfaog-0 bSaXmX PhoneInputInput" value="">
+  </div>
+  <div>
+    <label for="input-candidate.cv-9">CV or resume<span aria-hidden="true">&nbsp;<span class="sc-1glzqyg-1 gIAVEJ">*</span></span></label>
+    <input type="file" id="input-candidate.cv-9" name="candidate.cv" required autocomplete="off">
+  </div>
+  <div>
+    <label for="input-candidate.coverLetterFile-15">Cover letter</label>
+    <input type="file" id="input-candidate.coverLetterFile-15" name="candidate.coverLetterFile" autocomplete="off">
+  </div>
+  <button type="submit">Submit application</button>
+</form>
