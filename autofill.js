@@ -1595,12 +1595,34 @@
     return 'Page title: ' + (document.title || '') + (h1 ? ('\nHeading: ' + getText(h1)) : '');
   }
 
-  async function callCustomAnswerBackend(items, resumeText) {
+  // Observed, reproducible bug (live, Lever): a custom question "Are you based in Melbourne?" —
+  // Melbourne being the JOB POSTING's own location, echoed straight into pageJobContext()'s page
+  // title/heading — got answered "Yes, I'm currently based in Melbourne" for a candidate whose real,
+  // saved profile says Austin, TX. Nothing in the resume said Melbourne either; the model had no
+  // explicit "candidate's actual location" fact to ground on, and with only the job's own city as
+  // the sole location-shaped text in front of it, the "give the most conservative reasonable answer"
+  // fallback below apparently read that as if it described the candidate. The fabricated answer read
+  // as a real, confident sentence — not a refusal — so looksLikeRefusalAnswer's safety net (below)
+  // never had anything to catch, and it was typed into the field for real; the run only happened to
+  // stop for human review afterward because of OTHER still-blank required fields on the same page,
+  // not because anything recognized THIS answer as wrong. A fabricated location/work-authorization/
+  // visa answer is consequential enough (can misrepresent legal work eligibility, or get an
+  // application rejected) that it needs its own grounding rule, not just a generic fallback.
+  function candidateProfileFacts(profile, eeo) {
+    var p = profile || {}, e = eeo || {};
+    var loc = [p.city, p.state, p.country].filter(Boolean).join(', ');
+    return [
+      'Current location on file: ' + (loc || '(not provided)'),
+      'Authorized to work in the US on file: ' + (e['eeo-authorization'] || '(not provided)'),
+      'Will require visa sponsorship on file: ' + (e['eeo-sponsorship'] || '(not provided)')
+    ].join('\n');
+  }
+  async function callCustomAnswerBackend(items, resumeText, profile, eeo) {
     // Observed, reproducible bug: a "Current Company"/"Current Employer"-style question got answered
     // with the candidate's own COMMUNITY COLLEGE — not invented, genuinely in the resume, but pulled
     // from the EDUCATION section and treated as if it were a job. The model wasn't told to keep those
     // two resume sections separate when a question is specifically about employment.
-    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. EXCEPTION: if a question explicitly states a target length (e.g. "200-400 words", "in detail", "tell us a story about a time when...") or is marked [substantive answer...] below, write a genuinely substantive answer close to that length using real resume details — do not default to 1-2 sentences for those, and never pad with filler just to hit a count. If a question explicitly asks to answer "yes or no" (or is clearly a yes/no question even if phrased as free text), answer with just "Yes." or "No." plus at most one short supporting clause — not a paragraph. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, NEVER a school — this rule has NO exception, even if the resume has no obvious current employer. If no work-experience entry clearly answers a company/employer question, answer exactly "N/A" for that question rather than substituting an education entry as a fallback — do not treat "give the most conservative reasonable answer" (below) as permission to use a school here. A question specifically about education must be answered ONLY from an education entry. If you cannot reasonably answer a DIFFERENT (non-company/employer) question from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
+    var sys = 'You are Alicia, helping fill out a real job application truthfully using the candidate\'s resume. You are given the job page context, a Candidate Profile Facts block, the resume, and a numbered list of application questions. Some are multiple choice — you MUST answer with one of the exact option strings given, verbatim. Free-text questions get a short, professional answer (1-2 sentences, or just a number for a numeric question) based only on facts in the resume — never invent employers, dates, skills, or credentials that are not in it. EXCEPTION: if a question explicitly states a target length (e.g. "200-400 words", "in detail", "tell us a story about a time when...") or is marked [substantive answer...] below, write a genuinely substantive answer close to that length using real resume details — do not default to 1-2 sentences for those, and never pad with filler just to hit a count. If a question explicitly asks to answer "yes or no" (or is clearly a yes/no question even if phrased as free text), answer with just "Yes." or "No." plus at most one short supporting clause — not a paragraph. Keep the resume\'s EDUCATION section (schools, colleges, universities) and WORK EXPERIENCE section (employers, job titles) strictly separate: a question about "current/most recent company", "current employer", "who do you work for", etc. must be answered ONLY from a work-experience entry, NEVER a school — this rule has NO exception, even if the resume has no obvious current employer. If no work-experience entry clearly answers a company/employer question, answer exactly "N/A" for that question rather than substituting an education entry as a fallback — do not treat "give the most conservative reasonable answer" (below) as permission to use a school here. A question specifically about education must be answered ONLY from an education entry. Any question about the candidate\'s current location/city/where they live or are based, residency, work authorization, or visa/sponsorship requirements MUST be answered ONLY from the Candidate Profile Facts block — NEVER from the resume, and NEVER from the job posting\'s own location, company address, or any other page-context text (a job listing\'s city is NOT the candidate\'s city, and must never be echoed back as if it were). If the Candidate Profile Facts do not explicitly and directly answer that specific question, respond exactly "N/A" for it instead of guessing, including for a multiple-choice version of the question (if no given option matches the Profile Facts, still answer "N/A" rather than picking one) — this rule has NO exception and overrides the "most conservative reasonable answer" fallback below for this category. If you cannot reasonably answer a DIFFERENT (non-company/employer, non-location/authorization/visa) question from the resume, give the most conservative reasonable answer. Respond ONLY with a strict JSON array, no markdown fences, no prose: [{"i":<question number, 1-based>,"answer":"<answer text>"}]';
     // A textarea whose own label states a target length ("great answers are often 200-400 words")
     // was still getting a 1-2 sentence answer — the blanket [short paragraph] hint below was
     // overriding what the question itself asked for. Detect an explicit word-count request and hint
@@ -1617,7 +1639,7 @@
               : '[short answer]');
       return (i + 1) + '. ' + typeLabel + ' ' + it.label;
     }).join('\n');
-    var user = pageJobContext() + '\n\nCandidate Resume:\n' + (resumeText || '').slice(0, 6000) + '\n\nQuestions:\n' + qLines;
+    var user = pageJobContext() + '\n\nCandidate Profile Facts (location/work-authorization/sponsorship — ground truth for that category ONLY; see system instructions):\n' + candidateProfileFacts(profile, eeo) + '\n\nCandidate Resume:\n' + (resumeText || '').slice(0, 6000) + '\n\nQuestions:\n' + qLines;
     var text = await fetchBackendText(sys, user);
     return parseAnswersJson(text);
   }
@@ -2669,7 +2691,7 @@
             var answeredItems = [];
             if (resumeText) {
               var answers = [];
-              try { answers = await callCustomAnswerBackend(pass.unanswered, resumeText); } catch (e) {}
+              try { answers = await callCustomAnswerBackend(pass.unanswered, resumeText, profile, eeo); } catch (e) {}
               var byIndex = {};
               answers.forEach(function (a) { if (a && typeof a.i === 'number') byIndex[a.i] = a.answer; });
               for (var ui = 0; ui < pass.unanswered.length; ui++) {
