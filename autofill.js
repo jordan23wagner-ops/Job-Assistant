@@ -2083,6 +2083,12 @@
   //  3. After Create Account, Workday shows an email-verification wall (a real page nav, so
   //     autofill.js is re-injected and re-runs) — wdBlockingWall detects it and stops with a
   //     clear banner, since only the human can click the link in the inbox.
+  //  4. Some tenants (confirmed live: NVIDIA's careers site) render the applyManually page with
+  //     ONLY "Sign in with Google" / "Sign in with email" buttons — no email/password/create-
+  //     account fields at all. Unlike Create Account, this is NOT auto-clicked: signing in or
+  //     registering a real account on a real employer's Workday tenant is a consequential action
+  //     only the human should take. wdBlockingWall detects this sign-in-only state the same way
+  //     it detects the verify-email wall and stops with a banner — detection + guidance only.
   // The search input that appears inside an open SEARCHABLE Workday dropdown popup.
   function wdSearchBox() {
     return document.querySelector('input[data-automation-id="searchBox"], [data-automation-id="promptSearchBox"] input, [role="listbox"] input[type="text"], [data-automation-widget="wd-popup"] input[type="text"]');
@@ -2159,9 +2165,29 @@
     return filled;
   }
 
+  // True when the page is Workday's sign-in-only wall: some tenants (confirmed live: NVIDIA)
+  // render applyManually with ONLY "Sign in with Google" / "Sign in with email" -style buttons —
+  // no email/password/create-account fields, no fillable fields at all. hasRecognizedForm() is
+  // the same "is there anything here to fill" test the rest of autofill.js already uses to decide
+  // when a page is done/empty, so reusing it here keeps this check consistent with that meaning
+  // rather than inventing a second definition of "no fields." Requiring the more specific "sign in
+  // with" phrasing (over a bare "Sign In") avoids false-triggering on an ordinary persistent
+  // header "Sign In" link that many Workday career sites show on every page, including plain job
+  // listings that were never a wall to begin with.
+  function isWorkdaySignInWall() {
+    if (!document.body) return false;
+    if (hasRecognizedForm()) return false;
+    return !!findButton([/sign in with/]);
+  }
+
   function wdBlockingWall() {
-    if (!isVerifyEmailWall()) return null;
-    return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
+    if (isVerifyEmailWall()) {
+      return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
+    }
+    if (isWorkdaySignInWall()) {
+      return 'This employer requires signing in or creating an account to continue — please do that yourself, then reload this page and Alicia will pick up from there.';
+    }
+    return null;
   }
 
   // Open a Workday prompt-option dropdown to learn what it is, then close it. Workday only renders

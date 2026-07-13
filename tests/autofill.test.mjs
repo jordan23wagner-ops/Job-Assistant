@@ -124,6 +124,33 @@ test('workday: does NOT fill the honeypot field, even though profile.website is 
   assert.strictEqual(honeypot.value, '', 'the honeypot field must never be filled, or Workday can flag the whole application as bot-submitted')
 })
 
+test('workday: sign-in-only wall (no fillable fields, only "Sign in with ..." buttons) stops with a guidance banner, never signs in or creates an account', async () => {
+  const { result, document } = await runAutofill(fixture('workday-signin-wall.html'), {
+    url: 'https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/apply/applyManually',
+    storage: { profile: TEST_PROFILE },
+  })
+
+  assert.strictEqual(result.ats, 'workday')
+  assert.strictEqual(result.status, 'stopped_needs_input')
+  assert.strictEqual(result.filled, 0, 'no fields exist on this wall, so nothing should be reported as filled')
+
+  const banner = document.getElementById('alicia-apply-banner')
+  assert.ok(banner, 'a guidance banner should be shown')
+  assert.match(banner.textContent, /sign(ing)? in|creating an account/i)
+  assert.match(banner.textContent, /yourself/i, 'banner should make clear this is a manual, human step')
+
+  // Never attempt to click through: the sign-in buttons must still be present, unclicked.
+  const googleBtn = document.querySelector('[data-automation-id="signInWithGoogle"]')
+  const emailBtn = document.querySelector('[data-automation-id="signInWithEmail"]')
+  let googleClicked = false, emailClicked = false
+  googleBtn.addEventListener('click', () => { googleClicked = true })
+  emailBtn.addEventListener('click', () => { emailClicked = true })
+  assert.strictEqual(googleClicked, false)
+  assert.strictEqual(emailClicked, false)
+  assert.strictEqual(googleBtn.isConnected, true)
+  assert.strictEqual(emailBtn.isConnected, true)
+})
+
 test('ashby: fills a single combined Name field (semantic id, unlike Lever\'s name-attribute match) plus email and LinkedIn (label-text-only, random id)', async () => {
   const { result, document } = await runAutofill(fixture('ashby.html'), {
     url: 'https://jobs.ashbyhq.com/linear/d3bc1ced-3ce4-4086-a050-555055dbb1ff/application',
