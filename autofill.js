@@ -885,6 +885,70 @@
     return pw.join('');
   }
 
+  // Robust value set for React (and similar) controlled inputs that REVERT a plain
+  // setNativeValue()+input. Confirmed live on Anthropic's job-boards.greenhouse.io form: the standard
+  // contact <input>s (first/last/email/phone/linkedin) were matched and set correctly (the fill log
+  // proved it), but ended up empty on the page, while the custom-question <textarea>s stuck. Root
+  // cause: autofill.js runs in the extension's ISOLATED content-script world, so its native value
+  // setter can't update React's per-input `_valueTracker` (a page-world expando invisible across
+  // worlds) -- React's next render then sees "no real change" and reverts the input to its own
+  // (empty) state. execCommand('insertText') instead drives the browser's OWN native text-editing
+  // pipeline, which updates the value tracker natively and fires a genuine input event React accepts
+  // as a real edit -- so the value survives the re-render. Falls back to setNativeValue for inputs
+  // execCommand can't edit (rare). Best-effort; never throws.
+  function forceTypeValue(el, value) {
+    try {
+      el.focus();
+      if (el.setSelectionRange) { try { el.setSelectionRange(0, String(el.value || '').length); } catch (e) {} }
+      var ok = false;
+      try { ok = document.execCommand && document.execCommand('insertText', false, value); } catch (e) {}
+      if (!ok || el.value !== value) {
+        // execCommand is a no-op on some input types / unfocusable fields -- fall back to the plain
+        // path (which is all this file did before, and which works on every OTHER platform).
+        setNativeValue(el, value);
+        fire(el);
+      } else {
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      try { el.blur(); } catch (e) {}
+    } catch (e) { try { setNativeValue(el, value); fire(el); } catch (e2) {} }
+  }
+
+  // A React-controlled form can silently revert a just-filled standard contact field to empty on its
+  // next render (see forceTypeValue). That revert is a VALUE-property change, not a DOM childList
+  // mutation, so the MutationObserver-driven rerun never sees it and never re-fills -- the field just
+  // stays blank. This pass re-checks the standard contact fields a beat after the initial fill and,
+  // for any that came back empty despite matching a real profile value, re-applies it via
+  // forceTypeValue (which survives the re-render). Idempotent and safe on every other platform: a
+  // field that DID hold its value is non-empty here and skipped, so this only ever fixes a real
+  // revert, never re-touches a working fill.
+  function repairRevertedStdFields(profile) {
+    if (previewMode()) return 0;
+    var STD = buildStdMatchers(profile);
+    var repaired = 0;
+    var inputs = queryAllDeep('input, textarea');
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      var ty = (el.type || '').toLowerCase();
+      if (['hidden', 'password', 'file', 'checkbox', 'radio', 'submit', 'button', 'image', 'reset', 'search'].indexOf(ty) >= 0) continue;
+      if (el.disabled || el.readOnly) continue;
+      if (el.value && el.value.trim()) continue; // still holds its value -> nothing reverted
+      if (!visible(el)) continue;
+      if (isComboControl(el)) continue;
+      if (looksLikeHoneypot(labelText(el) || el.getAttribute('aria-label') || '')) continue;
+      var s = signals(el);
+      if (!s) continue;
+      for (var f = 0; f < STD.length; f++) {
+        if (STD[f].v && STD[f].t(s, el)) {
+          forceTypeValue(el, STD[f].v);
+          if (el.value === STD[f].v) { logFill(labelText(el) || STD[f].k, STD[f].v, 'profile'); repaired++; }
+          break;
+        }
+      }
+    }
+    return repaired;
+  }
+
   // ---------- fill passes ----------
   function fillStdFields(profile) {
     var STD = buildStdMatchers(profile);
@@ -2807,6 +2871,12 @@
           }
         }
         if (result.learnedUsed) storageSet({ customQA: bank });
+        // Self-heal any standard contact field a React-controlled form reverted after we filled it
+        // (see repairRevertedStdFields). This runs at the END of the pass -- after the multi-second
+        // AI custom-question work above -- so a revert that happens on the form's next render has
+        // already occurred by now and this catches it in the same pass. No-op on every platform that
+        // didn't revert (the fields are still non-empty and get skipped).
+        n += repairRevertedStdFields(profile);
         return { filled: n, unanswered: unanswered };
       }
       // Narrow corrective step for watchForLateRegression: re-run just the two fixups that undo a
@@ -2816,6 +2886,10 @@
       async function lateRegressionRefill() {
         clearSuspiciousSchoolInCompanyFields();
         if (adapter.fillTypeaheads) { try { await adapter.fillTypeaheads(profile); } catch (e) {} }
+        // Also re-assert any standard contact field a controlled form reverted between passes -- the
+        // revert is a value-property change the MutationObserver never sees, so without this the
+        // field would stay blank until the next full pass (if any). Idempotent, same as above.
+        repairRevertedStdFields(profile);
       }
 
       // On a job *details* page (e.g. hirebridge details.aspx, a Greenhouse/Lever posting) there's

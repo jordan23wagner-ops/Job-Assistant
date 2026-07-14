@@ -1,5 +1,41 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-14 (newest) — v1.13.53: fix React-controlled contact fields getting reverted (Anthropic/Greenhouse), caught by an end-to-end apply test
+
+Found while live-testing the new Wagner-GPT company-lookup feature end-to-end: looked up Anthropic
+→ Apply on a job → Alicia opened the real job-boards.greenhouse.io application and reported
+`filled: 15` with every contact field in its fill log (First Name "Jordan", Last Name "Wagner",
+email, phone, LinkedIn — all source:profile). But inspecting the actual page, the standard contact
+`<input>`s were EMPTY, while the custom-question `<textarea>`s (Why Anthropic, start date, work
+address = "Cypress, TX") were correctly filled and persisted.
+
+**Root cause (diagnosed live, three wrong hypotheses ruled out first):** it is NOT the value-set
+technique (a plain setNativeValue+input persists fine when run in the page's own main world), NOT a
+hydration-timing race (filling the instant the field appears still persists), and NOT the résumé
+attach re-rendering the form. The real cause: **autofill.js runs in the extension's ISOLATED
+content-script world**, so its native `value` setter can't update React's per-input `_valueTracker`
+(a page-world expando invisible across worlds). React's next render sees "no real change" and
+reverts the input to its own empty state. The custom-question textareas stick only because React
+doesn't re-render that section again after they're filled. Critically, the revert is a
+value-PROPERTY change, not a DOM childList mutation, so the existing MutationObserver rerun never
+sees it and never re-fills — the field just stays blank.
+
+**Fix:** new `forceTypeValue()` sets the value via `document.execCommand('insertText', …)`, which
+drives the browser's OWN native text-editing pipeline — that updates the value tracker natively and
+fires a genuine input event React accepts as a real edit, so the value survives the re-render (falls
+back to setNativeValue for inputs execCommand can't edit). New `repairRevertedStdFields()` re-checks
+the standard contact fields at the end of each fill pass (after the multi-second AI custom-question
+work, by which point any revert has already happened) and re-applies via forceTypeValue ONLY to
+fields that came back empty despite matching a real profile value. Wired into the end of
+`fillOnePass` and into `lateRegressionRefill`. Idempotent and safe on every other platform: a field
+that held its value is non-empty and skipped, so this only ever repairs a real revert — it never
+re-touches a working fill (Workday/SmartRecruiters/Lever/etc. are unaffected).
+
+**Verification:** `node --check` clean, 29/29 fixture+vm tests pass (no regression). BUT the jsdom
+fixtures can't reproduce a React revert (no React state to do the reverting), so this specifically
+needs LIVE re-verification on the real Anthropic Greenhouse form — pending a reload. Bumped to
+v1.13.53.
+
 ## Update 2026-07-13 (newest #3) — v1.13.52: Workday now recognizes a known/existing account instead of always driving toward Create Account
 
 Reported directly: "for accounts that have been created already, the tool doesn't seem to know
