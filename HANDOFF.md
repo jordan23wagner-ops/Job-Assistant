@@ -1,5 +1,42 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-13 (newest) — v1.13.50: the brand-new closed-loop check (v1.13.49) immediately caught a real bug in the click-through it was watching
+
+Within minutes of v1.13.49 shipping, its new `aggregator_stuck` banner fired for real on a live
+Jooble posting — working exactly as designed, telling the user honestly that the click-through
+failed instead of leaving a silent stalled tab. Investigated why it failed rather than stopping at
+"the new feature worked."
+
+**Root cause, `skipAggregatorInterstitial` (background.js):** the real posting's "Apply" link has
+`target="_blank"`. `clickByText` called `.click()` on it — a synthetic click has `isTrusted:
+false`, so Chrome's popup blocker correctly blocked the new-tab open every time, and because the
+click never resolved anything (the CURRENT tab, which the closed-loop check upstream watches for a
+host change, never navigated), the 1-per-second poll kept re-clicking it for the full ~12s window —
+a burst of blocked-popup notifications for zero progress, visible to the user as "this reloaded
+rapidly a few times before stopping." A second, related bug: `clickByText(DISMISS);
+clickByText(PROCEED);` ran BOTH unconditionally every poll cycle, so even a cycle where "Skip for
+now" was successfully clicked also went on to click the `target="_blank"` Apply link sitting
+alongside it in the DOM.
+
+**Fixed:** a `target="_blank"` PROCEED match now sets `location.href` directly (same intended
+outcome — reach the real application — with no new-tab/popup involved at all, and a real
+navigation naturally ends the script the same way an ordinary same-tab link already did). PROCEED
+is now only attempted in a cycle where DISMISS did NOT already fire.
+
+**Verification:** `node --check` clean. New focused test file `tests/skipAggregatorInterstitial.test.mjs`
+(a third harness style — this function is self-contained and only ever runs inside a live page via
+`chrome.scripting.executeScript`, not in background.js's own service-worker context, so neither the
+existing jsdom autofill harness nor the vm background harness could reach its actual click logic).
+Extracts the real function from background.js via brace-counting (not a regex — the body has its
+own nested braces), loads it in jsdom with the same `offsetParent` workaround the other harness
+uses, and spies on `location.href` assignment via lexical shadowing (jsdom's real `Location.href`
+accessor is non-configurable, so `Object.defineProperty` can't intercept it directly — wrapping the
+extracted source in a closure with its own `location` parameter lets the function's bare `location`
+references resolve to a spy object instead, without touching jsdom's actual Location machinery).
+3 new tests: target="_blank" navigates via href not click; a same-cycle DISMISS success skips
+PROCEED entirely; an ordinary same-tab link still uses a real click unaffected. 25/25 total passing.
+Live re-verification pending a reload.
+
 ## Update 2026-07-13 (latest) — v1.13.49: UX pass — fill transparency, preview mode, stuck-state guidance, identity visibility, canary tests, aggregator closed-loop
 
 A goal-directed pass over the seven UX gaps called out in the post-v1.13.48 harsh regrade. All in

@@ -93,6 +93,16 @@ function skipAggregatorInterstitial() {
         /log ?in|sign ?in|password/i.test((document.body && document.body.innerText) || '')) return;
     var PROCEED = [/take me to the job/i, /apply (for|on) /i, /apply for (this )?job/i, /^apply now$/i, /^apply$/i, /continue to (apply|application|job)/i, /view (the )?job/i, /go to (the )?job/i];
     var DISMISS = [/^no,?\s*thanks/i, /^skip( for now)?$/i, /not now/i, /maybe later/i, /^close$/i, /^dismiss$/i, /×/];
+    // Confirmed live (Jooble, real posting): its "Apply" link is target="_blank" -- .click()-ing it
+    // doesn't navigate THIS tab (defeating the whole assumption below: "page nav ends this when it
+    // works"/the closed-loop host check upstream), and a synthetic click has isTrusted=false, so
+    // Chrome's popup blocker correctly blocks the new-tab open it tries to make. Worse: because the
+    // click never resolves anything, the poll below kept re-clicking it every ~1s for up to 12
+    // tries -- a burst of blocked-popup attempts the user could see, for zero actual progress.
+    // Real fix: for a target="_blank" match, navigate THIS tab to its href directly instead of
+    // clicking -- same effect intended (reach the real application), no new-tab/popup involved at
+    // all, and a real navigation naturally ends this script (same as "page nav ends this" already
+    // relied on for ordinary same-tab links).
     var clickByText = function (patterns) {
       var els = document.querySelectorAll('a,button,[role="button"],input[type="submit"]');
       for (var i = 0; i < els.length; i++) {
@@ -101,7 +111,12 @@ function skipAggregatorInterstitial() {
         var t = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
         if (!t || t.length > 60) continue;
         for (var r = 0; r < patterns.length; r++) {
-          if (patterns[r].test(t)) { try { el.click(); return true; } catch (e) {} }
+          if (!patterns[r].test(t)) continue;
+          try {
+            if (el.tagName === 'A' && el.target === '_blank' && el.href) { location.href = el.href; return true; }
+            el.click();
+            return true;
+          } catch (e) {}
         }
       }
       return false;
@@ -109,10 +124,14 @@ function skipAggregatorInterstitial() {
     var tries = 0;
     (function attempt() {
       tries++;
-      // Dismiss any email/interstitial modal FIRST (the "Apply" button is often behind it and a
-      // no-op while it's open), THEN click through to the employer application on the next tick.
-      clickByText(DISMISS);
-      clickByText(PROCEED);
+      // Dismiss any email/interstitial modal first, THEN try to proceed -- but only in the SAME
+      // cycle a dismiss did NOT fire. Doing both unconditionally every cycle (as this used to)
+      // meant a proceed-pattern match (e.g. an "Apply" link that stays in the DOM alongside the
+      // popup) got clicked on every single poll regardless of whether the dismiss already
+      // succeeded -- for a target="_blank" match specifically, that's a repeated blocked-popup
+      // attempt once a second for the entire poll window, for no benefit.
+      var dismissed = clickByText(DISMISS);
+      if (!dismissed) clickByText(PROCEED);
       if (tries < 12) setTimeout(attempt, 1000); // poll ~12s; page nav ends this when it works
     })();
   } catch (e) {}
