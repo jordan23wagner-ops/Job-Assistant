@@ -1,0 +1,23 @@
+<!--
+  Minimal fixture for tests/framework-revert.test.mjs. Structurally modeled on the proven
+  greenhouse.html fixture (id-based label, aria-label duplicated onto the input, a submit
+  button so the wizard loop ends after one pass) with a password field added — the fixture
+  itself doesn't need to be React or any real framework; the framework-controlled *behavior*
+  is simulated by the test around these two fields (see attachControlledInputSim in the test
+  file), while the actual DOM mutation still goes through the REAL autofill.js code (forceTypeValue
+  for first_name via fillStdFields, plain setNativeValue+fire for the password field via
+  fillPasswordFields — see autofill.js line ~1016, which has no forceTypeValue fallback at all).
+-->
+<form>
+  <div class="field-wrapper">
+    <label id="first_name-label" for="first_name">First Name<span aria-hidden="true">*</span></label>
+    <input id="first_name" aria-label="First Name" type="text" autocomplete="given-name" aria-required="true" value="">
+  </div>
+  <div class="field-wrapper">
+    <label id="create_password-label" for="create_password">Create a password<span aria-hidden="true">*</span></label>
+    <input id="create_password" type="password" aria-required="true" value="">
+  </div>
+  <div class="application--submit">
+    <button type="submit" id="submit_app">Submit Application</button>
+  </div>
+</form>
