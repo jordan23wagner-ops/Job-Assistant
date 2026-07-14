@@ -1,5 +1,50 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-13 (newest #3) — v1.13.52: Workday now recognizes a known/existing account instead of always driving toward Create Account
+
+Reported directly: "for accounts that have been created already, the tool doesn't seem to know
+that so it tries to create a new account." Confirmed live: Workday's Create Account page renders
+IDENTICALLY whether the email is already registered or not (it only finds out server-side, on
+submit) — but a real, stable "Sign In" toggle already sits right on that same page
+(`data-automation-id="signInLink"` inline, `data-automation-id="utilityButtonSignIn"` in the
+persistent header — both confirmed live on a real axiomspace.wd5.myworkdayjobs.com apply page via
+read-only DOM inspection, no data entered, no sign-in attempted).
+
+**Fixed:** Alicia already holds the one piece of information Workday's own client-side UI doesn't
+show up front — a stored, previously-used credential (`siteCredentials[hostname]`) for this exact
+host means an account almost certainly already exists here. New Workday adapter hooks:
+- `wdMaybeSwitchToSignIn` — when on the create-account view AND a stored credential exists for
+  this host, proactively clicks the real Sign In toggle (a view switch only, nothing submitted).
+- `wdMaybeSubmitKnownSignIn` — once the (now-visible) sign-in form's password field is actually
+  filled with the exact stored password (proof of a known account, not a guess), auto-submits —
+  a wizard-advance step, same reasoning already applied to Create Account's own submit, never the
+  final application submit.
+- `isWorkdaySignInFailed` (wired into `wdBlockingWall`) — if the known-credential sign-in fails
+  (stale/wrong stored password), stops with a clear banner asking the human to sign in or reset
+  their password themselves, rather than retrying or falling back to Create Account (which would
+  likely just fail again for an email that's genuinely already registered).
+
+**A real bug in this fix was caught by its own test before shipping:** the first version located
+the sign-in submit button via a sitewide text search (`findButton([/^sign in$/i])`) — but Workday's
+persistent header ALSO has a "Sign In" button with the identical text, and the search matched that
+one instead (harmlessly re-toggling the view forever, never actually submitting). Fixed by scoping
+the search to the password field's own `<form>` instead of a sitewide match — safer in general,
+not just correct for this case.
+
+**Also fixed a related test-harness gap** (`tests/harness.mjs`): the shared `offsetParent` patch
+only checked an element's OWN hidden state, not its ancestors — a real browser collapses layout
+for every descendant of a hidden container, so a fixture simulating a SPA that hides (not removes)
+an old view, like this one, needs its children to read as invisible too. Now walks the ancestor
+chain; benefits any future fixture with a similar hidden-container pattern, not just this one.
+
+New fixture `tests/fixtures/workday-known-account-signin.html` (real captured `signInLink`/
+`utilityButtonSignIn` automation-ids; a tiny fixture-side script stands in for Workday's own view-
+toggle framework — autofill.js itself is loaded unmodified, same as every other fixture). Two new
+tests: known-credential sign-in fills the SAME stored password (never freshly generated) and
+auto-submits; a failed sign-in attempt stops for human input instead of retrying. 29/29 total
+passing. `node --check` clean. Live re-verification pending a reload — deliberately not attempted
+in this session without your explicit go-ahead (this touches Workday's real sign-in flow).
+
 ## Update 2026-07-13 (newest #2) — v1.13.51: unbounded chrome.tabs.onUpdated re-injection loop, found live within minutes of reloading v1.13.50
 
 Reported live, immediately after reloading v1.13.50: the extension's own service-worker console

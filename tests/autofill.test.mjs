@@ -290,3 +290,46 @@ test('preview mode: same matching as a real fill, but every field is left untouc
   const wouldFill = (result.fillLog || []).filter((e) => e.applied === false)
   assert.ok(wouldFill.length >= 4, 'the would-fill entries must still be reported so the user sees what a real run would do')
 })
+
+// ---- v1.13.52: known-account sign-in (Workday) ----
+// Reported live: for a Workday tenant Alicia already created an account on, she didn't know that
+// and kept driving toward Create Account again. Workday's create-account page looks identical
+// whether the email is already registered or not, but it already has a real "Sign In" toggle
+// (data-automation-id="signInLink"/"utilityButtonSignIn") -- wdMaybeSwitchToSignIn uses it
+// proactively when a stored credential for this host already exists, instead of blindly
+// submitting Create Account. See tests/fixtures/workday-known-account-signin.html for how the
+// view-toggle is simulated (a tiny fixture-side script standing in for Workday's own framework).
+test('workday: a stored credential for this host switches Create Account to Sign In, fills it with the SAME stored password, and auto-submits', async () => {
+  const storedPassword = 'Str0ngSt0red!Passw0rd'
+  const { result, document, window } = await runAutofill(fixture('workday-known-account-signin.html'), {
+    url: 'https://axiomspace.wd5.myworkdayjobs.com/en-US/external_career_site/job/Houston/apply/applyManually',
+    storage: {
+      profile: TEST_PROFILE,
+      siteCredentials: { 'axiomspace.wd5.myworkdayjobs.com': { email: TEST_PROFILE.email, password: storedPassword, createdAt: 1700000000000 } },
+    },
+  })
+
+  assert.strictEqual(result.ats, 'workday')
+  // Switched views: the create-account fields are now hidden and untouched.
+  assert.strictEqual(document.getElementById('input-4').value, '', 'the OLD create-account email field must be left alone once we switched away from it')
+  assert.strictEqual(document.getElementById('input-5').value, '', 'the OLD create-account password field must be left alone once we switched away from it')
+  // Sign-in view got filled with the SAME stored password -- never a freshly generated one.
+  assert.strictEqual(document.getElementById('input-2').value, TEST_PROFILE.email)
+  assert.strictEqual(document.getElementById('input-3').value, storedPassword)
+  // And actually auto-submitted -- a wizard-advance step, same as Create Account's own submit.
+  assert.strictEqual(window.__testSignInSubmitClicked, true, 'the sign-in form should have been auto-submitted once filled with a known-good stored credential')
+})
+
+test('workday: known-account sign-in failure (wrong/stale stored password) stops for human input instead of retrying', async () => {
+  const html = readFileSync(path.join(__dirname, 'fixtures', 'workday-known-account-signin.html'), 'utf8')
+    .replace('<button type="submit" data-automation-id="signInSubmitButton">Sign In</button>',
+      '<div role="alert">The user name or password you entered is incorrect. Please try again.</div><button type="submit" data-automation-id="signInSubmitButton">Sign In</button>')
+  const { result } = await runAutofill(html, {
+    url: 'https://axiomspace.wd5.myworkdayjobs.com/en-US/external_career_site/job/Houston/apply/applyManually',
+    storage: {
+      profile: TEST_PROFILE,
+      siteCredentials: { 'axiomspace.wd5.myworkdayjobs.com': { email: TEST_PROFILE.email, password: 'some-stale-password', createdAt: 1700000000000 } },
+    },
+  })
+  assert.strictEqual(result.status, 'stopped_needs_input')
+})

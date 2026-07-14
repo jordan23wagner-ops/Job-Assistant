@@ -2292,12 +2292,80 @@
     return !!findButton([/sign in with/]);
   }
 
-  function wdBlockingWall() {
+  // Reported live: for a Workday tenant Alicia already created an account on before, she doesn't
+  // know that and keeps driving toward Create Account again -- Workday's create-account page looks
+  // IDENTICAL whether the email is already registered or not (it only finds out server-side, on
+  // submit), so blindly filling+submitting it either fails validation or, worse, re-submits a
+  // create-account attempt for an email that already has one. Alicia already has the one piece of
+  // information Workday's client-side UI doesn't show up front: a stored, previously-used
+  // credential for this exact host means an account almost certainly already exists here. Workday's
+  // create-account page already has a real "Sign In" toggle sitting right on it
+  // (data-automation-id="signInLink"/"utilityButtonSignIn") -- use that proactively instead of
+  // waiting for a server error to scrape out of arbitrary page text.
+  function wdHasStoredCredential(siteCredentials) {
+    return !!(siteCredentials && siteCredentials[location.hostname]);
+  }
+  function wdOnCreateAccountPage() {
+    // Visibility, not mere existence: a SPA toggling views by hiding rather than removing the old
+    // one (confirmed live: this is exactly how Workday's own Create Account <-> Sign In switch
+    // behaves) would otherwise leave this permanently "true" even after switching to Sign In,
+    // since the create-account elements are still IN the DOM, just hidden.
+    var el = document.querySelector('[data-automation-id="createAccountSubmitButton"], [data-automation-id="createAccountCheckbox"]');
+    return !!el && visible(el);
+  }
+  // Step 1 (per pass, idempotent): switch off Create Account to Sign In. Purely a view toggle --
+  // nothing is submitted, no data leaves the page. No-ops once the create-account fields are gone
+  // (we're already on the sign-in view, or somewhere else entirely).
+  function wdMaybeSwitchToSignIn(siteCredentials) {
+    if (!wdOnCreateAccountPage() || !wdHasStoredCredential(siteCredentials)) return false;
+    var toggle = document.querySelector('[data-automation-id="signInLink"]') || document.querySelector('[data-automation-id="utilityButtonSignIn"]');
+    if (!toggle || !visible(toggle)) return false;
+    fireClick(toggle);
+    return true;
+  }
+  // Step 2 (called after fillPasswordFields has run this pass): once the sign-in view's password
+  // field is actually FILLED with the stored credential's exact value -- proof this is a resume-
+  // known-account attempt, not a guess -- auto-click its Sign In submit. A wizard-advance step
+  // exactly like Create Account's own submit already is, not a final application submit. Gated on
+  // the filled VALUE matching (not just "a password field exists"), so this can never fire from an
+  // unrelated "Sign In" button elsewhere on the site (Workday's persistent header link, say) --
+  // nothing there ever gets a password field filled with our stored value in the first place.
+  function wdMaybeSubmitKnownSignIn(siteCredentials) {
+    var cred = siteCredentials && siteCredentials[location.hostname];
+    if (!cred || wdOnCreateAccountPage()) return false;
+    var pwFields = queryAllDeep('input[type="password"]').filter(visible);
+    if (pwFields.length !== 1 || pwFields[0].value !== cred.password) return false;
+    // Scope the submit search to the password field's OWN form -- confirmed live that a sitewide
+    // text search for "Sign In" is NOT safe: Workday's persistent header also has a "Sign In"
+    // button (data-automation-id="utilityButtonSignIn") with the identical text, and a generic
+    // findButton([/^sign in$/i]) matches whichever comes first in the DOM, which may not be the
+    // real form's submit button at all.
+    var form = pwFields[0].closest('form');
+    var submit = form && form.querySelector('button[type="submit"], input[type="submit"]');
+    if (!submit || !visible(submit)) return false;
+    fireClick(submit);
+    return true;
+  }
+  // If the known-credential sign-in attempt above fails (wrong/stale stored password, or the
+  // account was never actually created despite our record of trying), Workday shows an inline
+  // error and stays on the same login form -- stop and hand off rather than loop or guess again.
+  function isWorkdaySignInFailed(siteCredentials) {
+    if (!wdHasStoredCredential(siteCredentials) || wdOnCreateAccountPage()) return false;
+    var pw = queryAllDeep('input[type="password"]').filter(visible)[0];
+    if (!pw) return false; // no password field showing -- signed in fine (or never got here)
+    var t = norm(document.body.innerText || '');
+    return /incorrect|invalid (email|username|password)|does ?n.?t match|unable to (sign|log) ?in|authentication failed|wrong password/.test(t) || hasVisibleError();
+  }
+
+  function wdBlockingWall(siteCredentials) {
     if (isVerifyEmailWall()) {
       return 'Workday sent a verification email — open it and click the link to verify Alicia’s account, then reload this page to continue the application.';
     }
     if (isWorkdaySignInWall()) {
       return 'This employer requires signing in or creating an account to continue — please do that yourself, then reload this page and Alicia will pick up from there.';
+    }
+    if (isWorkdaySignInFailed(siteCredentials)) {
+      return 'Alicia tried signing in with a saved password for your existing account on this employer\'s site, but it didn\'t work — please sign in yourself (or reset your password), then reload this page and Alicia will continue.';
     }
     return null;
   }
@@ -2525,7 +2593,7 @@
 
   var ADAPTERS = {
     generic: {},
-    workday: { fillDropdowns: wdFillDropdowns, findDropdownQuestions: wdFindDropdownQuestions, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP },
+    workday: { fillDropdowns: wdFillDropdowns, findDropdownQuestions: wdFindDropdownQuestions, blockingWall: wdBlockingWall, advancePatterns: WD_ADVANCE, stopPatterns: WD_STOP, tryKnownAccountSignIn: wdMaybeSwitchToSignIn, trySubmitKnownSignIn: wdMaybeSubmitKnownSignIn },
     greenhouse: { fillTypeaheads: atsFillLocationTypeahead },
     lever: { fillTypeaheads: atsFillLocationTypeahead },
     ashby: { fillTypeaheads: atsFillLocationTypeahead },
@@ -2624,13 +2692,21 @@
       // Adapter-specific hard blocker (e.g. Workday's email-verification wall) — only the human
       // can clear it, so stop with a clear banner rather than churning on an empty page.
       if (adapter.blockingWall) {
-        var wallMsg = adapter.blockingWall();
+        var wallMsg = adapter.blockingWall(siteCredentials);
         if (wallMsg) {
           result.status = 'stopped_needs_input';
           showBanner(wallMsg, '#e0a800');
           report(result);
           return result;
         }
+      }
+
+      // Adapter-specific: if we already have a stored, previously-used credential for this exact
+      // host, proactively switch off Create Account to Sign In (Workday's create-account page
+      // looks identical whether the email is already registered or not) rather than let a
+      // create-account attempt fail or silently repeat. A view toggle only — nothing submitted.
+      if (adapter.tryKnownAccountSignIn) {
+        try { adapter.tryKnownAccountSignIn(siteCredentials); } catch (e) {}
       }
 
       async function fillOnePass() {
@@ -2642,6 +2718,10 @@
         try { n += await fillStdCombos(profile); } catch (e) {} // same, for combobox-style dropdowns
         if (adapter.fillTypeaheads) { try { n += await adapter.fillTypeaheads(profile); } catch (e) {} }
         n += fillPasswordFields(profile, siteCredentials, state);
+        // Once the sign-in view's password is actually filled with a stored, previously-used
+        // credential (proof of a known account, not a guess), auto-submit -- a wizard-advance step
+        // like Create Account's own submit already is, never the final application submit.
+        if (adapter.trySubmitKnownSignIn) { try { adapter.trySubmitKnownSignIn(siteCredentials); } catch (e) {} }
         // Demographic/EEO fields are filled from the user's OWN saved preferences (never AI-guessed —
         // same trust model as contact fields), but unlike contact fields they're voluntary,
         // legally-protected self-ID questions — worth surfacing explicitly rather than blending
@@ -2816,7 +2896,7 @@
           // A page nav may have landed us on an adapter hard blocker mid-wizard (e.g. Workday's
           // verify-email wall appears right after Create Account) — stop cleanly if so.
           if (adapter.blockingWall) {
-            var midWall = adapter.blockingWall();
+            var midWall = adapter.blockingWall(siteCredentials);
             if (midWall) { result.status = 'stopped_needs_input'; showBanner(midWall, '#e0a800'); break; }
           }
 

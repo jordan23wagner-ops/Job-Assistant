@@ -40,10 +40,17 @@ export async function runAutofill(html, { url, storage = {}, timeoutMs = 4000, p
   // (`el.offsetParent !== null`) would otherwise skip every field in every fixture, not because
   // of anything the fixture or the field-matching logic got wrong. This is the standard jsdom
   // workaround: report anything not explicitly hidden as visible.
+  // Walks the ancestor chain (not just the element itself): a real browser collapses layout for
+  // every descendant of a hidden container, so a fixture simulating a hidden PARENT view (e.g. a
+  // SPA toggling between "Create Account" and "Sign In" by hiding the old container rather than
+  // removing it -- confirmed live: this is exactly how Workday's own toggle behaves) needs its
+  // children to correctly read as invisible too, not just the container itself.
   Object.defineProperty(window.HTMLElement.prototype, 'offsetParent', {
     configurable: true,
     get() {
-      if (this.hidden || this.style.display === 'none' || this.getAttribute('type') === 'hidden') return null
+      for (let el = this; el; el = el.parentElement) {
+        if (el.hidden || el.style.display === 'none' || el.getAttribute('type') === 'hidden') return null
+      }
       return this.ownerDocument.body
     },
   })

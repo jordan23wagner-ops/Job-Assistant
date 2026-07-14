@@ -1,0 +1,80 @@
+<!--
+  Trimmed fixture modeling Workday's real Create Account page as it appears for an email that
+  ALREADY has an account -- captured live from axiomspace.wd5.myworkdayjobs.com's real apply flow
+  (structure only, no real data). Workday's create-account view looks IDENTICAL whether the email
+  is already registered or not (it only finds out server-side, on submit) -- but it already has a
+  real "Sign In" toggle sitting right on the page: data-automation-id="signInLink" (an inline link)
+  and data-automation-id="utilityButtonSignIn" (a persistent header button), both real, captured
+  live. wdMaybeSwitchToSignIn uses these to switch views proactively, given a stored credential for
+  this host, instead of blindly submitting Create Account and having it fail (or worse, silently
+  re-submit) for an email that's already registered.
+
+  This fixture models the CREATE ACCOUNT view (matching what a real repeat visit shows before any
+  toggle click) -- the harness clicks the sign-in toggle for us (same fireClick the real code
+  uses), which is expected to reveal the second block below (the sign-in view), simulating what
+  the real Workday app does when you click the same toggle.
+-->
+<div id="workday-account-shell">
+  <button type="button" data-automation-id="utilityButtonSignIn">Sign In</button>
+
+  <div id="create-account-view">
+    <form>
+      <div class="css-fieldGroup">
+        <label for="input-4">Email Address<span aria-hidden="true">*</span></label>
+        <input id="input-4" type="text" data-automation-id="email" aria-required="true" value="">
+      </div>
+      <div class="css-fieldGroup">
+        <label for="input-5">Password<span aria-hidden="true">*</span></label>
+        <input id="input-5" type="password" data-automation-id="password" aria-required="true" value="">
+      </div>
+      <div class="css-fieldGroup">
+        <label for="input-6">Verify New Password<span aria-hidden="true">*</span></label>
+        <input id="input-6" type="password" data-automation-id="verifyPassword" aria-required="true" value="">
+      </div>
+      <div class="css-fieldGroup">
+        <input id="input-9" type="checkbox" data-automation-id="createAccountCheckbox">
+        <label for="input-9">I Accept the Terms and Conditions</label>
+      </div>
+      <a href="#" data-automation-id="signInLink">Already have an account? Sign In</a>
+      <button type="submit" data-automation-id="createAccountSubmitButton">Create Account</button>
+    </form>
+  </div>
+
+  <div id="sign-in-view" style="display:none">
+    <form>
+      <div class="css-fieldGroup">
+        <label for="input-2">Email Address<span aria-hidden="true">*</span></label>
+        <input id="input-2" type="text" data-automation-id="email" aria-required="true" value="">
+      </div>
+      <div class="css-fieldGroup">
+        <label for="input-3">Password<span aria-hidden="true">*</span></label>
+        <input id="input-3" type="password" data-automation-id="password" aria-required="true" value="">
+      </div>
+      <button type="submit" data-automation-id="signInSubmitButton">Sign In</button>
+    </form>
+  </div>
+</div>
+<script>
+// Minimal stand-in for Workday's own client-side view toggle -- the real app swaps these views
+// via its own framework; this fixture only needs to reproduce the OBSERVABLE behavior (clicking
+// the sign-in toggle reveals the sign-in form) for autofill.js's own click(s) to have something
+// real to act on. autofill.js itself is loaded unmodified by the harness, same as every other
+// fixture in this suite -- only this tiny view-switch is fixture-side simulation.
+(function () {
+  function showSignIn() {
+    document.getElementById('create-account-view').style.display = 'none';
+    document.getElementById('sign-in-view').style.display = '';
+  }
+  var link = document.querySelector('[data-automation-id="signInLink"]');
+  if (link) link.addEventListener('click', function (e) { e.preventDefault(); showSignIn(); });
+  var hdr = document.querySelector('[data-automation-id="utilityButtonSignIn"]');
+  if (hdr) hdr.addEventListener('click', showSignIn);
+  // The sign-in form's own submit is a real <button type="submit"> inside a <form> with no
+  // action= -- jsdom logs a harmless "not implemented: HTMLFormElement.requestSubmit" navigation
+  // attempt when clicked (same known jsdom limitation the workday.html fixture's own comment
+  // documents for Create Account), not a test failure. window.__testSignInSubmitClicked lets a
+  // test assert the click actually happened without needing a pre-run hook into the harness.
+  var submit = document.querySelector('[data-automation-id="signInSubmitButton"]');
+  if (submit) submit.addEventListener('click', function () { window.__testSignInSubmitClicked = true; });
+})();
+</script>
