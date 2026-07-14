@@ -1017,6 +1017,25 @@
     return pwFields.length;
   }
 
+  // ---- <select> dropdowns: sel.value=...; fire() is NOT subject to the forceTypeValue/forceCheck
+  // cross-world revert, and deliberately keeps the plain path (verified, not assumed) ----
+  // Text-input `.value` and checkbox/radio `.checked` are both reverted because React installs a
+  // per-node value-tracker EXPANDO on the element itself (inputValueTracking's trackValueOnNode),
+  // and gates its own onChange firing on comparing the live property against that tracker's cached
+  // value -- an expando that's a page-world wrapper property, invisible to this isolated-world
+  // script, so a same-world-looking set silently fails to register as a "real" change and gets wiped
+  // by the next controlled re-render. React's <select> handling works completely differently:
+  // ReactDOMSelect never calls inputValueTracking.track() on a <select> node at all -- there is no
+  // tracker, no expando, nothing cross-world-invisible to fail to update. Controlled <select> value
+  // is instead reasserted on every commit by directly setting each <option>'s `.selected` from
+  // props (updateOptions), and React treats the native 'change' event on a <select> as authoritative
+  // with NO tracker-based double-check (ChangeEventPlugin's shouldUseChangeEvent path returns the
+  // target instance unconditionally for nodeName 'select', unlike the tracker-gated path used for
+  // input 'input'/'change' and checkbox/radio 'click'). So `sel.value = X` followed by dispatching a
+  // real bubbling 'change' (which fire() already does, alongside 'input') is read straight off the
+  // live DOM by page-world code with nothing per-world to be invisible to, and reliably fires
+  // onChange -- there is no equivalent bug here to fix. Left exactly as-is (fillEeoSelects,
+  // pickSelectOption/fillStdSelects, and applyAnswerToItem's 'select' branch below).
   function fillEeoSelects(eeo) {
     var filled = 0;
     var selects = queryAllDeep('select');
@@ -1163,15 +1182,38 @@
     }
     return t;
   }
+  // Radio/checkbox `checked` is tracked by React through the SAME per-node value-tracker mechanism
+  // as text-input `.value` (see forceTypeValue's comment above) -- React's inputValueTracking module
+  // installs its expando wrapper keyed on 'checked' instead of 'value' for these two input types
+  // specifically (isCheckbox(node) selects the field name), and gates its own onChange firing on a
+  // 'click' event through the identical "did the real value actually change" tracker comparison used
+  // for text input/change. That tracker's expando is a PAGE-WORLD wrapper property, invisible to this
+  // ISOLATED-world script exactly like the text-input tracker was -- so directly setting
+  // `.checked = true` here and then dispatching a synthetic, untrusted `new Event('click')` (which has
+  // no native default/activation behavior -- only a real `.click()` call or a trusted event does) is
+  // subject to the identical revert: React's next render forcibly reasserts its own (unchanged)
+  // controlled checked state via updateChecked(), and the box/radio silently unchecks itself. This is
+  // NOT hypothetical: this file's own tickAccountAgreement() (further down) already uses `cb.click()`
+  // for its agree-to-terms checkbox rather than `.checked=true`+dispatch, i.e. the correct native
+  // technique was already independently adopted for that one case. The fix here is the same
+  // philosophy as forceTypeValue's execCommand path: `el.click()` invokes the browser's REAL native
+  // checkbox/radio activation behavior -- toggles the underlying (shared, non-expando) checkedness
+  // directly in the browser engine, auto-unchecks other same-name radios per spec, and fires genuine
+  // 'click' then 'input' then 'change' events -- so the page-world tracker gets updated correctly
+  // regardless of which world triggered it. Falls back to the old checked+dispatch path if click()
+  // itself throws (belt-and-suspenders; never seen to happen). Strict superset of the old behavior:
+  // same end state (checked, events fired) on every platform that already worked, just reached
+  // through a path that also survives a React re-render.
+  function forceCheck(el) {
+    try { el.click(); } catch (e) {
+      try { el.checked = true; el.dispatchEvent(new Event('click', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e2) {}
+    }
+  }
   function pickRadio(rs, desired) {
     var best = null, bs = 0;
     rs.forEach(function (x) { var sc = score(radioLabel(x), desired); if (sc > bs) { bs = sc; best = x; } });
     if (best && bs >= 45) {
-      if (!best.checked && !previewMode()) {
-        best.checked = true;
-        best.dispatchEvent(new Event('click', { bubbles: true }));
-        best.dispatchEvent(new Event('change', { bubbles: true }));
-      }
+      if (!best.checked && !previewMode()) forceCheck(best);
       pickRadio.lastPickedText = radioLabel(best); // for callers' fill-log entries
       return true;
     }
@@ -1244,9 +1286,9 @@
       var lbl = checkboxLabel(boxes[i]);
       for (var w = 0; w < wants.length; w++) {
         if (score(lbl, wants[w]) >= 55) {
-          boxes[i].checked = true;
-          boxes[i].dispatchEvent(new Event('click', { bubbles: true }));
-          boxes[i].dispatchEvent(new Event('change', { bubbles: true }));
+          // Same revert risk as pickRadio's checked/radio fill (see forceCheck's comment there) --
+          // "select all that apply" checkbox groups are ordinary React-controlled checkboxes too.
+          forceCheck(boxes[i]);
           checkedAny = true;
           break;
         }
