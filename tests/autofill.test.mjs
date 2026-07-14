@@ -320,6 +320,71 @@ test('workday: a stored credential for this host switches Create Account to Sign
   assert.strictEqual(window.__testSignInSubmitClicked, true, 'the sign-in form should have been auto-submitted once filled with a known-good stored credential')
 })
 
+// ---- select/radio revert investigation (agent/selects-radios-revert branch) ----
+// Does NOT prove or disprove the actual React cross-world revert bug (jsdom has no real React,
+// so it can't reproduce a controlled-component re-render at all) -- what it DOES lock in is that
+// the matching/selection logic still lands on the correct final DOM state (and fires the expected
+// events) after pickRadio/applyCheckboxGroupAnswer switched from `checked=true` + a synthetic
+// dispatchEvent(new Event('click')) to forceCheck's real `el.click()` -- a regression test for the
+// mechanism swap itself, not for the cross-world bug. <select> was deliberately left unchanged
+// (see the comment block above fillEeoSelects in autofill.js for why it doesn't need this).
+test('select/radio: fillStdSelects picks the matching State option, fillEeoSelects/fillEeoRadios pick the matching saved EEO preference', async () => {
+  const { result, document } = await runAutofill(fixture('generic-selects-radios.html'), {
+    url: 'https://careers.example.com/apply',
+    storage: {
+      profile: TEST_PROFILE,
+      eeoPrefs: { 'eeo-gender': 'Female', 'eeo-veteran': 'I am not a veteran' },
+    },
+  })
+
+  assert.strictEqual(result.ats, 'generic')
+
+  // fillStdSelects: profile.state = 'Texas' -> the <option value="TX"> (stateVariants includes the
+  // abbreviation), via the plain sel.value=...;fire() path (deliberately unchanged).
+  const stateSel = document.getElementById('state')
+  assert.strictEqual(stateSel.value, 'TX')
+
+  // fillEeoSelects: saved eeoPrefs['eeo-gender'] = 'Female' -> the matching <option>.
+  const genderSel = document.getElementById('gender')
+  assert.strictEqual(genderSel.value, 'female')
+
+  // fillEeoRadios/pickRadio: saved eeoPrefs['eeo-veteran'] -> the matching radio, now checked via
+  // forceCheck's el.click() rather than a direct .checked=true + synthetic dispatch. The end state
+  // (which radio ends up checked, and that the OTHERS in the same name="veteran" group do not) must
+  // be identical to the old mechanism.
+  const veteranRadios = Array.from(document.querySelectorAll('input[name="veteran"]'))
+  const checked = veteranRadios.filter((r) => r.checked)
+  assert.strictEqual(checked.length, 1, 'exactly one radio in the group should end up checked')
+  assert.strictEqual(checked[0].value, 'no')
+
+  // The fill log is populated only when pickRadio's caller sees a truthy return from forceCheck's
+  // el.click() path having actually run -- an entry here is indirect proof forceCheck completed
+  // without throwing (a listener attached AFTER runAutofill returns can't observe the original
+  // 'click'/'input'/'change' firing, since that already happened during the awaited fill pass).
+  const veteranLog = (result.fillLog || []).find((e) => /veteran/i.test(e.label || '') || e.value === 'I am not a veteran')
+  assert.ok(veteranLog, 'the EEO veteran radio pick should appear in the fill log')
+  assert.strictEqual(veteranLog.source, 'eeo-pref')
+
+  const genderLog = (result.fillLog || []).find((e) => e.value === 'Female')
+  assert.ok(genderLog, 'the EEO gender select pick should appear in the fill log')
+})
+
+test('select/radio: preview mode matches the same select/radio options but leaves the DOM untouched', async () => {
+  const { result, document } = await runAutofill(fixture('generic-selects-radios.html'), {
+    url: 'https://careers.example.com/apply',
+    storage: {
+      profile: TEST_PROFILE,
+      eeoPrefs: { 'eeo-gender': 'Female', 'eeo-veteran': 'I am not a veteran' },
+    },
+    preview: true,
+  })
+  assert.strictEqual(result.status, 'preview')
+  assert.strictEqual(document.getElementById('state').value, '', 'preview must not actually select an option')
+  assert.strictEqual(document.getElementById('gender').value, '')
+  const anyChecked = Array.from(document.querySelectorAll('input[name="veteran"]')).some((r) => r.checked)
+  assert.strictEqual(anyChecked, false, 'preview must not actually check a radio (forceCheck must never be called when previewMode() is on)')
+})
+
 test('workday: known-account sign-in failure (wrong/stale stored password) stops for human input instead of retrying', async () => {
   const html = readFileSync(path.join(__dirname, 'fixtures', 'workday-known-account-signin.html'), 'utf8')
     .replace('<button type="submit" data-automation-id="signInSubmitButton">Sign In</button>',
