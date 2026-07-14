@@ -246,6 +246,24 @@ chrome.tabs.onUpdated.addListener(function (tabId, info, tab) {
       chrome.storage.local.set({ autofillSessions: sessions });
       return;
     }
+    // chrome.tabs.onUpdated firing status:'complete' more than once for a SINGLE real page load is
+    // a documented Chrome extension API quirk (more sub-resources/iframes/live widgets on a page
+    // makes it more likely) -- confirmed live: a real Stripe careers page produced 200+ back-to-back
+    // 'complete' events for the identical URL, each one re-triggering the full injection pipeline.
+    // For a SAME-SITE session specifically this had NO cap at all: the s.navs>EXPLICIT_SESSION_MAX_NAVS
+    // check below only fires when `!sameSite`, so a same-site loop like this could run unbounded for
+    // the entire 20-minute session TTL. Debounce identical (tabId, url) 'complete' events instead of
+    // trying to guess whether Chrome's event was real -- a genuine SUBSEQUENT visit to the exact same
+    // URL is vanishingly unlikely within this short a window, so this only collapses duplicates.
+    var ONUPDATED_DEBOUNCE_MS = 3000;
+    if (s.lastCompleteUrl === tab.url && Date.now() - (s.lastCompleteAt || 0) < ONUPDATED_DEBOUNCE_MS) {
+      console.log('[Alicia][apply-debug] onUpdated: tab', tabId, 'duplicate complete event for the same url within', ONUPDATED_DEBOUNCE_MS, 'ms — skipping (Chrome re-fired complete without a real reload)');
+      return;
+    }
+    s.lastCompleteUrl = tab.url;
+    s.lastCompleteAt = Date.now();
+    sessions[String(tabId)] = s;
+    chrome.storage.local.set({ autofillSessions: sessions });
     var host = '';
     try { host = new URL(tab.url).hostname; } catch (e) {}
     var sameSite = host && s.hostname && baseDomain(host) === baseDomain(s.hostname);

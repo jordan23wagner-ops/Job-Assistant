@@ -1,5 +1,33 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-13 (newest #2) — v1.13.51: unbounded chrome.tabs.onUpdated re-injection loop, found live within minutes of reloading v1.13.50
+
+Reported live, immediately after reloading v1.13.50: the extension's own service-worker console
+showed 200+ back-to-back identical log cycles (`onUpdated complete... existing session? true` →
+`injecting autofill.js now`) for the same real Stripe careers page, with no sign of stopping —
+visible to the user as the tab appearing to reload/refill nonstop.
+
+**Root cause, `chrome.tabs.onUpdated`'s listener (background.js):** Chrome firing `status:
+'complete'` more than once for a SINGLE real page load is a documented extension API quirk (more
+sub-resources/iframes/live widgets on a page makes it more likely) — this listener had NO
+deduplication at all, so every redundant `'complete'` event re-ran the entire injection pipeline.
+Worse: the existing `EXPLICIT_SESSION_MAX_NAVS` cap (added earlier this project) only applies when
+`!sameSite` — a same-site session (like this one: the tab's own hostname matched the session's) has
+`sameSite === true`, which short-circuits that whole check, meaning this specific path had **no
+cap whatsoever** and could run for the entire 20-minute session TTL.
+
+**Fixed:** a 3-second debounce keyed on `(session, url)` — `s.lastCompleteUrl`/`s.lastCompleteAt`.
+An identical URL firing `'complete'` again within 3 seconds of the last one this session actually
+processed is logged and skipped; a genuinely different URL (a real subsequent navigation) is
+processed normally regardless of timing, since the key includes the URL itself, not just elapsed
+time.
+
+**Verification:** `node --check` clean. Two new tests in `tests/background.test.mjs` (the existing
+vm harness reaches this directly — no new harness needed this time): 3 identical `'complete'`
+events on one URL → exactly 1 injection (was previously unbounded); a real subsequent navigation to
+a different URL → still injects normally, even within the debounce window. 27/27 total passing.
+Live re-verification pending a reload.
+
 ## Update 2026-07-13 (newest) — v1.13.50: the brand-new closed-loop check (v1.13.49) immediately caught a real bug in the click-through it was watching
 
 Within minutes of v1.13.49 shipping, its new `aggregator_stuck` banner fired for real on a live

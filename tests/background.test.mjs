@@ -194,3 +194,48 @@ test('aggregator click-through: tab left the aggregator host (click-through work
 
   assert.strictEqual(api.executeScriptCalls.filter((c) => c.func === context.showAggregatorStuckBanner).length, 0, 'a successful click-through must not show the stuck banner')
 })
+
+// ---- v1.13.51: debounce duplicate chrome.tabs.onUpdated 'complete' events on the same URL ----
+// Chrome firing status:'complete' more than once for a SINGLE real page load is a documented
+// extension API quirk -- confirmed live: a real Stripe careers page produced 200+ back-to-back
+// 'complete' events for the identical URL, each one re-triggering the full injection pipeline. For
+// a SAME-SITE explicit session this had no cap at all (the nav-cap check only applies off-site).
+test('onUpdated: a second complete event for the SAME url within the debounce window is skipped, does not re-inject', async () => {
+  const { context, api, clock } = loadBackground()
+  const tabId = 77
+  context.chrome.storage.local.set({
+    autofillSessions: { [String(tabId)]: { hostname: 'stripe.com', startedAt: Date.now(), explicit: true, navs: 0 } },
+  })
+  const tab = { id: tabId, url: 'https://stripe.com/jobs' }
+
+  api.dispatchTabsOnUpdated(tabId, { status: 'complete' }, tab)
+  clock.tick(900) // let the real injection's 800ms delay fire
+  await flushPromises()
+  api.dispatchTabsOnUpdated(tabId, { status: 'complete' }, tab) // Chrome re-firing 'complete' for the identical load, well within the 3s debounce window
+  clock.tick(900)
+  await flushPromises()
+  api.dispatchTabsOnUpdated(tabId, { status: 'complete' }, tab)
+  clock.tick(900)
+  await flushPromises()
+
+  const fillCalls = api.executeScriptCalls.filter((c) => c.target.tabId === tabId && Array.isArray(c.files) && c.files.includes('autofill.js'))
+  assert.strictEqual(fillCalls.length, 1, `expected exactly one injection despite 3 identical 'complete' events, got ${fillCalls.length}`)
+})
+
+test('onUpdated: a genuinely NEW url (real navigation) still re-injects normally, even inside the debounce window', async () => {
+  const { context, api, clock } = loadBackground()
+  const tabId = 78
+  context.chrome.storage.local.set({
+    autofillSessions: { [String(tabId)]: { hostname: 'stripe.com', startedAt: Date.now(), explicit: true, navs: 0 } },
+  })
+
+  api.dispatchTabsOnUpdated(tabId, { status: 'complete' }, { id: tabId, url: 'https://stripe.com/jobs' })
+  clock.tick(900)
+  await flushPromises()
+  api.dispatchTabsOnUpdated(tabId, { status: 'complete' }, { id: tabId, url: 'https://stripe.com/jobs/listing/technical-program-manager-risk/7685855/apply' })
+  clock.tick(900)
+  await flushPromises()
+
+  const fillCalls = api.executeScriptCalls.filter((c) => c.target.tabId === tabId && Array.isArray(c.files) && c.files.includes('autofill.js'))
+  assert.strictEqual(fillCalls.length, 2, `a real subsequent navigation to a DIFFERENT url must still inject normally (debounce keys on url, not just time), got ${fillCalls.length}`)
+})
