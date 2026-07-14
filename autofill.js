@@ -976,19 +976,16 @@
       if (!s) continue;
       for (var f = 0; f < STD.length; f++) {
         if (STD[f].v && STD[f].t(s, el)) {
-          if (!previewMode()) {
-            // setNativeValue()+fire() (input/change) alone was confirmed live to get silently reverted
-            // on ADP Workforce Now's own framework -- tested in complete isolation, outside any of
-            // Alicia's own code, with the identical technique used successfully everywhere else in this
-            // file. The revert happens on a delay (not the same tick), consistent with the framework
-            // re-syncing its own state specifically on blur rather than on input/change alone. A real
-            // user always blurs a field before moving to the next one, so simulating that too is a
-            // faithful rather than an exotic interaction -- focus() first so the blur is meaningful.
-            try { el.focus(); } catch (e) {}
-            setNativeValue(el, STD[f].v);
-            fire(el);
-            try { el.blur(); } catch (e) {}
-          }
+          // forceTypeValue drives the browser's native text-editing pipeline (execCommand insertText)
+          // so React-/framework-controlled inputs accept the value and don't revert it on their next
+          // render (confirmed live: Anthropic's job-boards.greenhouse.io reverted a plain
+          // setNativeValue+input, since the extension's isolated-world native setter can't update
+          // React's value tracker -- see forceTypeValue's own comment). It falls back to exactly the
+          // old setNativeValue+fire+blur path for any input execCommand can't edit, so this is a
+          // strict superset of the previous behavior, never weaker on the platforms that already
+          // worked (ADP, Workday, SmartRecruiters, Lever, ...). repairRevertedStdFields below remains
+          // as a late-render safety net.
+          if (!previewMode()) forceTypeValue(el, STD[f].v);
           logFill(labelText(el) || STD[f].k, STD[f].v, 'profile');
           filled++;
           break;
@@ -1711,8 +1708,10 @@
     } else if (item.type === 'radio') {
       ok = pickRadio(item.radios, answerText);
     } else if (!(item.control.value && item.control.value.trim())) {
-      setNativeValue(item.control, answerText);
-      fire(item.control);
+      // Same robust set as the standard fields: survive a controlled-form revert on a free-text
+      // custom-answer input/textarea (falls back to setNativeValue+fire for anything execCommand
+      // can't edit).
+      forceTypeValue(item.control, answerText);
       ok = true;
     }
     if (ok) {

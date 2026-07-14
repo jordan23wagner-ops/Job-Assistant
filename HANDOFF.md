@@ -1,5 +1,36 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-14 (newest #2) — v1.13.54: apply forceTypeValue on the PRIMARY fill path (proactively close the React-revert class, not just repair it)
+
+v1.13.53 fixed the Greenhouse contact-field revert with a detect-and-repair pass (execCommand-based
+forceTypeValue re-applied to fields that came back empty). That's reactive — it only heals a revert
+AFTER it happens, and only for standard contact fields. Almost certainly other controlled-form
+platforms have the same isolated-world/React-value-tracker issue that just haven't been hit yet.
+
+This makes forceTypeValue the PRIMARY value-set for both text-fill sites:
+- `fillStdFields` (standard contact fields) now sets via forceTypeValue instead of the old
+  focus+setNativeValue+fire+blur.
+- `applyAnswerToItem`'s free-text branch (AI/learned custom answers into an input/textarea) too.
+
+Safe because forceTypeValue is a STRICT SUPERSET of the old behavior: it tries execCommand
+insertText first (the browser's native editing pipeline, which updates React's value tracker so the
+value survives a re-render), and falls back to exactly the old setNativeValue+fire+blur for any
+input execCommand can't edit. So on every platform that already worked (Workday, SmartRecruiters,
+Lever, Ashby, Workable, Recruitee, ADP) the worst case is identical old behavior; on controlled
+forms that used to revert (Greenhouse/React), the value now sticks on the first pass.
+`repairRevertedStdFields` is kept as a late-render safety net.
+
+Selects/radios are deliberately NOT changed -- they select an option / set checked and fire change,
+a different mechanism that isn't subject to the value-tracker revert.
+
+`node --check` clean, 29/29 tests pass. NOTE the fixtures only exercise the FALLBACK path -- jsdom
+has no execCommand, so forceTypeValue falls back to setNativeValue there, which is why the suite
+still passes unchanged. The execCommand path itself only runs in a real browser and MUST be
+live-verified: needs a reload + a re-check that (a) Anthropic/Greenhouse still fills its contact
+fields via the primary path (not just the repair), and (b) a previously-working platform
+(SmartRecruiters, shadow DOM -- riskiest for execCommand + shadow-root focus) is not regressed.
+Bumped to v1.13.54.
+
 ## Update 2026-07-14 (newest) — v1.13.53: fix React-controlled contact fields getting reverted (Anthropic/Greenhouse), caught by an end-to-end apply test
 
 Found while live-testing the new Wagner-GPT company-lookup feature end-to-end: looked up Anthropic
