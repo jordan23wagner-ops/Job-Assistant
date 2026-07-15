@@ -73,10 +73,10 @@ AI feature runs on a free backend, no API key required.
   | **Workday** | Standard fields, EEO dropdowns, searchable fields (Country/State/School), single-select and multi-select prompt questions (Skills, Languages, etc.), account gate (auto-creates account, generates a unique password), email-verification wall detection |
   | **Greenhouse** | Standard fields + location typeahead |
   | **Lever** | Standard fields + location typeahead |
-  | **iCIMS** | Standard fields, account gate, verify-email wall |
+  | **iCIMS** | Standard fields, account gate, verify-email wall. **Live-confirmed 2026-07-14 (Keller): on real postings the application form sits behind an email + hCaptcha login gate — the adapter fills the gate page but the CAPTCHA/verify-email wall stops it before the form; a human clears the gate, then the fill continues. Not an autonomous end-to-end form fill.** |
   | **Ashby** | Standard fields + location typeahead |
   | **SmartRecruiters** | Standard fields + location typeahead |
-  | **Taleo** | Standard fields + account gate (legacy multi-step flow) |
+  | **Taleo** | Standard fields + account gate (legacy multi-step flow). **Live-confirmed 2026-07-14 (Textron): even "Apply as Guest" gates the form behind username+password + email verification; the adapter fills the account page and stops at the verify-email wall before the application form — a human clears the gate, then the fill continues. Not an autonomous end-to-end form fill. (Driving Taleo's JSF flow programmatically needs faithful mouse-event dispatch; raw `.click()` triggers its server-side error.)** |
   | **BrassRing** | Standard fields + account gate (legacy multi-step flow) |
   | Generic | Everything else — contact fields, EEO selects/radios, custom questions |
 
