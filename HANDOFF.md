@@ -1,5 +1,35 @@
 # Job-Assistant ("Alicia AI") — Engineering Handoff
 
+## Update 2026-07-14 (newest #3) — LIVE per-platform fill verification on real postings (Greenhouse ✅, iCIMS/Taleo account-GATED)
+
+Ran real, live checks (Alicia-loaded Chrome via Claude-in-Chrome + read-only sandbox recon) to
+answer "does the fill actually work per platform," on genuine current postings. Nothing submitted;
+no accounts created; no CAPTCHAs solved.
+
+**Greenhouse — CONFIRMED fills live end-to-end.** This closes the "MUST be live-verified" open item
+from the v1.13.54 entry below. Triggered the real extension on a live Anthropic Greenhouse app via
+its own flow (detect.js offer banner → "Auto-fill" → `ATS_OFFER_ACCEPT` → autofill.js injected).
+Filled 9 fields: contact block (First/Last/Email/Phone), LinkedIn, work location, AND 3 AI-answered
+custom questions (incl. a tailored "Why Anthropic?" essay). Values still present ~10s post-fill on
+the exact React form the revert bug hit = **forceTypeValue PRIMARY path holds live, no revert**.
+(Lever/Ashby/SmartRecruiters are the same non-gated single-page class.)
+
+**iCIMS & Taleo — CONFIRMED the application FORM is account-GATED and not autonomously reachable.**
+The fillable form sits BEHIND an account gate on real postings:
+- iCIMS (careers-*.icims.com, Keller PM): "Apply" → email + **hCaptcha** login gate before the form.
+- Taleo (*.taleo.net, Textron PM): "Apply Online" → "Apply as Guest" on a CLEAN session →
+  **"Create a User Name and Password"** (username+password + email verification), NOT the form.
+`accountGateAdapter` (ADAPTERS: icims/taleo/brassring) is built to fill the gate page (username,
+generated password, tick agreement) and then STOP at the verify-email wall — so even the extension
+hands off to the human BEFORE the real application form; the hCaptcha also hard-stops it. So iCIMS/
+Taleo are a genuine human-handoff-at-the-gate tier, NOT autonomous end-to-end fill. README ATS
+coverage table updated to say exactly this.
+- GOTCHA (Taleo): driving its JSF flow with raw `.click()` triggers a server-side "system error";
+  faithful mouse-event dispatch (pointerdown/mousedown/pointerup/mouseup/click) or real clicks work.
+  The extension's own `fireClick` already dispatches real events, so this only bit programmatic driving.
+
+Current extension state: v1.13.55 on branch claude/job-assistant-wagner-integration-1ec2wr (pushed).
+
 ## Update 2026-07-14 (newest #2) — v1.13.54: apply forceTypeValue on the PRIMARY fill path (proactively close the React-revert class, not just repair it)
 
 v1.13.53 fixed the Greenhouse contact-field revert with a detect-and-repair pass (execCommand-based
