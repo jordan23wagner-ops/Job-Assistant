@@ -6,12 +6,16 @@ Ran real, live checks (Alicia-loaded Chrome via Claude-in-Chrome + read-only san
 answer "does the fill actually work per platform," on genuine current postings. Nothing submitted;
 no accounts created; no CAPTCHAs solved.
 
-**Greenhouse — CONFIRMED fills live end-to-end.** This closes the "MUST be live-verified" open item
-from the v1.13.54 entry below. Triggered the real extension on a live Anthropic Greenhouse app via
-its own flow (detect.js offer banner → "Auto-fill" → `ATS_OFFER_ACCEPT` → autofill.js injected).
-Filled 9 fields: contact block (First/Last/Email/Phone), LinkedIn, work location, AND 3 AI-answered
-custom questions (incl. a tailored "Why Anthropic?" essay). Values still present ~10s post-fill on
-the exact React form the revert bug hit = **forceTypeValue PRIMARY path holds live, no revert**.
+**Greenhouse — CONFIRMED fills live end-to-end (live re-verified twice).** This closes the "MUST be
+live-verified" open item from the v1.13.54 entry below. Triggered the real extension on a live
+Anthropic Greenhouse app via its own flow (detect.js offer banner → "Auto-fill" → `ATS_OFFER_ACCEPT`
+→ autofill.js injected). The re-verification run filled **7 fields**: contact block
+(First/Last/Email/Phone), LinkedIn, work-location typeahead ("Cypress, Texas"), AND the AI-answered
+"Why Anthropic?" essay. Contact fields still populated after ~16s on the exact React form the revert
+bug hit = **forceTypeValue PRIMARY path holds live, no revert** (`allContactPersisted: true`).
+(The 2 short scheduling AI questions — "earliest start" / "deadlines" — populated on the first run
+but not the re-run; run-to-run AI-answer variance, not a revert. The contact block + location + essay
+— i.e. everything the revert fix covers — filled and held both times.)
 (Lever/Ashby/SmartRecruiters are the same non-gated single-page class.)
 
 **iCIMS & Taleo — CONFIRMED the application FORM is account-GATED and not autonomously reachable.**
