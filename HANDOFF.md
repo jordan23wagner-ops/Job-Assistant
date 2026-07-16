@@ -34,6 +34,43 @@ coverage table updated to say exactly this.
 
 Current extension state: v1.13.55 on branch claude/job-assistant-wagner-integration-1ec2wr (pushed).
 
+## Update 2026-07-14 (between #3 and #2) — v1.13.55: close the select/radio revert question + add a framework-revert regression test
+
+v1.13.54 (below) made `forceTypeValue` the primary set for TEXT inputs, but left `<select>` and
+radio/checkbox untouched on the assumption that "selecting an option / setting checked and firing
+change is a different mechanism, not subject to the tracker revert." That was an assumption, not a
+verified fact — this pass settled it with real technical grounding instead of leaving it open:
+
+- **`<select>` — confirmed NOT revert-prone, left unchanged.** React's `ReactDOMSelect` never installs
+  the per-node value-tracker expando that `ReactDOMInput`/`ReactDOMTextarea` do; it re-asserts each
+  `<option>`'s `.selected` from props on every commit and treats a native `change` event as
+  authoritative — no tracker-based dirty-check to fool from an isolated content-script world. A
+  documentation block above `fillEeoSelects` records this so it's settled in code, not an open
+  question a future pass reopens.
+- **Radio/checkbox `checked` — confirmed revert-prone, by the SAME mechanism as text `.value`.**
+  React's `inputValueTracking` tracks `'checked'` for these two input types identically to how it
+  tracks `'value'` for text inputs, gated on a `'click'` event. The old `checked=true` +
+  `dispatchEvent(new Event('click'))` sets `.checked` via the isolated-world native setter (invisible
+  to the page-world tracker) and dispatches a synthetic, untrusted click with no native activation
+  behavior — the exact pattern that broke text inputs. Fixed with `forceCheck(el)`: calls the REAL
+  `el.click()` (native activation — toggles real browser state, auto-unchecks radio-group siblings,
+  fires genuine click→input→change), falling back to the old technique if it throws. Applied to
+  `pickRadio` and the Lever-style "select all that apply" checkbox-group path
+  (`applyCheckboxGroupAnswer`). Both callers only click an UNCHECKED box/radio — no toggle-off
+  regression on an already-correct selection.
+- **New `tests/framework-revert.test.mjs`**: a deterministic jsdom simulation of React's
+  `_valueTracker` revert mechanism (jsdom has no real React and no `execCommand` at all — which is
+  itself why this whole bug class was invisible to every prior test) that drives the REAL
+  `forceTypeValue`/`setNativeValue` functions from `autofill.js`, unmodified. Proves `forceTypeValue`
+  survives a simulated revert while the plain `setNativeValue`+fire path (still used for password
+  fields, a real "control group" found by this same test) does not — regression-catching, not just
+  reactive-confirming.
+- Suite: 29 → 31 (selects/radios fixture + tests) → 32/32 after merge (framework-revert test).
+  `node --check` clean throughout.
+- **Known low-priority leftover**: `fillPasswordFields` still uses the old revert-prone technique —
+  harmless in practice since the extension never Submits or creates accounts, so password fields
+  never actually matter to a completed application. Bring onto `forceTypeValue` only if that changes.
+
 ## Update 2026-07-14 (newest #2) — v1.13.54: apply forceTypeValue on the PRIMARY fill path (proactively close the React-revert class, not just repair it)
 
 v1.13.53 fixed the Greenhouse contact-field revert with a detect-and-repair pass (execCommand-based
